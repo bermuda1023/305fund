@@ -82,6 +82,14 @@ interface CapitalCallLineItem {
   bank_txn_id?: string | null;
 }
 
+function getDefaultCallSubject(callNumber: number) {
+  return `Capital Call {{call_number}} — {{fund_name}}`.replace('{{call_number}}', String(callNumber));
+}
+
+function getDefaultCallBody() {
+  return 'Hi {{lp_name}},\n\nThis is a capital call notice for {{fund_name}}.\n\nCall #{{call_number}}\nTotal call amount: ${{call_amount}}\nYour amount: ${{lp_amount}}\nDue date: {{due_date}}\nPurpose: {{purpose}}\n\nPlease remit funds by the due date.\n\nThank you.';
+}
+
 interface LPDocument {
   id: number;
   name: string;
@@ -125,6 +133,22 @@ function GPInvestorSection() {
       }
       setOnboardForm({ name: '', entityName: '', email: '', phone: '', commitment: '', notes: '' });
       setShowOnboardForm(false);
+    },
+  });
+
+  const updateInvestorStatusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: 'active' | 'pending' }) =>
+      api.patch(`/lp/investors/${id}/status`, { status }).then((r) => r.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['gp-investors'] });
+    },
+  });
+
+  const removeInvestorMutation = useMutation({
+    mutationFn: ({ id, confirmText }: { id: number; confirmText: string }) =>
+      api.post(`/lp/investors/${id}/remove`, { confirmText }).then((r) => r.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['gp-investors'] });
     },
   });
 
@@ -258,7 +282,7 @@ function GPInvestorSection() {
                 <th>Distributions</th>
                 <th>Ownership %</th>
                 <th>Status</th>
-                <th>Documents</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -273,26 +297,69 @@ function GPInvestorSection() {
                     <td style={{ color: 'var(--green)' }}>{fmt(inv.distributions)}</td>
                     <td>{inv.ownership_pct.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</td>
                     <td>
-                      <span
-                        className="badge"
-                        style={{
-                          background: inv.status === 'active' ? 'rgba(16,185,129,0.15)' : 'rgba(234,179,8,0.15)',
-                          color: inv.status === 'active' ? 'var(--green)' : 'var(--gold)',
-                        }}
-                      >
-                        {inv.status}
-                      </span>
+                      {inv.status === 'active' || inv.status === 'pending' ? (
+                        <button
+                          className="badge"
+                          style={{
+                            border: '1px solid var(--border)',
+                            background: inv.status === 'active' ? 'rgba(16,185,129,0.15)' : 'rgba(234,179,8,0.15)',
+                            color: inv.status === 'active' ? 'var(--green)' : 'var(--gold)',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() =>
+                            updateInvestorStatusMutation.mutate({
+                              id: inv.id,
+                              status: inv.status === 'active' ? 'pending' : 'active',
+                            })
+                          }
+                          title={inv.status === 'active' ? 'Click to set Pending' : 'Click to set Active'}
+                          disabled={updateInvestorStatusMutation.isPending}
+                        >
+                          {inv.status} (click to {inv.status === 'active' ? 'pending' : 'active'})
+                        </button>
+                      ) : (
+                        <span
+                          className="badge"
+                          style={{
+                            background: 'rgba(100,116,139,0.2)',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
+                          {inv.status}
+                        </span>
+                      )}
                     </td>
                     <td>
-                      <button
-                        className="btn btn-secondary"
-                        style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
-                        onClick={() =>
-                          setExpandedInvestorDocsId(expandedInvestorDocsId === inv.id ? null : inv.id)
-                        }
-                      >
-                        {expandedInvestorDocsId === inv.id ? 'Hide Docs' : 'Docs'}
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                        <button
+                          className="btn btn-secondary"
+                          style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
+                          onClick={() =>
+                            setExpandedInvestorDocsId(expandedInvestorDocsId === inv.id ? null : inv.id)
+                          }
+                        >
+                          {expandedInvestorDocsId === inv.id ? 'Hide Docs' : 'Docs'}
+                        </button>
+                        {inv.status !== 'removed' && (
+                          <button
+                            className="btn"
+                            style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', borderColor: 'var(--red)', color: 'var(--red)' }}
+                            disabled={removeInvestorMutation.isPending}
+                            onClick={() => {
+                              const phrase = `REMOVE ${String(inv.email || '').trim().toLowerCase()}`;
+                              const entered = window.prompt(
+                                `To remove this LP, type exactly:\n${phrase}`,
+                                ''
+                              );
+                              if (!entered) return;
+                              removeInvestorMutation.mutate({ id: inv.id, confirmText: entered });
+                            }}
+                            title="Guarded soft-remove (requires typed confirmation phrase)"
+                          >
+                            Remove LP
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>,
                   expandedInvestorDocsId === inv.id && (
@@ -374,7 +441,10 @@ function GPCapitalCallSection() {
       api.post(`/lp/capital-calls/${callId}/send`, { bccMode: sendAsBcc }).then((r) => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gp-capital-calls-all'] });
+      queryClient.invalidateQueries({ queryKey: ['gp-capital-call-items', expandedCallId] });
       queryClient.invalidateQueries({ queryKey: ['lp-capital-calls'] });
+      queryClient.invalidateQueries({ queryKey: ['gp-investors'] });
+      queryClient.invalidateQueries({ queryKey: ['lp-account'] });
     },
   });
 
@@ -388,6 +458,9 @@ function GPCapitalCallSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gp-capital-calls-all'] });
       queryClient.invalidateQueries({ queryKey: ['gp-capital-call-items', expandedCallId] });
+      queryClient.invalidateQueries({ queryKey: ['gp-investors'] });
+      queryClient.invalidateQueries({ queryKey: ['lp-account'] });
+      queryClient.invalidateQueries({ queryKey: ['lp-transactions'] });
     },
   });
 
@@ -602,6 +675,36 @@ function GPCapitalCallSection() {
                         <h4 style={{ margin: '0 0 0.75rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                           Per-LP Allocations — Call #{cc.call_number}
                         </h4>
+                        <div
+                          style={{
+                            marginBottom: '0.85rem',
+                            padding: '0.75rem',
+                            border: '1px solid var(--border)',
+                            borderRadius: 8,
+                            background: 'var(--bg-secondary)',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                            Email Subject
+                          </div>
+                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', marginBottom: '0.6rem' }}>
+                            {cc.custom_email_subject?.trim() || getDefaultCallSubject(cc.call_number)}
+                          </div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                            Email / Letter Message
+                          </div>
+                          <pre
+                            style={{
+                              whiteSpace: 'pre-wrap',
+                              margin: 0,
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.78rem',
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            {cc.custom_email_body?.trim() || getDefaultCallBody()}
+                          </pre>
+                        </div>
                         {expandedItems.length > 0 ? (
                           <table className="data-table" style={{ marginBottom: 0 }}>
                             <thead>

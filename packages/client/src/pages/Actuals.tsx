@@ -146,6 +146,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 const LP_ONLY_CATEGORIES = new Set(['capital_call']);
+const NON_EXPENSE_CATEGORIES = new Set(['capital_call', 'distribution']);
 
 const emptyForm: AddTransactionForm = {
   date: new Date().toISOString().split('T')[0],
@@ -618,8 +619,15 @@ export default function Actuals() {
   const receiptExpenseCandidates = useMemo(() => {
     if (!selectedReceiptUnitId) return [];
     return transactions
-      .filter((t) => t.portfolio_unit_id === selectedReceiptUnitId)
-      .filter((t) => ['hoa', 'insurance', 'tax', 'repair', 'management_fee', 'fund_expense', 'other'].includes(t.category))
+      // Include unit-scoped expenses and unassigned expenses so users can link receipts
+      // to entries that were created without selecting a unit initially.
+      .filter((t) => t.portfolio_unit_id === selectedReceiptUnitId || t.portfolio_unit_id === null)
+      .filter((t) => !NON_EXPENSE_CATEGORIES.has(t.category))
+      .sort((a, b) => {
+        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        if (dateDiff !== 0) return dateDiff;
+        return b.id - a.id;
+      })
       .slice(0, 200);
   }, [transactions, selectedReceiptUnitId]);
 
@@ -779,6 +787,7 @@ export default function Actuals() {
                   {receiptExpenseCandidates.map((t) => (
                     <option key={t.id} value={t.id}>
                       {fmtDate(t.date)} · {CATEGORY_LABELS[t.category] ?? t.category} · {fmt(t.amount)} · {t.description || 'No description'}
+                      {t.portfolio_unit_id ? '' : ' · Unassigned'}
                     </option>
                   ))}
                 </select>

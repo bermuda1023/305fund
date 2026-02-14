@@ -18,6 +18,20 @@ import { sendTransactionalEmail } from '../lib/email';
 
 const router = Router();
 
+function recalcCalledCapitalForLp(db: ReturnType<typeof getDb>, lpAccountId: number) {
+  db.prepare(`
+    UPDATE lp_accounts
+    SET called_capital = COALESCE((
+      SELECT SUM(cci.amount)
+      FROM capital_call_items cci
+      JOIN capital_calls cc ON cc.id = cci.capital_call_id
+      WHERE cci.lp_account_id = lp_accounts.id
+        AND cc.status IN ('draft', 'sent', 'partially_received', 'completed')
+    ), 0)
+    WHERE id = ?
+  `).run(lpAccountId);
+}
+
 function rowToAssumptions(row: any): FundAssumptions {
   return {
     id: row.id,
@@ -149,7 +163,17 @@ function renderMergeTemplate(tpl: string, vars: Record<string, string>) {
 router.get('/account', requireAuth, requireAnyRole, (req: Request, res: Response) => {
   const db = getDb();
   const account = db.prepare(`
-    SELECT * FROM lp_accounts WHERE user_id = ?
+    SELECT
+      lpa.*,
+      COALESCE((
+        SELECT SUM(cci.amount)
+        FROM capital_call_items cci
+        JOIN capital_calls cc ON cc.id = cci.capital_call_id
+        WHERE cci.lp_account_id = lpa.id
+          AND cc.status IN ('draft', 'sent', 'partially_received', 'completed')
+      ), 0) as called_capital
+    FROM lp_accounts lpa
+    WHERE lpa.user_id = ?
   `).get(req.user!.userId) as any;
 
   if (!account) {
@@ -359,8 +383,87 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
 // GET /api/lp/investors - List all investors (GP only)
 router.get('/investors', requireAuth, requireGP, (req: Request, res: Response) => {
   const db = getDb();
-  const investors = db.prepare('SELECT * FROM lp_accounts ORDER BY name').all();
+  const investors = db.prepare(`
+    SELECT
+      lpa.*,
+      COALESCE((
+        SELECT SUM(cci.amount)
+        FROM capital_call_items cci
+        JOIN capital_calls cc ON cc.id = cci.capital_call_id
+        WHERE cci.lp_account_id = lpa.id
+          AND cc.status IN ('draft', 'sent', 'partially_received', 'completed')
+      ), 0) as called_capital
+    FROM lp_accounts lpa
+    ORDER BY
+      CASE
+        WHEN lpa.status = 'active' THEN 0
+        WHEN lpa.status = 'pending' THEN 1
+        ELSE 2
+      END,
+      lpa.name
+  `).all();
   res.json(investors);
+});
+
+// PATCH /api/lp/investors/:id/status - Toggle LP status between pending/active
+router.patch('/investors/:id/status', requireAuth, requireGP, (req: Request, res: Response) => {
+  const db = getDb();
+  const investorId = Number(req.params.id);
+  const status = String(req.body?.status || '').trim().toLowerCase();
+  if (!Number.isFinite(investorId) || investorId <= 0) {
+    res.status(400).json({ error: 'Invalid investor id' });
+    return;
+  }
+  if (!['active', 'pending'].includes(status)) {
+    res.status(400).json({ error: 'status must be active or pending' });
+    return;
+  }
+
+  const investor = db.prepare('SELECT id FROM lp_accounts WHERE id = ?').get(investorId) as any;
+  if (!investor) {
+    res.status(404).json({ error: 'Investor not found' });
+    return;
+  }
+
+  db.prepare('UPDATE lp_accounts SET status = ? WHERE id = ?').run(status, investorId);
+  res.json({ success: true, id: investorId, status });
+});
+
+// POST /api/lp/investors/:id/remove - guarded soft-remove of LP account
+router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res: Response) => {
+  const db = getDb();
+  const investorId = Number(req.params.id);
+  const confirmText = String(req.body?.confirmText || '');
+  if (!Number.isFinite(investorId) || investorId <= 0) {
+    res.status(400).json({ error: 'Invalid investor id' });
+    return;
+  }
+
+  const investor = db.prepare(`
+    SELECT id, email, status, notes
+    FROM lp_accounts
+    WHERE id = ?
+  `).get(investorId) as any;
+  if (!investor) {
+    res.status(404).json({ error: 'Investor not found' });
+    return;
+  }
+  const expectedPhrase = `REMOVE ${String(investor.email || '').trim().toLowerCase()}`;
+  if (!expectedPhrase || confirmText.trim().toLowerCase() !== expectedPhrase.toLowerCase()) {
+    res.status(400).json({ error: `Confirmation text mismatch. Type exactly: ${expectedPhrase}` });
+    return;
+  }
+
+  const stampedNote = `[${new Date().toISOString()}] LP soft-removed by GP`;
+  const nextNotes = investor.notes ? `${investor.notes}\n${stampedNote}` : stampedNote;
+  db.prepare(`
+    UPDATE lp_accounts
+    SET status = 'removed',
+        notes = ?
+    WHERE id = ?
+  `).run(nextNotes, investorId);
+
+  res.json({ success: true, id: investorId, status: 'removed' });
 });
 
 // ---- GP-Only: Capital Calls ----
@@ -421,8 +524,16 @@ router.post('/capital-calls/create', requireAuth, requireGP, (req: Request, res:
   const callId = callResult.lastInsertRowid;
 
   // Auto-calculate per-LP amounts
-  const lps = db.prepare('SELECT * FROM lp_accounts WHERE status = ?').all('active') as any[];
+  const lps = db.prepare(`
+    SELECT *
+    FROM lp_accounts
+    WHERE status IN ('active', 'pending')
+  `).all() as any[];
   const totalCommitment = lps.reduce((s: number, lp: any) => s + lp.commitment, 0);
+  if (lps.length === 0 || totalCommitment <= 0) {
+    res.status(400).json({ error: 'No eligible LP accounts found with commitments.' });
+    return;
+  }
 
   const insertItem = db.prepare(`
     INSERT INTO capital_call_items (capital_call_id, lp_account_id, amount, status)
@@ -433,6 +544,7 @@ router.post('/capital-calls/create', requireAuth, requireGP, (req: Request, res:
   for (const lp of lps) {
     const amount = totalAmount * (lp.commitment / totalCommitment);
     insertItem.run(callId, lp.id, amount);
+    recalcCalledCapitalForLp(db, Number(lp.id));
     items.push({ lpId: lp.id, lpName: lp.name, amount });
   }
 
@@ -503,6 +615,10 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
     investor_name: string;
     investor_email: string | null;
   }>;
+  if (items.length === 0) {
+    res.status(400).json({ error: 'No LP line items found for this call. Create/allocate the call first.' });
+    return;
+  }
 
   const baseSubject = String(
     call.custom_email_subject || 'Capital Call {{call_number}} — {{fund_name}}'
@@ -569,11 +685,13 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
     }
   }
 
-  db.prepare(`
-    UPDATE capital_calls
-    SET status = 'sent'
-    WHERE id = ? AND status IN ('draft', 'partially_received')
-  `).run(callId);
+  if (sentCount > 0) {
+    db.prepare(`
+      UPDATE capital_calls
+      SET status = 'sent'
+      WHERE id = ? AND status IN ('draft', 'partially_received')
+    `).run(callId);
+  }
 
   res.json({
     success: true,
@@ -633,10 +751,7 @@ router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, require
       VALUES (?, ?, 'call', ?, date('now'), 'Capital call received')
     `).run(item.lp_account_id, item.id, amount);
 
-    // Update LP called_capital
-    db.prepare(`
-      UPDATE lp_accounts SET called_capital = called_capital + ? WHERE id = ?
-    `).run(amount, item.lp_account_id);
+    recalcCalledCapitalForLp(db, Number(item.lp_account_id));
   }
 
   const agg = db.prepare(`

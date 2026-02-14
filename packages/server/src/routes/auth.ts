@@ -96,6 +96,14 @@ router.post('/login', loginLimiter, (req: Request, res: Response) => {
     return;
   }
 
+  if (user.role === 'lp') {
+    const lpAccount = db.prepare('SELECT status FROM lp_accounts WHERE user_id = ?').get(user.id) as any;
+    if (lpAccount && String(lpAccount.status || '').toLowerCase() === 'removed') {
+      res.status(403).json({ error: 'This LP account has been deactivated. Please contact support.' });
+      return;
+    }
+  }
+
   if (!bcrypt.compareSync(passwordInput, user.password_hash)) {
     res.status(401).json({ error: 'Invalid credentials' });
     return;
