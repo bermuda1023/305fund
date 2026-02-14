@@ -468,3 +468,138 @@ body {
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line { stroke: var(--border); }
 .recharts-text { fill: var(--text-muted) !important; font-size: 0.68rem; }
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 220px;
+  }
+  .main-content {
+    margin-left: 220px;
+    padding: 1.25rem;
+  }
+}
+
+@media (max-width: 860px) {
+  .app-layout {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    height: auto;
+    z-index: 100;
+    padding: 0.5rem 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+  }
+
+  .sidebar-logo {
+    padding: 0.4rem 0.9rem 0.6rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .sidebar-nav {
+    flex-direction: row;
+    gap: 0.35rem;
+    padding: 0 0.6rem 0.4rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+  }
+
+  .sidebar-nav a {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-size: 0.78rem;
+    padding: 0.45rem 0.6rem;
+  }
+
+  .sidebar-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    padding: 0.5rem 0.8rem 0.2rem;
+  }
+
+  .main-content {
+    margin-left: 0;
+    padding: 0.85rem;
+  }
+
+  .page-header {
+    margin-bottom: 1rem;
+  }
+  .page-header h2 {
+    font-size: 1.2rem;
+  }
+  .page-header p {
+    font-size: 0.78rem;
+  }
+
+  .metrics-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.7rem;
+    margin-bottom: 1rem;
+  }
+  .metric-card {
+    padding: 0.85rem;
+  }
+  .metric-value {
+    font-size: 1.2rem;
+  }
+  .metric-note {
+    font-size: 0.62rem;
+  }
+
+  .card {
+    padding: 0.9rem;
+    overflow-x: auto;
+  }
+
+  .grid-2,
+  .grid-3 {
+    grid-template-columns: 1fr;
+    gap: 0.9rem;
+  }
+
+  /* Keep wide tables usable on small screens */
+  .data-table {
+    min-width: 700px;
+  }
+  .building-grid {
+    overflow-x: auto;
+  }
+  .building-row {
+    min-width: max-content;
+  }
+
+  .login-box {
+    max-width: 100%;
+    margin: 1rem;
+    padding: 1.25rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+  .sidebar-logo h1 {
+    font-size: 1rem;
+  }
+  .sidebar-logo span {
+    font-size: 0.58rem;
+  }
+  .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}

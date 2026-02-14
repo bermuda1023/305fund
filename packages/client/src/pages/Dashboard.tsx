@@ -457,14 +457,7 @@ export default function Dashboard() {
       </div>
 
       {/* Operational Widgets Row */}
-      <div
-        style={{
-          marginTop: '1.5rem',
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: '1.5rem',
-        }}
-      >
+      <div className="grid-3" style={{ marginTop: '1.5rem' }}>
         {/* Upcoming Lease Expirations */}
         <div className="card">
           <div className="card-header">
