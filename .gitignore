@@ -1,0 +1,12 @@
+.claude/
+nul
+node_modules/
+dist/
+.env
+*.db
+*.sqlite
+uploads/
+.DS_Store
+*.log
+coverage/
+.vite/

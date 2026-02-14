@@ -1,0 +1,28 @@
+{
+  "name": "brickell-fund",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Brickell Special Opportunity Fund Management Platform",
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter @brickell/server dev\" \"pnpm --filter @brickell/client dev\"",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "db:migrate": "pnpm --filter @brickell/server db:migrate",
+    "db:migrate:pg": "pnpm --filter @brickell/server db:migrate:pg",
+    "db:sync:pg": "pnpm --filter @brickell/server db:sync:pg",
+    "db:seed": "pnpm --filter @brickell/server db:seed",
+    "deploy:check": "pnpm -r lint && pnpm -r build && pnpm audit --prod"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0"
+  }
+}
