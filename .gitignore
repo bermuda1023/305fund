@@ -5,6 +5,9 @@ dist/
 .env
 *.db
 *.sqlite
+*.db-shm
+*.db-wal
+*.tsbuildinfo
 uploads/
 .DS_Store
 *.log
