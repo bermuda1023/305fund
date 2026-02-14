@@ -7,9 +7,14 @@ import { getDb } from '../db/database';
 import { requireAuth, requireGP } from '../middleware/auth';
 import { BUILDING } from '@brickell/shared';
 import ExcelJS from 'exceljs';
+import multer from 'multer';
 
 const router = Router();
 router.use(requireAuth, requireGP);
+const importUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+});
 
 function worksheetToMatrix(worksheet: ExcelJS.Worksheet): unknown[][] {
   const rows: unknown[][] = [];
@@ -40,10 +45,10 @@ router.get('/', (req: Request, res: Response) => {
       bu.owner_phone,
       CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(e.name, bu.owner_company) ELSE bu.owner_company END as owner_company,
       bu.notes,
-      ut.ownership_pct, ut.sqft, ut.beds,
+      COALESCE(ut.ownership_pct, 0) as ownership_pct, COALESCE(ut.sqft, 0) as sqft, COALESCE(ut.beds, 0) as beds,
       CASE WHEN bu.is_fund_owned THEN 'Fund Owned' ELSE NULL END as fund_status
     FROM building_units bu
-    JOIN unit_types ut ON bu.unit_type_id = ut.id
+    LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
     LEFT JOIN portfolio_units pu ON pu.building_unit_id = bu.id
     LEFT JOIN entities e ON pu.entity_id = e.id
     LEFT JOIN tenants t ON t.id = (
@@ -110,12 +115,20 @@ router.get('/progress', (req: Request, res: Response) => {
   const stats = db.prepare(`
     SELECT
       COUNT(*) as total,
-      SUM(CASE WHEN consensus_status = 'signed' THEN 1 ELSE 0 END) as signed_consensus,
-      SUM(CASE WHEN listing_agreement = 'signed' THEN 1 ELSE 0 END) as signed_listing,
-      SUM(CASE WHEN consensus_status = 'unsigned' THEN 1 ELSE 0 END) as no_votes,
-      SUM(CASE WHEN consensus_status = 'unknown' THEN 1 ELSE 0 END) as abstain,
-      SUM(CASE WHEN consensus_status = 'unsigned' OR listing_agreement = 'unsigned' THEN 1 ELSE 0 END) as unsigned,
-      SUM(CASE WHEN consensus_status = 'unknown' AND listing_agreement = 'unknown' THEN 1 ELSE 0 END) as unknown,
+      SUM(CASE WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'signed' THEN 1 ELSE 0 END) as signed_consensus,
+      SUM(CASE WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'signed' THEN 1 ELSE 0 END) as signed_listing,
+      SUM(CASE WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned' THEN 1 ELSE 0 END) as no_votes,
+      SUM(CASE WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unknown' THEN 1 ELSE 0 END) as abstain,
+      SUM(CASE
+        WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned'
+          OR (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unsigned'
+        THEN 1 ELSE 0 END
+      ) as unsigned,
+      SUM(CASE
+        WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unknown'
+         AND (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unknown'
+        THEN 1 ELSE 0 END
+      ) as unknown,
       SUM(CASE WHEN is_fund_owned = 1 THEN 1 ELSE 0 END) as fund_owned
     FROM building_units
   `).get() as any;
@@ -123,12 +136,18 @@ router.get('/progress', (req: Request, res: Response) => {
   // Ownership-weighted stats (join unit_types for ownership_pct)
   const weighted = db.prepare(`
     SELECT
-      COALESCE(SUM(ut.ownership_pct), 0) as total_ownership,
-      COALESCE(SUM(CASE WHEN bu.consensus_status = 'signed' THEN ut.ownership_pct ELSE 0 END), 0) as yes_ownership,
-      COALESCE(SUM(CASE WHEN bu.consensus_status = 'unsigned' THEN ut.ownership_pct ELSE 0 END), 0) as no_ownership,
-      COALESCE(SUM(CASE WHEN bu.is_fund_owned = 1 THEN ut.ownership_pct ELSE 0 END), 0) as fund_ownership
+      COALESCE(SUM(COALESCE(ut.ownership_pct, 0)), 0) as total_ownership,
+      COALESCE(SUM(CASE
+        WHEN (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'signed'
+        THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END
+      ), 0) as yes_ownership,
+      COALESCE(SUM(CASE
+        WHEN (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'unsigned'
+        THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END
+      ), 0) as no_ownership,
+      COALESCE(SUM(CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END), 0) as fund_ownership
     FROM building_units bu
-    JOIN unit_types ut ON bu.unit_type_id = ut.id
+    LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
   `).get() as any;
 
   const total = stats.total || BUILDING.totalUnits;
@@ -178,27 +197,37 @@ router.get('/flagged', (req: Request, res: Response) => {
   const db = getDb();
   const flagged = db.prepare(`
     SELECT bu.unit_number, bu.resident_name, bu.resident_type, bu.owner_name, bu.owner_email, bu.owner_phone, bu.consensus_status, bu.listing_agreement,
-           bu.notes, ut.ownership_pct
+           bu.notes, COALESCE(ut.ownership_pct, 0) as ownership_pct
     FROM building_units bu
-    JOIN unit_types ut ON bu.unit_type_id = ut.id
-    WHERE bu.listing_agreement = 'unsigned' OR bu.consensus_status = 'unsigned'
+    LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
+    WHERE (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'unsigned'
+       OR (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'unsigned'
     ORDER BY bu.floor, bu.unit_letter
   `).all();
   res.json(flagged);
 });
 
 // POST /api/contracts/import-master-list - Import BTH master list Excel
-router.post('/import-master-list', async (req: Request, res: Response) => {
+router.post('/import-master-list', importUpload.single('file'), async (req: Request, res: Response) => {
   const db = getDb();
-  const { filePath } = req.body;
+  const { filePath } = req.body as { filePath?: string };
+  const uploadFile = (req as any).file as Express.Multer.File | undefined;
 
-  if (!filePath) {
-    return res.status(400).json({ error: 'filePath is required' });
+  if (!filePath && !uploadFile) {
+    return res.status(400).json({ error: 'Provide file upload or filePath' });
   }
 
   try {
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
+    if (uploadFile?.buffer) {
+      const arrayBuffer = uploadFile.buffer.buffer.slice(
+        uploadFile.buffer.byteOffset,
+        uploadFile.buffer.byteOffset + uploadFile.buffer.byteLength
+      ) as ArrayBuffer;
+      await workbook.xlsx.load(arrayBuffer);
+    } else if (filePath) {
+      await workbook.xlsx.readFile(filePath);
+    }
     const worksheet = workbook.worksheets[0];
     if (!worksheet) {
       return res.status(400).json({ error: 'Workbook has no worksheets' });
