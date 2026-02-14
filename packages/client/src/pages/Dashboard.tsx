@@ -85,6 +85,7 @@ const fmt = fmtCurrency;
 const fmtCompact = fmtCurrencyCompact;
 const pct = (n: number) => fmtPctRaw(n, 1);
 const num = fmtNumber;
+const asArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 
 /* ── Component ───────────────────────────────────────────────── */
 
@@ -103,17 +104,17 @@ export default function Dashboard() {
 
   const { data: portfolioUnits } = useQuery<PortfolioUnit[]>({
     queryKey: ['portfolio-units'],
-    queryFn: () => api.get('/portfolio').then((r) => r.data),
+    queryFn: () => api.get('/portfolio').then((r) => asArray<PortfolioUnit>(r.data)),
   });
 
   const { data: unreconciledTxns } = useQuery<ActualsTransaction[]>({
     queryKey: ['unreconciled-transactions'],
-    queryFn: () => api.get('/actuals/transactions?reconciled=false&limit=10').then((r) => r.data),
+    queryFn: () => api.get('/actuals/transactions?reconciled=false&limit=10').then((r) => asArray<ActualsTransaction>(r.data)),
   });
 
   const { data: capitalCalls } = useQuery<CapitalCall[]>({
     queryKey: ['capital-calls-all'],
-    queryFn: () => api.get('/lp/capital-calls/all').then((r) => r.data),
+    queryFn: () => api.get('/lp/capital-calls/all').then((r) => asArray<CapitalCall>(r.data)),
   });
 
   /* Upcoming lease expirations (within 90 days) */
