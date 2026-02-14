@@ -6,10 +6,19 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/database';
 import { requireAuth, requireGP } from '../middleware/auth';
 import { BUILDING } from '@brickell/shared';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 const router = Router();
 router.use(requireAuth, requireGP);
+
+function worksheetToMatrix(worksheet: ExcelJS.Worksheet): unknown[][] {
+  const rows: unknown[][] = [];
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    // ExcelJS row.values is 1-indexed, first item is unused.
+    rows.push((row.values as unknown[]).slice(1));
+  });
+  return rows;
+}
 
 // GET /api/contracts - All units with consensus/agreement status
 router.get('/', (req: Request, res: Response) => {
@@ -179,7 +188,7 @@ router.get('/flagged', (req: Request, res: Response) => {
 });
 
 // POST /api/contracts/import-master-list - Import BTH master list Excel
-router.post('/import-master-list', (req: Request, res: Response) => {
+router.post('/import-master-list', async (req: Request, res: Response) => {
   const db = getDb();
   const { filePath } = req.body;
 
@@ -188,9 +197,13 @@ router.post('/import-master-list', (req: Request, res: Response) => {
   }
 
   try {
-    const wb = XLSX.readFile(filePath);
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(filePath);
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+      return res.status(400).json({ error: 'Workbook has no worksheets' });
+    }
+    const rows = worksheetToMatrix(worksheet) as any[][];
 
     // Skip header row (row 0)
     const dataRows = rows.slice(1).filter((row) => row[3]); // column D = unit
