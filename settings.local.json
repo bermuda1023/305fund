@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(dir:*)",
+      "Bash(git -C \"C:\\\\Users\\\\James\\\\OneDrive\\\\Documents\\\\BrickellSpecialOpFund\" log --oneline -20)",
+      "Bash(node:*)",
+      "Bash(npm --version)",
+      "Bash(pnpm --version:*)",
+      "Bash(pnpm build:*)"
+    ]
+  }
+}
