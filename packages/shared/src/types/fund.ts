@@ -41,6 +41,12 @@ export interface FundAssumptions {
   hoaGrowthPct: number;
   vacancyPct: number;
 
+  // Fund operating overhead
+  annualFundOpexMode: 'fixed' | 'threshold_pct';
+  annualFundOpexFixed: number;         // Base annual overhead in dollars
+  annualFundOpexThresholdPct: number;  // Threshold ownership in decimal (e.g., 0.02 = 2%)
+  annualFundOpexAdjustPct: number;     // Multiplier on ownership above threshold
+
   // Land valuation
   presentDayLandValue: number;   // Current land value (today)
   landValueTotal: number;      // Current total land value (e.g., 800_000_000)

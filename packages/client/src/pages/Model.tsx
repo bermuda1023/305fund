@@ -49,6 +49,10 @@ interface FundAssumptions {
   rentGrowthPct: number;
   hoaGrowthPct: number;
   vacancyPct: number;
+  annualFundOpexMode: 'fixed' | 'threshold_pct';
+  annualFundOpexFixed: number;
+  annualFundOpexThresholdPct: number;
+  annualFundOpexAdjustPct: number;
   presentDayLandValue: number;
   landValueTotal: number;
   landGrowthPct: number;
@@ -90,6 +94,10 @@ const DEFAULT_ASSUMPTIONS: FundAssumptions = {
   rentGrowthPct: 0.03,
   hoaGrowthPct: 0.02,
   vacancyPct: 0.05,
+  annualFundOpexMode: 'fixed',
+  annualFundOpexFixed: 75_000,
+  annualFundOpexThresholdPct: 0.02,
+  annualFundOpexAdjustPct: 0,
   presentDayLandValue: 650_000_000,
   landValueTotal: 800_000_000,
   landGrowthPct: 0.03,
@@ -625,6 +633,9 @@ interface TableRow {
   deployments: number;
   grossRent: number;
   hoaExpense: number;
+  insuranceExpense: number;
+  taxExpense: number;
+  fundOpex: number;
   renovationCost: number;
   mgmtFee: number;
   netRent: number;
@@ -650,6 +661,9 @@ function toTableMonthly(cashFlows: QuarterlyCashFlow[]): TableRow[] {
         deployments: cf.acquisitionCost / 3,
         grossRent: cf.grossRent / 3,
         hoaExpense: cf.hoaExpense / 3,
+        insuranceExpense: (cf.insuranceExpense || 0) / 3,
+        taxExpense: (cf.taxExpense || 0) / 3,
+        fundOpex: Math.max(0, ((cf.operatingExpense || 0) - (cf.renovationCost || 0)) / 3),
         renovationCost: (cf.renovationCost || 0) / 3,
         mgmtFee: (cf.mgmtFee || 0) / 3,
         netRent: cf.netRent / 3,
@@ -699,7 +713,9 @@ function toTableMonthlyWithRenovationTiming(
   const rows: TableRow[] = [];
   for (const cf of cashFlows) {
     const quarterReno = cf.renovationCost || 0;
-    const baseNoiMonthly = (cf.netOperatingIncome + quarterReno) / 3;
+    const baseInsuranceMonthly = (cf.insuranceExpense || 0) / 3;
+    const baseTaxMonthly = (cf.taxExpense || 0) / 3;
+    const baseFundOpexMonthly = Math.max(0, ((cf.operatingExpense || 0) - quarterReno) / 3);
     const baseNetWithoutCap = (cf.netCashFlow + cf.capitalCalls + quarterReno) / 3;
     const baseMgmtMonthly = (cf.mgmtFee || 0) / 3;
     const baseCallMonthly = cf.capitalCalls / 3;
@@ -712,7 +728,12 @@ function toTableMonthlyWithRenovationTiming(
       const renoThisMonth = renoByMonth.get(key) || 0;
       const callThisMonth = hasCallEvents ? (callByMonth.get(key) || 0) : baseCallMonthly;
       const deploymentThisMonth = deployByMonth.get(key) || 0;
-      const noi = baseNoiMonthly - renoThisMonth;
+      const noi = (cf.netRent / 3)
+        - (cf.hoaExpense / 3)
+        - baseInsuranceMonthly
+        - baseTaxMonthly
+        - baseFundOpexMonthly
+        - renoThisMonth;
       rows.push({
         label: `${monthDate.toLocaleString('default', { month: 'short' })} ${monthDate.getFullYear()}`,
         date: dateStr,
@@ -720,6 +741,9 @@ function toTableMonthlyWithRenovationTiming(
         deployments: deploymentThisMonth,
         grossRent: cf.grossRent / 3,
         hoaExpense: cf.hoaExpense / 3,
+        insuranceExpense: baseInsuranceMonthly,
+        taxExpense: baseTaxMonthly,
+        fundOpex: baseFundOpexMonthly,
         renovationCost: renoThisMonth,
         mgmtFee: baseMgmtMonthly,
         netRent: cf.netRent / 3,
@@ -744,6 +768,9 @@ function toTableQuarterly(cashFlows: QuarterlyCashFlow[]): TableRow[] {
     deployments: cf.acquisitionCost || 0,
     grossRent: cf.grossRent,
     hoaExpense: cf.hoaExpense,
+    insuranceExpense: cf.insuranceExpense || 0,
+    taxExpense: cf.taxExpense || 0,
+    fundOpex: Math.max(0, (cf.operatingExpense || 0) - (cf.renovationCost || 0)),
     renovationCost: cf.renovationCost || 0,
     mgmtFee: cf.mgmtFee || 0,
     netRent: cf.netRent,
@@ -762,7 +789,7 @@ function toTableYearly(cashFlows: QuarterlyCashFlow[]): TableRow[] {
     if (!yearMap.has(year)) {
       yearMap.set(year, {
         label: year, date: `${year}-12-31`,
-        capitalCalls: 0, deployments: 0, grossRent: 0, hoaExpense: 0, renovationCost: 0, mgmtFee: 0, netRent: 0, noi: 0,
+        capitalCalls: 0, deployments: 0, grossRent: 0, hoaExpense: 0, insuranceExpense: 0, taxExpense: 0, fundOpex: 0, renovationCost: 0, mgmtFee: 0, netRent: 0, noi: 0,
         debtBalance: 0, mmBalance: 0, netCashFlow: 0, cumulativeCashFlow: 0,
       });
     }
@@ -771,6 +798,9 @@ function toTableYearly(cashFlows: QuarterlyCashFlow[]): TableRow[] {
     row.deployments += cf.acquisitionCost || 0;
     row.grossRent += cf.grossRent;
     row.hoaExpense += cf.hoaExpense;
+    row.insuranceExpense += cf.insuranceExpense || 0;
+    row.taxExpense += cf.taxExpense || 0;
+    row.fundOpex += Math.max(0, (cf.operatingExpense || 0) - (cf.renovationCost || 0));
     row.renovationCost += cf.renovationCost || 0;
     row.mgmtFee += cf.mgmtFee || 0;
     row.netRent += cf.netRent;
@@ -845,6 +875,18 @@ const fieldGroups: { title: string; fields: FieldDef[] }[] = [
       { key: 'rentGrowthPct', label: 'Rent Growth (Annual)', type: 'pct' },
       { key: 'hoaGrowthPct', label: 'HOA Growth (Annual)', type: 'pct' },
       { key: 'vacancyPct', label: 'Vacancy Rate', type: 'pct' },
+    ],
+  },
+  {
+    title: 'Fund Operating Overhead',
+    fields: [
+      { key: 'annualFundOpexMode', label: 'Fund Opex Mode', type: 'select', options: [
+        { value: 'fixed', label: 'Fixed Annual Amount' },
+        { value: 'threshold_pct', label: 'Adjust % Above Ownership Threshold' },
+      ]},
+      { key: 'annualFundOpexFixed', label: 'Annual Fund Opex (Base $)', type: 'dollar' },
+      { key: 'annualFundOpexThresholdPct', label: 'Ownership Threshold', type: 'pct' },
+      { key: 'annualFundOpexAdjustPct', label: 'Adjustment Multiplier', type: 'pct' },
     ],
   },
   {
@@ -952,6 +994,9 @@ function FieldInput({ field, value, form, onChange }: {
   };
 
   const isMMDisabled = field.key === 'mmRate' && form.excessCashMode === 'distribute';
+  const isOpexThresholdField = field.key === 'annualFundOpexThresholdPct' || field.key === 'annualFundOpexAdjustPct';
+  const isOpexThresholdDisabled = isOpexThresholdField && form.annualFundOpexMode !== 'threshold_pct';
+  const isDisabled = isMMDisabled || isOpexThresholdDisabled;
 
   return (
     <div>
@@ -965,15 +1010,20 @@ function FieldInput({ field, value, form, onChange }: {
         value={displayValue}
         onChange={(e) => handleChange(e.target.value)}
         step={field.type === 'pct' ? 0.01 : field.type === 'int' ? 1 : 1000}
-        disabled={isMMDisabled}
+        disabled={isDisabled}
         style={{
           ...inputStyle,
-          ...(isMMDisabled ? { opacity: 0.55, background: 'var(--bg-tertiary)', cursor: 'not-allowed' } : {}),
+          ...(isDisabled ? { opacity: 0.55, background: 'var(--bg-tertiary)', cursor: 'not-allowed' } : {}),
         }}
       />
       {isMMDisabled && (
         <div style={{ marginTop: '0.2rem', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
           Disabled while excess cash mode is set to Distribute.
+        </div>
+      )}
+      {isOpexThresholdDisabled && (
+        <div style={{ marginTop: '0.2rem', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+          Enabled only when Fund Opex Mode is set to threshold adjustment.
         </div>
       )}
     </div>
@@ -1700,6 +1750,9 @@ export default function Model() {
                     <th style={{ textAlign: 'right' }}>Deployments</th>
                     <th style={{ textAlign: 'right' }}>Gross Rent</th>
                     <th style={{ textAlign: 'right' }}>HOA</th>
+                    <th style={{ textAlign: 'right' }}>Insurance</th>
+                    <th style={{ textAlign: 'right' }}>Tax</th>
+                    <th style={{ textAlign: 'right' }}>Fund Opex</th>
                     <th style={{ textAlign: 'right' }}>Renovations</th>
                     <th style={{ textAlign: 'right' }}>Mgmt Fee</th>
                     <th style={{ textAlign: 'right' }}>Net Rent</th>
@@ -1728,6 +1781,15 @@ export default function Model() {
                       <td style={{ textAlign: 'right', color: 'var(--red)' }}>
                         {row.hoaExpense > 0 ? fmt(row.hoaExpense) : '\u2014'}
                       </td>
+                      <td style={{ textAlign: 'right', color: row.insuranceExpense > 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+                        {row.insuranceExpense > 0 ? fmt(row.insuranceExpense) : '\u2014'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: row.taxExpense > 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+                        {row.taxExpense > 0 ? fmt(row.taxExpense) : '\u2014'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: row.fundOpex > 0 ? '#ff7f50' : 'var(--text-muted)' }}>
+                        {row.fundOpex > 0 ? fmt(row.fundOpex) : '\u2014'}
+                      </td>
                       <td style={{ textAlign: 'right', color: row.renovationCost > 0 ? 'var(--gold)' : 'var(--text-muted)' }}>
                         {row.renovationCost > 0 ? fmt(row.renovationCost) : '\u2014'}
                       </td>
@@ -1738,8 +1800,8 @@ export default function Model() {
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.noi !== 0 ? fmt(row.noi) : '\u2014'}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{row.debtBalance > 0 ? fmt(row.debtBalance) : '\u2014'}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{row.mmBalance > 0 ? fmt(row.mmBalance) : '\u2014'}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600, color: (row.noi - row.mgmtFee - row.renovationCost) >= 0 ? 'var(--teal)' : 'var(--red)' }}>
-                        {fmt(row.noi - row.mgmtFee - row.renovationCost)}
+                      <td style={{ textAlign: 'right', fontWeight: 600, color: (row.noi - row.mgmtFee) >= 0 ? 'var(--teal)' : 'var(--red)' }}>
+                        {fmt(row.noi - row.mgmtFee)}
                       </td>
                       <td style={{ textAlign: 'right', fontWeight: 600, color: row.netCashFlow < 0 ? 'var(--red)' : row.netCashFlow > 0 ? 'var(--green)' : undefined }}>
                         {row.netCashFlow !== 0 ? fmt(row.netCashFlow) : '\u2014'}

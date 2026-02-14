@@ -28,8 +28,15 @@ export default function Login() {
   return (
     <div className="login-page">
       <div className="login-box">
-        <h1>Brickell Fund</h1>
-        <p>Special Opportunity Fund Management</p>
+        <h1>305 opportunites fund</h1>
+        <p>
+          The 305 opportunites fund is an opportunistic, control-equity platform targeting governance
+          dislocations in fragmented condominium cap tables. We originate off-benchmark entry points, consolidate
+          high-influence ownership blocs, and execute a catalyst-led control-to-liquidity transformation that reprices
+          assets from retail condo basis to institutional land-value equivalency. Alpha is driven by complexity arbitrage,
+          active value creation, and control-premium monetization, supported by institutional diligence protocols,
+          downside-protected underwriting, and tax-efficient exit architecture.
+        </p>
 
         {error && <div className="login-error">{error}</div>}
 

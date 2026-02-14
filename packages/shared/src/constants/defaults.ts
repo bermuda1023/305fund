@@ -43,6 +43,12 @@ export const DEFAULT_ASSUMPTIONS: Omit<FundAssumptions, 'id' | 'createdAt'> = {
   hoaGrowthPct: 0.02,
   vacancyPct: 0.05,
 
+  // Fund operating overhead
+  annualFundOpexMode: 'fixed',
+  annualFundOpexFixed: 75_000,
+  annualFundOpexThresholdPct: 0.02,
+  annualFundOpexAdjustPct: 0.0,
+
   // Land valuation
   presentDayLandValue: 650_000_000,
   landValueTotal: 800_000_000,

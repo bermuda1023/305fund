@@ -333,7 +333,7 @@ export default function Listings() {
                   <div style={{ gridColumn: '1 / -1' }}>
                     <div className="metric-label">Owner Contact</div>
                     <div style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
-                      {listing.owner_name || (listing.is_fund_owned ? 'Brickell Fund' : '—')}
+                      {listing.owner_name || (listing.is_fund_owned ? '305 opportunites fund' : '—')}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                       {listing.owner_company ? `${listing.owner_company} · ` : ''}

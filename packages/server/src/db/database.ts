@@ -63,12 +63,13 @@ function bootstrapReferenceData(database: Database.Database): void {
         tier3_hurdle_irr, tier3_split_lp, tier3_split_gp,
         refi_enabled, refi_year, refi_ltv, refi_rate, refi_term_years, refi_cost_pct,
         rent_growth_pct, hoa_growth_pct, vacancy_pct,
+        annual_fund_opex_mode, annual_fund_opex_fixed, annual_fund_opex_threshold_pct, annual_fund_opex_adjust_pct,
         present_day_land_value,
         land_value_total, land_growth_pct, land_psf,
         mm_rate, excess_cash_mode, building_valuation,
         bonus_irr_threshold, bonus_max_years, bonus_yield_threshold
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       a.name, a.isActive ? 1 : 0, a.fundSize, a.fundTermYears, a.investmentPeriodYears,
@@ -78,6 +79,7 @@ function bootstrapReferenceData(database: Database.Database): void {
       a.tier3HurdleIRR, a.tier3SplitLP, a.tier3SplitGP,
       a.refiEnabled ? 1 : 0, a.refiYear, a.refiLTV, a.refiRate, a.refiTermYears, a.refiCostPct,
       a.rentGrowthPct, a.hoaGrowthPct, a.vacancyPct,
+      a.annualFundOpexMode, a.annualFundOpexFixed, a.annualFundOpexThresholdPct, a.annualFundOpexAdjustPct,
       a.presentDayLandValue,
       a.landValueTotal, a.landGrowthPct, a.landPSF,
       a.mmRate, a.excessCashMode, a.buildingValuation,
@@ -129,6 +131,10 @@ export function initDb(): void {
     `ALTER TABLE bank_uploads ADD COLUMN file_type_check TEXT`, // placeholder for file_type constraint relaxation
     `ALTER TABLE bank_uploads ADD COLUMN file_path TEXT`,
     `ALTER TABLE fund_assumptions ADD COLUMN present_day_land_value REAL NOT NULL DEFAULT 650000000`,
+    `ALTER TABLE fund_assumptions ADD COLUMN annual_fund_opex_mode TEXT NOT NULL DEFAULT 'fixed'`,
+    `ALTER TABLE fund_assumptions ADD COLUMN annual_fund_opex_fixed REAL NOT NULL DEFAULT 75000`,
+    `ALTER TABLE fund_assumptions ADD COLUMN annual_fund_opex_threshold_pct REAL NOT NULL DEFAULT 0.02`,
+    `ALTER TABLE fund_assumptions ADD COLUMN annual_fund_opex_adjust_pct REAL NOT NULL DEFAULT 0`,
     `ALTER TABLE portfolio_units ADD COLUMN hoa_is_recurring INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE portfolio_units ADD COLUMN hoa_reconcile_ref TEXT`,
     `ALTER TABLE portfolio_units ADD COLUMN insurance_is_recurring INTEGER NOT NULL DEFAULT 0`,
@@ -160,6 +166,31 @@ export function initDb(): void {
     } catch {
       // Column already exists — ignore
     }
+  }
+
+  try {
+    database.exec(`
+      UPDATE fund_assumptions
+      SET
+        annual_fund_opex_mode = CASE
+          WHEN annual_fund_opex_mode IN ('fixed', 'threshold_pct') THEN annual_fund_opex_mode
+          ELSE 'fixed'
+        END,
+        annual_fund_opex_fixed = CASE
+          WHEN annual_fund_opex_fixed IS NULL OR annual_fund_opex_fixed < 0 THEN 75000
+          ELSE annual_fund_opex_fixed
+        END,
+        annual_fund_opex_threshold_pct = CASE
+          WHEN annual_fund_opex_threshold_pct IS NULL OR annual_fund_opex_threshold_pct < 0 THEN 0.02
+          ELSE annual_fund_opex_threshold_pct
+        END,
+        annual_fund_opex_adjust_pct = CASE
+          WHEN annual_fund_opex_adjust_pct IS NULL OR annual_fund_opex_adjust_pct < 0 THEN 0
+          ELSE annual_fund_opex_adjust_pct
+        END;
+    `);
+  } catch {
+    // ignore normalization failures on legacy bootstrap edge cases
   }
 
   // Insurance and tax are annual payments (non-monthly recurring)

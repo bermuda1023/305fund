@@ -33,8 +33,8 @@ export default function Layout() {
     <div className="app-layout">
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <h1>Brickell Fund</h1>
-          <span>Special Opportunity Fund</span>
+          <h1>305 opportunites fund</h1>
+          <span>control equity platform</span>
         </div>
 
         <nav className="sidebar-nav">

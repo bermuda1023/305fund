@@ -58,6 +58,10 @@ function rowToAssumptions(row: any): FundAssumptions {
     rentGrowthPct: row.rent_growth_pct,
     hoaGrowthPct: row.hoa_growth_pct,
     vacancyPct: row.vacancy_pct,
+    annualFundOpexMode: row.annual_fund_opex_mode === 'threshold_pct' ? 'threshold_pct' : 'fixed',
+    annualFundOpexFixed: Number(row.annual_fund_opex_fixed ?? 75_000),
+    annualFundOpexThresholdPct: Number(row.annual_fund_opex_threshold_pct ?? 0.02),
+    annualFundOpexAdjustPct: Number(row.annual_fund_opex_adjust_pct ?? 0),
     presentDayLandValue: row.present_day_land_value ?? row.land_value_total,
     landValueTotal: row.land_value_total,
     landGrowthPct: row.land_growth_pct,
@@ -81,6 +85,7 @@ function assumptionsToRow(a: FundAssumptions) {
     a.tier3HurdleIRR, a.tier3SplitLP, a.tier3SplitGP,
     a.refiEnabled ? 1 : 0, a.refiYear, a.refiLTV, a.refiRate, a.refiTermYears, a.refiCostPct,
     a.rentGrowthPct, a.hoaGrowthPct, a.vacancyPct,
+    a.annualFundOpexMode, a.annualFundOpexFixed, a.annualFundOpexThresholdPct, a.annualFundOpexAdjustPct,
     a.presentDayLandValue,
     a.landValueTotal, a.landGrowthPct, a.landPSF,
     a.mmRate, a.excessCashMode, a.buildingValuation,
@@ -90,7 +95,7 @@ function assumptionsToRow(a: FundAssumptions) {
 
 /**
  * Query portfolio_units and compute real operating data + acquisition schedule.
- * Returns { avgRent, avgHOA, avgAnnualInsurance, avgAnnualTax, annualFundOpex, acquisitions, unitCount }.
+ * Returns { avgRent, avgHOA, avgAnnualInsurance, avgAnnualTax, acquisitions, unitCount }.
  * Falls back to defaults if no units exist.
  */
 function getPortfolioData(db: ReturnType<typeof getDb>) {
@@ -150,23 +155,32 @@ function getPortfolioData(db: ReturnType<typeof getDb>) {
   }
 
   // ownership_pct in DB is stored as percentage (e.g. 0.312228 = 0.312228%)
-  // Convert to decimal for the engine (0.312228% = 0.00312228)
+  // Convert to decimal for the engine (0.312228% = 0.00312228).
   const totalOwnershipPct = ownershipRow?.total_ownership_pct
     ? ownershipRow.total_ownership_pct / 100
     : null;
-
   return {
     avgRent,
     avgHOA,
     avgAnnualInsurance,
     avgAnnualTax,
-    annualFundOpex: 75_000, // could be made configurable
     acquisitions,
     unitCount: count,
     totalMonthlyRent: totalRent,
     totalMonthlyHOA: totalHOA,
     totalOwnershipPct,
   };
+}
+
+function calcAnnualFundOpex(assumptions: FundAssumptions, ownershipPct: number): number {
+  const base = Math.max(0, Number(assumptions.annualFundOpexFixed || 0));
+  if (assumptions.annualFundOpexMode !== 'threshold_pct') {
+    return base;
+  }
+  const threshold = Math.max(0, Number(assumptions.annualFundOpexThresholdPct || 0));
+  const adjust = Math.max(0, Number(assumptions.annualFundOpexAdjustPct || 0));
+  const excess = Math.max(0, ownershipPct - threshold);
+  return base * (1 + excess * adjust);
 }
 
 /**
@@ -185,7 +199,7 @@ function buildCashFlowInput(assumptions: FundAssumptions, db: ReturnType<typeof 
         // Keep base annual expenses at zero when using portfolio overlays to avoid double counting.
         baseAnnualInsurance: 0,
         baseAnnualTax: 0,
-        annualFundOpex: portfolio.annualFundOpex,
+        annualFundOpex: calcAnnualFundOpex(assumptions, portfolio.totalOwnershipPct ?? 0),
         totalOwnershipPct: portfolio.totalOwnershipPct ?? undefined,
       },
       dataSource: {
@@ -206,7 +220,7 @@ function buildCashFlowInput(assumptions: FundAssumptions, db: ReturnType<typeof 
       baseMonthlyHOA: 1400,
       baseAnnualInsurance: 2400,
       baseAnnualTax: 2400,
-      annualFundOpex: 75000,
+      annualFundOpex: calcAnnualFundOpex(assumptions, 0),
     },
     dataSource: {
       type: 'defaults' as const,
@@ -729,11 +743,12 @@ router.post('/scenarios', (req: Request, res: Response) => {
       tier3_hurdle_irr, tier3_split_lp, tier3_split_gp,
       refi_enabled, refi_year, refi_ltv, refi_rate, refi_term_years, refi_cost_pct,
       rent_growth_pct, hoa_growth_pct, vacancy_pct,
+      annual_fund_opex_mode, annual_fund_opex_fixed, annual_fund_opex_threshold_pct, annual_fund_opex_adjust_pct,
       present_day_land_value,
       land_value_total, land_growth_pct, land_psf,
       mm_rate, excess_cash_mode, building_valuation,
       bonus_irr_threshold, bonus_max_years, bonus_yield_threshold
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(...assumptionsToRow(a));
 
   res.status(201).json({ id: result.lastInsertRowid });
@@ -760,6 +775,7 @@ router.put('/scenarios/:id', (req: Request, res: Response) => {
       tier3_hurdle_irr = ?, tier3_split_lp = ?, tier3_split_gp = ?,
       refi_enabled = ?, refi_year = ?, refi_ltv = ?, refi_rate = ?, refi_term_years = ?, refi_cost_pct = ?,
       rent_growth_pct = ?, hoa_growth_pct = ?, vacancy_pct = ?,
+      annual_fund_opex_mode = ?, annual_fund_opex_fixed = ?, annual_fund_opex_threshold_pct = ?, annual_fund_opex_adjust_pct = ?,
       present_day_land_value = ?,
       land_value_total = ?, land_growth_pct = ?, land_psf = ?,
       mm_rate = ?, excess_cash_mode = ?, building_valuation = ?,

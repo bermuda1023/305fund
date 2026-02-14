@@ -49,6 +49,10 @@ function rowToAssumptions(row: any): FundAssumptions {
     rentGrowthPct: row.rent_growth_pct,
     hoaGrowthPct: row.hoa_growth_pct,
     vacancyPct: row.vacancy_pct,
+    annualFundOpexMode: row.annual_fund_opex_mode === 'threshold_pct' ? 'threshold_pct' : 'fixed',
+    annualFundOpexFixed: Number(row.annual_fund_opex_fixed ?? 75_000),
+    annualFundOpexThresholdPct: Number(row.annual_fund_opex_threshold_pct ?? 0.02),
+    annualFundOpexAdjustPct: Number(row.annual_fund_opex_adjust_pct ?? 0),
     presentDayLandValue: row.present_day_land_value ?? row.land_value_total,
     landValueTotal: row.land_value_total,
     landGrowthPct: row.land_growth_pct,
@@ -449,7 +453,7 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
   const db = getDb();
   const { callId } = req.params;
   const bccMode = req.body?.bccMode !== undefined ? !!req.body.bccMode : true;
-  const fundName = String(req.body?.fundName || process.env.FUND_NAME || 'Brickell Special Opportunity Fund');
+  const fundName = String(req.body?.fundName || process.env.FUND_NAME || '305 opportunites fund');
   const fromEmail = process.env.FROM_EMAIL || 'fund@brickell2451insights.com';
 
   const call = db.prepare(`

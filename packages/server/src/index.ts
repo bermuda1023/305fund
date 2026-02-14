@@ -1,6 +1,6 @@
 /**
  * Express server entry point.
- * Brickell Special Opportunity Fund Management API.
+ * 305 opportunites fund management API.
  */
 
 import dotenv from 'dotenv';
@@ -125,7 +125,7 @@ setInterval(() => {
 }, sweepMinutes * 60 * 1000);
 
 app.listen(PORT, () => {
-  console.log(`\n🏗️  Brickell Fund API running on http://localhost:${PORT}`);
+  console.log(`\n🏗️  305 opportunites fund API running on http://localhost:${PORT}`);
   console.log(`   Health: http://localhost:${PORT}/api/health`);
   console.log(`   Environment: ${process.env.NODE_ENV || 'development'}\n`);
 });

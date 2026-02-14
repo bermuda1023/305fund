@@ -19,7 +19,7 @@ router.get('/', (req: Request, res: Response) => {
       l.*,
       bu.floor, bu.unit_letter, bu.consensus_status, bu.listing_agreement, bu.is_fund_owned,
       ut.beds, ut.sqft, ut.ownership_pct,
-      CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(e.name, bu.owner_name, 'Brickell Fund') ELSE bu.owner_name END as owner_name,
+      CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(e.name, bu.owner_name, '305 opportunites fund') ELSE bu.owner_name END as owner_name,
       CASE WHEN bu.is_fund_owned = 1 THEN ? ELSE bu.owner_email END as owner_email,
       bu.owner_phone,
       CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(e.name, bu.owner_company) ELSE bu.owner_company END as owner_company

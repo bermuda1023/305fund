@@ -1,5 +1,5 @@
 /**
- * Centralized number formatting utilities for the Brickell Fund Platform.
+ * Centralized number formatting utilities for the 305 opportunites fund platform.
  * All currency/percentage displays should use these functions.
  */
 

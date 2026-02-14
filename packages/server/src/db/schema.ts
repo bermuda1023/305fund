@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS fund_assumptions (
   rent_growth_pct REAL NOT NULL DEFAULT 0.03,
   hoa_growth_pct REAL NOT NULL DEFAULT 0.02,
   vacancy_pct REAL NOT NULL DEFAULT 0.05,
+  annual_fund_opex_mode TEXT NOT NULL DEFAULT 'fixed'
+    CHECK (annual_fund_opex_mode IN ('fixed', 'threshold_pct')),
+  annual_fund_opex_fixed REAL NOT NULL DEFAULT 75000,
+  annual_fund_opex_threshold_pct REAL NOT NULL DEFAULT 0.02,
+  annual_fund_opex_adjust_pct REAL NOT NULL DEFAULT 0,
   present_day_land_value REAL NOT NULL DEFAULT 650000000,
   land_value_total REAL NOT NULL DEFAULT 800000000,
   land_growth_pct REAL NOT NULL DEFAULT 0.03,
