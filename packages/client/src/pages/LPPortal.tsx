@@ -142,6 +142,9 @@ function GPInvestorSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gp-investors'] });
     },
+    onError: (err: any) => {
+      window.alert(err?.response?.data?.error || 'Failed to update investor status.');
+    },
   });
 
   const removeInvestorMutation = useMutation({
@@ -297,26 +300,31 @@ function GPInvestorSection() {
                     <td style={{ color: 'var(--green)' }}>{fmt(inv.distributions)}</td>
                     <td>{inv.ownership_pct.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</td>
                     <td>
-                      {inv.status === 'active' || inv.status === 'pending' ? (
+                      {inv.status === 'pending' ? (
                         <button
-                          className="badge"
-                          style={{
-                            border: '1px solid var(--border)',
-                            background: inv.status === 'active' ? 'rgba(16,185,129,0.15)' : 'rgba(234,179,8,0.15)',
-                            color: inv.status === 'active' ? 'var(--green)' : 'var(--gold)',
-                            cursor: 'pointer',
-                          }}
+                          className="btn btn-secondary"
+                          style={{ padding: '0.2rem 0.65rem', fontSize: '0.78rem' }}
                           onClick={() =>
                             updateInvestorStatusMutation.mutate({
                               id: inv.id,
-                              status: inv.status === 'active' ? 'pending' : 'active',
+                              status: 'active',
                             })
                           }
-                          title={inv.status === 'active' ? 'Click to set Pending' : 'Click to set Active'}
+                          title="Mark this investor as Active"
                           disabled={updateInvestorStatusMutation.isPending}
                         >
-                          {inv.status} (click to {inv.status === 'active' ? 'pending' : 'active'})
+                          {updateInvestorStatusMutation.isPending ? 'Updating...' : 'Set Active'}
                         </button>
+                      ) : inv.status === 'active' ? (
+                        <span
+                          className="badge"
+                          style={{
+                            background: 'rgba(16,185,129,0.15)',
+                            color: 'var(--green)',
+                          }}
+                        >
+                          active
+                        </span>
                       ) : (
                         <span
                           className="badge"
