@@ -10,39 +10,45 @@ import { ALL_UNIT_TYPES, generateBuildingUnits, DEFAULT_ASSUMPTIONS } from '@bri
 let db: Database.Database | null = null;
 
 function bootstrapReferenceData(database: Database.Database): void {
-  const unitTypeCount = Number((database.prepare('SELECT COUNT(*) as c FROM unit_types').get() as any)?.c || 0);
-  if (unitTypeCount === 0) {
-    const insertUnitType = database.prepare(`
-      INSERT INTO unit_types (unit_letter, ownership_pct, sqft, beds, base_hoa, is_special)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    for (const ut of ALL_UNIT_TYPES) {
-      insertUnitType.run(ut.unitLetter, ut.ownershipPct, ut.sqft, ut.beds, ut.baseHOA, ut.isSpecial ? 1 : 0);
-    }
+  const insertUnitType = database.prepare(`
+    INSERT OR IGNORE INTO unit_types (unit_letter, ownership_pct, sqft, beds, base_hoa, is_special)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const updateUnitType = database.prepare(`
+    UPDATE unit_types
+    SET ownership_pct = ?, sqft = ?, beds = ?, base_hoa = ?, is_special = ?
+    WHERE unit_letter = ?
+  `);
+  for (const ut of ALL_UNIT_TYPES) {
+    insertUnitType.run(ut.unitLetter, ut.ownershipPct, ut.sqft, ut.beds, ut.baseHOA, ut.isSpecial ? 1 : 0);
+    updateUnitType.run(ut.ownershipPct, ut.sqft, ut.beds, ut.baseHOA, ut.isSpecial ? 1 : 0, ut.unitLetter);
   }
 
-  const buildingUnitCount = Number((database.prepare('SELECT COUNT(*) as c FROM building_units').get() as any)?.c || 0);
-  if (buildingUnitCount === 0) {
-    const unitTypeRows = database.prepare('SELECT id, unit_letter FROM unit_types').all() as Array<{ id: number; unit_letter: string }>;
-    const unitTypeMap = new Map<string, number>();
-    for (const row of unitTypeRows) {
-      unitTypeMap.set(row.unit_letter, row.id);
-    }
+  const unitTypeRows = database.prepare('SELECT id, unit_letter FROM unit_types').all() as Array<{ id: number; unit_letter: string }>;
+  const unitTypeMap = new Map<string, number>();
+  for (const row of unitTypeRows) {
+    unitTypeMap.set(row.unit_letter, row.id);
+  }
 
-    const insertBuildingUnit = database.prepare(`
-      INSERT INTO building_units (floor, unit_letter, unit_number, unit_type_id)
-      VALUES (?, ?, ?, ?)
-    `);
-    const buildingUnits = generateBuildingUnits();
-    for (const bu of buildingUnits) {
-      let typeId = unitTypeMap.get(bu.unitLetter);
-      if (!typeId) {
-        const letter = bu.unitLetter.replace(/^\d+/, '');
-        typeId = unitTypeMap.get(letter);
-      }
-      if (!typeId) continue;
-      insertBuildingUnit.run(bu.floor, bu.unitLetter, bu.unitNumber, typeId);
+  const insertBuildingUnit = database.prepare(`
+    INSERT OR IGNORE INTO building_units (floor, unit_letter, unit_number, unit_type_id)
+    VALUES (?, ?, ?, ?)
+  `);
+  const updateBuildingUnit = database.prepare(`
+    UPDATE building_units
+    SET floor = ?, unit_letter = ?, unit_type_id = ?
+    WHERE unit_number = ?
+  `);
+  const buildingUnits = generateBuildingUnits();
+  for (const bu of buildingUnits) {
+    let typeId = unitTypeMap.get(bu.unitLetter);
+    if (!typeId) {
+      const letter = bu.unitLetter.replace(/^\d+/, '');
+      typeId = unitTypeMap.get(letter);
     }
+    if (!typeId) continue;
+    insertBuildingUnit.run(bu.floor, bu.unitLetter, bu.unitNumber, typeId);
+    updateBuildingUnit.run(bu.floor, bu.unitLetter, typeId, bu.unitNumber);
   }
 
   const assumptionsCount = Number((database.prepare('SELECT COUNT(*) as c FROM fund_assumptions').get() as any)?.c || 0);
