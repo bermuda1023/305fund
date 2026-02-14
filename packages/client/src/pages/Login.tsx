@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
 export default function Login() {
@@ -17,6 +17,10 @@ export default function Login() {
     setLoading(true);
     try {
       const user = await login(email, password, loginRole);
+      if (user.mustChangePassword) {
+        navigate('/change-password');
+        return;
+      }
       navigate(user.role === 'gp' ? '/dashboard' : '/lp');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Invalid email or password');
@@ -63,6 +67,11 @@ export default function Login() {
               placeholder="Enter your password"
               required
             />
+            <div style={{ marginTop: '0.5rem' }}>
+              <Link to="/forgot-password" style={{ color: 'var(--teal)', fontSize: '0.85rem' }}>
+                Forgot password?
+              </Link>
+            </div>
           </div>
 
           <div className="form-group">

@@ -9,6 +9,7 @@ export interface AuthPayload {
   userId: number;
   email: string;
   role: 'gp' | 'lp';
+  mustChangePassword?: boolean;
 }
 
 declare global {

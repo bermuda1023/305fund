@@ -158,6 +158,9 @@ export function initDb(): void {
     `ALTER TABLE cash_flow_actuals ADD COLUMN lp_account_id INTEGER REFERENCES lp_accounts(id)`,
     `ALTER TABLE cash_flow_actuals ADD COLUMN capital_call_item_id INTEGER REFERENCES capital_call_items(id)`,
     `ALTER TABLE tenants ADD COLUMN rent_due_day INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN reset_password_token_hash TEXT`,
+    `ALTER TABLE users ADD COLUMN reset_password_expires_at DATETIME`,
   ];
 
   for (const sql of migrations) {

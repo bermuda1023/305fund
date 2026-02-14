@@ -301,9 +301,10 @@ router.get('/performance', requireAuth, requireAnyRole, (req: Request, res: Resp
 // ---- GP-Only: Investor Management ----
 
 // POST /api/lp/investors - Onboard new investor (GP only)
-router.post('/investors', requireAuth, requireGP, (req: Request, res: Response) => {
+router.post('/investors', requireAuth, requireGP, async (req: Request, res: Response) => {
   const db = getDb();
   const { name, entityName, email, phone, commitment, notes } = req.body;
+  const normalizedEmail = String(email || '').trim().toLowerCase();
 
   // Create user account for LP
   const bcrypt = require('bcryptjs');
@@ -311,8 +312,8 @@ router.post('/investors', requireAuth, requireGP, (req: Request, res: Response) 
   const hash = bcrypt.hashSync(tempPassword, 10);
 
   const userResult = db.prepare(
-    'INSERT INTO users (email, password_hash, role, name) VALUES (?, ?, ?, ?)'
-  ).run(email, hash, 'lp', name);
+    'INSERT INTO users (email, password_hash, role, name, must_change_password) VALUES (?, ?, ?, ?, 1)'
+  ).run(normalizedEmail, hash, 'lp', name);
 
   // Calculate ownership pct
   const totalCommitment = (db.prepare(
@@ -331,10 +332,27 @@ router.post('/investors', requireAuth, requireGP, (req: Request, res: Response) 
     UPDATE lp_accounts SET ownership_pct = commitment / (SELECT SUM(commitment) FROM lp_accounts)
   `).run();
 
+  let emailSent = false;
+  if (normalizedEmail) {
+    const fundName = String(process.env.FUND_NAME || '305 opportunites fund');
+    emailSent = await sendTransactionalEmail({
+      to: normalizedEmail,
+      subject: `Your ${fundName} investor portal account`,
+      text:
+        `Hi ${name || 'Investor'},\n\n` +
+        `Your investor portal account has been created.\n\n` +
+        `Email: ${normalizedEmail}\n` +
+        `Temporary password: ${tempPassword}\n\n` +
+        `Please log in and change your password immediately. You will be prompted to change it on first login.\n\n` +
+        `If you were not expecting this email, please contact support.`,
+    });
+  }
+
   res.status(201).json({
     id: lpResult.lastInsertRowid,
     userId: userResult.lastInsertRowid,
     tempPassword, // Return so GP can share with LP
+    emailSent,
   });
 });
 

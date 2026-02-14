@@ -2,6 +2,9 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './lib/auth';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import ChangePassword from './pages/ChangePassword';
 import Dashboard from './pages/Dashboard';
 import Portfolio from './pages/Portfolio';
 import Model from './pages/Model';
@@ -13,9 +16,19 @@ import LPPortal from './pages/LPPortal';
 import Entities from './pages/Entities';
 import Actuals from './pages/Actuals';
 
-function ProtectedRoute({ children, gpOnly = false }: { children: React.ReactNode; gpOnly?: boolean }) {
-  const { isAuthenticated, isGP } = useAuth();
+function ProtectedRoute({
+  children,
+  gpOnly = false,
+  allowPasswordChangeOnly = false,
+}: {
+  children: React.ReactNode;
+  gpOnly?: boolean;
+  allowPasswordChangeOnly?: boolean;
+}) {
+  const { isAuthenticated, isGP, user } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" />;
+  if (user?.mustChangePassword && !allowPasswordChangeOnly) return <Navigate to="/change-password" />;
+  if (!user?.mustChangePassword && allowPasswordChangeOnly) return <Navigate to={isGP ? "/dashboard" : "/lp"} />;
   if (gpOnly && !isGP) return <Navigate to="/lp" />;
   return <>{children}</>;
 }
@@ -27,6 +40,16 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route
+          path="/change-password"
+          element={
+            <ProtectedRoute allowPasswordChangeOnly>
+              <ChangePassword />
+            </ProtectedRoute>
+          }
+        />
 
         <Route path="/" element={
           <ProtectedRoute>

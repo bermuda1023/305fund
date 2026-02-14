@@ -6,6 +6,7 @@ interface User {
   email: string;
   role: 'gp' | 'lp';
   name: string;
+  mustChangePassword?: boolean;
 }
 
 interface AuthContextType {
@@ -29,7 +30,8 @@ function readStoredUser(): User | null {
       typeof parsed?.id === 'number' &&
       typeof parsed?.email === 'string' &&
       (parsed?.role === 'gp' || parsed?.role === 'lp') &&
-      typeof parsed?.name === 'string'
+      typeof parsed?.name === 'string' &&
+      (parsed?.mustChangePassword === undefined || typeof parsed?.mustChangePassword === 'boolean')
     ) {
       return parsed as User;
     }

@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('gp', 'lp')),
   name TEXT NOT NULL,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  reset_password_token_hash TEXT,
+  reset_password_expires_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
