@@ -5,8 +5,80 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { SCHEMA } from './schema';
+import { ALL_UNIT_TYPES, generateBuildingUnits, DEFAULT_ASSUMPTIONS } from '@brickell/shared';
 
 let db: Database.Database | null = null;
+
+function bootstrapReferenceData(database: Database.Database): void {
+  const unitTypeCount = Number((database.prepare('SELECT COUNT(*) as c FROM unit_types').get() as any)?.c || 0);
+  if (unitTypeCount === 0) {
+    const insertUnitType = database.prepare(`
+      INSERT INTO unit_types (unit_letter, ownership_pct, sqft, beds, base_hoa, is_special)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (const ut of ALL_UNIT_TYPES) {
+      insertUnitType.run(ut.unitLetter, ut.ownershipPct, ut.sqft, ut.beds, ut.baseHOA, ut.isSpecial ? 1 : 0);
+    }
+  }
+
+  const buildingUnitCount = Number((database.prepare('SELECT COUNT(*) as c FROM building_units').get() as any)?.c || 0);
+  if (buildingUnitCount === 0) {
+    const unitTypeRows = database.prepare('SELECT id, unit_letter FROM unit_types').all() as Array<{ id: number; unit_letter: string }>;
+    const unitTypeMap = new Map<string, number>();
+    for (const row of unitTypeRows) {
+      unitTypeMap.set(row.unit_letter, row.id);
+    }
+
+    const insertBuildingUnit = database.prepare(`
+      INSERT INTO building_units (floor, unit_letter, unit_number, unit_type_id)
+      VALUES (?, ?, ?, ?)
+    `);
+    const buildingUnits = generateBuildingUnits();
+    for (const bu of buildingUnits) {
+      let typeId = unitTypeMap.get(bu.unitLetter);
+      if (!typeId) {
+        const letter = bu.unitLetter.replace(/^\d+/, '');
+        typeId = unitTypeMap.get(letter);
+      }
+      if (!typeId) continue;
+      insertBuildingUnit.run(bu.floor, bu.unitLetter, bu.unitNumber, typeId);
+    }
+  }
+
+  const assumptionsCount = Number((database.prepare('SELECT COUNT(*) as c FROM fund_assumptions').get() as any)?.c || 0);
+  if (assumptionsCount === 0) {
+    const a = DEFAULT_ASSUMPTIONS;
+    database.prepare(`
+      INSERT INTO fund_assumptions (
+        name, is_active, fund_size, fund_term_years, investment_period_years,
+        gp_coinvest_pct, mgmt_fee_invest_pct, mgmt_fee_post_pct, mgmt_fee_waiver,
+        pref_return_pct, catchup_pct,
+        tier1_split_lp, tier1_split_gp, tier2_hurdle_irr, tier2_split_lp, tier2_split_gp,
+        tier3_hurdle_irr, tier3_split_lp, tier3_split_gp,
+        refi_enabled, refi_year, refi_ltv, refi_rate, refi_term_years, refi_cost_pct,
+        rent_growth_pct, hoa_growth_pct, vacancy_pct,
+        present_day_land_value,
+        land_value_total, land_growth_pct, land_psf,
+        mm_rate, excess_cash_mode, building_valuation,
+        bonus_irr_threshold, bonus_max_years, bonus_yield_threshold
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+    `).run(
+      a.name, a.isActive ? 1 : 0, a.fundSize, a.fundTermYears, a.investmentPeriodYears,
+      a.gpCoinvestPct, a.mgmtFeeInvestPct, a.mgmtFeePostPct, a.mgmtFeeWaiver ? 1 : 0,
+      a.prefReturnPct, a.catchupPct,
+      a.tier1SplitLP, a.tier1SplitGP, a.tier2HurdleIRR, a.tier2SplitLP, a.tier2SplitGP,
+      a.tier3HurdleIRR, a.tier3SplitLP, a.tier3SplitGP,
+      a.refiEnabled ? 1 : 0, a.refiYear, a.refiLTV, a.refiRate, a.refiTermYears, a.refiCostPct,
+      a.rentGrowthPct, a.hoaGrowthPct, a.vacancyPct,
+      a.presentDayLandValue,
+      a.landValueTotal, a.landGrowthPct, a.landPSF,
+      a.mmRate, a.excessCashMode, a.buildingValuation,
+      a.bonusIRRThreshold, a.bonusMaxYears, a.bonusYieldThreshold
+    );
+  }
+}
 
 export function getDb(): Database.Database {
   if (!db) {
@@ -223,6 +295,12 @@ export function initDb(): void {
     } catch {
       // Migration already done or no legacy table present
     }
+  }
+
+  try {
+    bootstrapReferenceData(database);
+  } catch (error) {
+    console.error('Reference data bootstrap failed:', error);
   }
 
   console.log('Database schema initialized');
