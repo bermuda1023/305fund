@@ -309,6 +309,33 @@ export function initDb(): void {
     console.error('Reference data bootstrap failed:', error);
   }
 
+  // Normalize consensus/listing fields for older or partially-migrated DBs.
+  // Keeps contracts/dashboard vote metrics stable even when legacy rows contain NULL/invalid values.
+  try {
+    database.exec(`
+      UPDATE building_units
+      SET
+        is_fund_owned = CASE
+          WHEN is_fund_owned IS NULL OR is_fund_owned NOT IN (0, 1) THEN 0
+          ELSE is_fund_owned
+        END,
+        consensus_status = CASE
+          WHEN consensus_status IN ('signed', 'unsigned', 'unknown') THEN consensus_status
+          ELSE 'unknown'
+        END,
+        listing_agreement = CASE
+          WHEN listing_agreement IN ('signed', 'unsigned', 'unknown') THEN listing_agreement
+          ELSE 'unknown'
+        END,
+        resident_type = CASE
+          WHEN resident_type IN ('residential', 'investment') THEN resident_type
+          ELSE resident_type
+        END;
+    `);
+  } catch {
+    // Ignore normalization failures on first boot race/legacy schema edges.
+  }
+
   console.log('Database schema initialized');
 }
 
