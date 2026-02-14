@@ -20,12 +20,35 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+function readStoredUser(): User | null {
+  const stored = localStorage.getItem('user');
+  if (!stored || stored === 'undefined' || stored === 'null') return null;
+  try {
+    const parsed = JSON.parse(stored) as Partial<User>;
+    if (
+      typeof parsed?.id === 'number' &&
+      typeof parsed?.email === 'string' &&
+      (parsed?.role === 'gp' || parsed?.role === 'lp') &&
+      typeof parsed?.name === 'string'
+    ) {
+      return parsed as User;
+    }
+  } catch {
+    // Ignore invalid localStorage payloads from older/corrupt sessions.
+  }
+  localStorage.removeItem('user');
+  return null;
+}
+
+function readStoredToken(): string | null {
+  const stored = localStorage.getItem('token');
+  if (!stored || stored === 'undefined' || stored === 'null') return null;
+  return stored;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(() => {
-    const stored = localStorage.getItem('user');
-    return stored ? JSON.parse(stored) : null;
-  });
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('token'));
+  const [user, setUser] = useState<User | null>(readStoredUser);
+  const [token, setToken] = useState<string | null>(readStoredToken);
 
   const login = async (email: string, password: string, role?: 'gp' | 'lp') => {
     const { data } = await api.post('/auth/login', { email, password, role });
