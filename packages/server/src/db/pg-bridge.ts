@@ -41,6 +41,10 @@ function getConnectionString(): string | null {
   return raw || null;
 }
 
+function allowEmptyReplace(): boolean {
+  return String(process.env.PG_BRIDGE_ALLOW_EMPTY_REPLACE || '').toLowerCase() === '1';
+}
+
 function chunkRows<T>(rows: T[], size: number): T[][] {
   if (rows.length === 0) return [];
   const out: T[][] = [];
@@ -164,6 +168,22 @@ async function syncSqliteToPostgres(database: Database.Database) {
         .prepare(`SELECT ${colList} FROM ${table}`)
         .all() as Record<string, unknown>[];
 
+      // Safety: never let an empty runtime SQLite accidentally wipe a non-empty Postgres table.
+      // This protects production data if the bridge is misconfigured (wrong DB, missing pull, etc.).
+      if (!allowEmptyReplace() && rows.length === 0) {
+        try {
+          const existing = await client.query(`SELECT COUNT(*)::int AS c FROM ${quoteIdent(table)}`);
+          const remoteCount = Number(existing.rows[0]?.c || 0);
+          if (remoteCount > 0) {
+            console.warn(`[pg-bridge] Skipping empty push for ${table}: sqlite_rows=0, postgres_rows=${remoteCount}`);
+            continue;
+          }
+        } catch (error) {
+          console.warn(`[pg-bridge] Failed to check Postgres count for ${table}; skipping empty push as precaution`, error);
+          continue;
+        }
+      }
+
       await client.query('BEGIN');
       try {
         await replacePostgresTableFromRows(client, table, columns, rows);
@@ -204,6 +224,12 @@ async function syncPostgresToSqlite(database: Database.Database) {
         database.exec('BEGIN');
         try {
           const beforeCount = Number((database.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as any)?.c || 0);
+          // Safety: never clear a populated SQLite table when Postgres returns zero rows.
+          // This can happen if DATABASE_URL points at the wrong DB, permissions change,
+          // a transient issue occurs, or a table unexpectedly appears empty.
+          if (!allowEmptyReplace() && result.rows.length === 0 && beforeCount > 0) {
+            throw new Error(`[pg-bridge] Refusing empty replace for ${table}: source_rows=0, previous_rows=${beforeCount}`);
+          }
           database.prepare(`DELETE FROM ${table}`).run();
           if (result.rows.length) {
             const values = columns.map(() => '?').join(', ');

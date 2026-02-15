@@ -131,7 +131,15 @@ app.get('/api/files/:key(*)', requireAuth, async (req, res) => {
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '0.1.0' });
+  res.json({
+    status: 'ok',
+    version: '0.1.0',
+    postgresBridge: {
+      enabled: isPostgresBridgeEnabled(),
+      readPullEnabled: pgBridgeReadPullEnabled,
+      periodicPullEnabled: pgBridgePeriodicPullEnabled,
+    },
+  });
 });
 
 // API Routes
