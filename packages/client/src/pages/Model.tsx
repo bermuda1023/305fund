@@ -476,6 +476,7 @@ interface ChartRow {
   capitalCalls: number;
   deployments: number;
   renovations: number;
+  fundOpex: number;
   mgmtFee: number;
   operatingCashFlow: number;
   netCashFlow: number;
@@ -490,6 +491,7 @@ function toMonthly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
       const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() - 2 + m, 1);
       const label = `${monthDate.toLocaleString('default', { month: 'short' })} ${monthDate.getFullYear()}`;
       const reno = (cf.renovationCost || 0) / 3;
+      const fundOpex = Math.max(0, ((cf.operatingExpense || 0) - (cf.renovationCost || 0)) / 3);
       const mgmtFee = (cf.mgmtFee || 0) / 3;
       const operatingCashFlow = (cf.netOperatingIncome - mgmtFee);
       rows.push({
@@ -498,6 +500,7 @@ function toMonthly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
         capitalCalls: cf.capitalCalls / 3,
         deployments: cf.acquisitionCost / 3,
         renovations: reno,
+        fundOpex,
         mgmtFee,
         operatingCashFlow: operatingCashFlow / 3,
         netCashFlow: cf.netCashFlow / 3,
@@ -544,6 +547,7 @@ function toMonthlyWithRenovationTiming(
   for (const cf of cashFlows) {
     const quarterReno = cf.renovationCost || 0;
     const baseNoiMonthly = (cf.netOperatingIncome + quarterReno) / 3;
+    const baseFundOpexMonthly = Math.max(0, ((cf.operatingExpense || 0) - quarterReno) / 3);
     const baseNetWithoutCap = (cf.netCashFlow + cf.capitalCalls + quarterReno) / 3;
     const baseMgmtMonthly = (cf.mgmtFee || 0) / 3;
     const baseCallMonthly = cf.capitalCalls / 3;
@@ -564,6 +568,7 @@ function toMonthlyWithRenovationTiming(
         capitalCalls: callThisMonth,
         deployments: deploymentThisMonth,
         renovations: renoThisMonth,
+        fundOpex: baseFundOpexMonthly,
         mgmtFee: baseMgmtMonthly,
         operatingCashFlow: noi - baseMgmtMonthly,
         netCashFlow,
@@ -587,6 +592,7 @@ function toQuarterly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
     capitalCalls: cf.capitalCalls,
     deployments: cf.acquisitionCost || 0,
     renovations: cf.renovationCost || 0,
+    fundOpex: Math.max(0, (cf.operatingExpense || 0) - (cf.renovationCost || 0)),
     mgmtFee: cf.mgmtFee || 0,
     operatingCashFlow: cf.netOperatingIncome - (cf.mgmtFee || 0),
     netCashFlow: cf.netCashFlow,
@@ -604,6 +610,7 @@ function toYearly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
       capitalCalls: 0,
       deployments: 0,
       renovations: 0,
+      fundOpex: 0,
       mgmtFee: 0,
       operatingCashFlow: 0,
       netCashFlow: 0,
@@ -614,6 +621,7 @@ function toYearly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
     row.capitalCalls += cf.capitalCalls;
     row.deployments += cf.acquisitionCost || 0;
     row.renovations += cf.renovationCost || 0;
+    row.fundOpex += Math.max(0, (cf.operatingExpense || 0) - (cf.renovationCost || 0));
     row.mgmtFee += cf.mgmtFee || 0;
     row.operatingCashFlow += cf.netOperatingIncome - (cf.mgmtFee || 0);
     row.netCashFlow += cf.netCashFlow;
@@ -1036,10 +1044,13 @@ export default function Model() {
   const queryClient = useQueryClient();
   const [activeScenario, setActiveScenario] = useState<number | null>(null);
   const [period, setPeriod] = useState<Period>('Quarterly');
+  const [zoomStartPct, setZoomStartPct] = useState(0);
+  const [zoomEndPct, setZoomEndPct] = useState(100);
   const [cashViewMode, setCashViewMode] = useState<'overall' | 'operating'>('overall');
   const [includeCapitalCalls, setIncludeCapitalCalls] = useState(true);
   const [includeDeployments, setIncludeDeployments] = useState(true);
   const [includeRenovations, setIncludeRenovations] = useState(true);
+  const [includeFundOpex, setIncludeFundOpex] = useState(true);
   const [includeMgmtFees, setIncludeMgmtFees] = useState(true);
   const [showCumulative, setShowCumulative] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
@@ -1153,21 +1164,6 @@ export default function Model() {
     () => (cashFlows ?? []).reduce((sum, cf) => sum + (cf.mmIncome || 0), 0),
     [cashFlows],
   );
-  const audit = useMemo(() => {
-    if (!cashFlows || cashFlows.length === 0) return null;
-    const exitCF = cashFlows[cashFlows.length - 1];
-    const capitalCalls = cashFlows.reduce((sum, cf) => sum + (cf.capitalCalls || 0), 0);
-    const noi = cashFlows.reduce((sum, cf) => sum + (cf.netOperatingIncome || 0), 0);
-    const renovations = cashFlows.reduce((sum, cf) => sum + (cf.renovationCost || 0), 0);
-    return {
-      capitalCalls,
-      noi,
-      renovations,
-      saleProceeds: exitCF.grossSaleProceeds || 0,
-      mmLiquidation: exitCF.mmLiquidation || 0,
-      debtAtExit: exitCF.debtBalance || 0,
-    };
-  }, [cashFlows]);
 
   const baseChartData = useMemo(() => {
     if (!cashFlows || cashFlows.length === 0) return [];
@@ -1184,8 +1180,9 @@ export default function Model() {
     return baseChartData.map((row) => {
       const renoAdj = includeRenovations ? row.renovations : 0;
       const capCallAdj = includeCapitalCalls ? row.capitalCalls : 0;
+      const fundOpexAdj = includeFundOpex ? row.fundOpex : 0;
       const feeAdj = includeMgmtFees ? row.mgmtFee : 0;
-      const operatingCF = row.noi - feeAdj - renoAdj;
+      const operatingCF = row.noi - feeAdj - renoAdj - fundOpexAdj;
       const netCashFlow = cashViewMode === 'operating' ? operatingCF : operatingCF - capCallAdj;
       cumulative += netCashFlow;
       return {
@@ -1195,7 +1192,17 @@ export default function Model() {
         cumulativeCashFlow: cumulative,
       };
     });
-  }, [baseChartData, includeRenovations, includeCapitalCalls, includeMgmtFees, cashViewMode]);
+  }, [baseChartData, includeRenovations, includeCapitalCalls, includeFundOpex, includeMgmtFees, cashViewMode]);
+
+  const zoomedChartData = useMemo(() => {
+    if (!chartData || chartData.length === 0) return [];
+    if (chartData.length === 1) return chartData;
+
+    const maxIdx = chartData.length - 1;
+    const startIdx = Math.max(0, Math.min(maxIdx, Math.floor((zoomStartPct / 100) * maxIdx)));
+    const endIdx = Math.max(startIdx, Math.min(maxIdx, Math.ceil((zoomEndPct / 100) * maxIdx)));
+    return chartData.slice(startIdx, endIdx + 1);
+  }, [chartData, zoomStartPct, zoomEndPct]);
 
   const tableData = useMemo(() => {
     if (!cashFlows || cashFlows.length === 0) return [];
@@ -1214,7 +1221,7 @@ export default function Model() {
   }, [waterfall]);
 
   const trendData = useMemo(() => {
-    if (!chartData || chartData.length === 0) return [];
+    if (!zoomedChartData || zoomedChartData.length === 0) return [];
     const bucketMap = new Map<string, number>();
 
     const operatingCats = new Set(['rent', 'hoa', 'insurance', 'tax', 'repair', 'management_fee', 'fund_expense']);
@@ -1235,7 +1242,7 @@ export default function Model() {
       bucketMap.set(label, (bucketMap.get(label) || 0) + t.amount);
     }
 
-    return chartData.map((r) => {
+    return zoomedChartData.map((r) => {
       const actual = bucketMap.get(r.label) || 0;
       const projected = r.netCashFlow;
       return {
@@ -1245,7 +1252,7 @@ export default function Model() {
         variance: actual - projected,
       };
     });
-  }, [chartData, actualTxns, period, cashViewMode]);
+  }, [zoomedChartData, actualTxns, period, cashViewMode]);
 
   return (
     <div>
@@ -1450,32 +1457,6 @@ export default function Model() {
             </div>
           </div>
 
-          {audit && (
-            <div className="card mb-4">
-              <div className="card-header">
-                <span className="card-title">Audit Trace</span>
-                <span className="badge badge-gray">Model inputs to outputs</span>
-              </div>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Line Item</th>
-                    <th style={{ textAlign: 'right' }}>Amount</th>
-                    <th style={{ textAlign: 'right' }}>Context</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td>Total Capital Calls</td><td style={{ textAlign: 'right' }}>{fmt(audit.capitalCalls)}</td><td style={{ textAlign: 'right' }}>From projected quarters</td></tr>
-                  <tr><td>Total NOI</td><td style={{ textAlign: 'right' }}>{fmt(audit.noi)}</td><td style={{ textAlign: 'right' }}>Net of operating costs + renovations</td></tr>
-                  <tr><td>Renovation Cash</td><td style={{ textAlign: 'right' }}>{fmt(audit.renovations)}</td><td style={{ textAlign: 'right' }}>{num(renovationEvents.length)} timed events</td></tr>
-                  <tr><td>Gross Sale Proceeds</td><td style={{ textAlign: 'right' }}>{fmt(audit.saleProceeds)}</td><td style={{ textAlign: 'right' }}>Exit quarter</td></tr>
-                  <tr><td>MM Liquidation</td><td style={{ textAlign: 'right' }}>{fmt(audit.mmLiquidation)}</td><td style={{ textAlign: 'right' }}>{result?.assumptions.excessCashMode}</td></tr>
-                  <tr><td>Debt Outstanding at Exit</td><td style={{ textAlign: 'right' }}>{fmt(audit.debtAtExit)}</td><td style={{ textAlign: 'right' }}>Reduces distributable equity</td></tr>
-                </tbody>
-              </table>
-            </div>
-          )}
-
           {liquidityLedger.length > 0 && (
             <div className="card mb-4">
               <div className="card-header">
@@ -1664,6 +1645,10 @@ export default function Model() {
                 Renovations
               </label>
               <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                <input type="checkbox" checked={includeFundOpex} onChange={(e) => setIncludeFundOpex(e.target.checked)} />
+                Fund opex
+              </label>
+              <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                 <input type="checkbox" checked={includeMgmtFees} onChange={(e) => setIncludeMgmtFees(e.target.checked)} />
                 Management fees
               </label>
@@ -1672,9 +1657,56 @@ export default function Model() {
                 Cumulative line
               </label>
             </div>
+            <div style={{ padding: '0 1rem 0.75rem', borderTop: '1px solid var(--border)', marginTop: '-0.25rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Timeline Zoom Window</span>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '0.15rem 0.55rem', fontSize: '0.72rem' }}
+                  onClick={() => { setZoomStartPct(0); setZoomEndPct(100); }}
+                >
+                  Full
+                </button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.35rem' }}>
+                <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Start
+                  <input
+                    type="range"
+                    min={0}
+                    max={99}
+                    value={Math.min(zoomStartPct, zoomEndPct - 1)}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setZoomStartPct(Math.min(next, zoomEndPct - 1));
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </label>
+                <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  End
+                  <input
+                    type="range"
+                    min={1}
+                    max={100}
+                    value={Math.max(zoomEndPct, zoomStartPct + 1)}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setZoomEndPct(Math.max(next, zoomStartPct + 1));
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </label>
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                {zoomedChartData.length > 0
+                  ? `Showing ${zoomedChartData[0].label} \u2192 ${zoomedChartData[zoomedChartData.length - 1].label} (${zoomedChartData.length} points)`
+                  : 'No points in selected window'}
+              </div>
+            </div>
             <div style={{ width: '100%', height: 360 }}>
               <ResponsiveContainer>
-                <AreaChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <AreaChart data={zoomedChartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="gradNOI" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="var(--teal)" stopOpacity={0.5} />
@@ -1704,6 +1736,9 @@ export default function Model() {
                   )}
                   {includeRenovations && (
                     <Area yAxisId="left" type="monotone" dataKey="renovations" name="Renovations" stroke="var(--gold)" strokeWidth={1.5} fillOpacity={0.1} fill="var(--gold)" dot={false} />
+                  )}
+                  {includeFundOpex && (
+                    <Area yAxisId="left" type="monotone" dataKey="fundOpex" name="Fund Opex" stroke="#ff9f43" strokeWidth={1.5} fillOpacity={0.1} fill="#ff9f43" dot={false} />
                   )}
                   {includeMgmtFees && (
                     <Area yAxisId="left" type="monotone" dataKey="mgmtFee" name="Mgmt Fees" stroke="#ff7f50" strokeWidth={1.5} fillOpacity={0.08} fill="#ff7f50" dot={false} />
