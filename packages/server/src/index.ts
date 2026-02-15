@@ -135,6 +135,7 @@ async function start() {
   if (isPostgresBridgeEnabled()) {
     try {
       await hydrateSqliteFromPostgres();
+      console.log('[pg-bridge] Startup pull complete');
     } catch (error) {
       console.error('[pg-bridge] Startup pull failed. Continuing with local SQLite state.', error);
     }
@@ -152,6 +153,15 @@ async function start() {
       console.error('[rent-reminders] sweep failed:', err);
     }
   }, sweepMinutes * 60 * 1000);
+
+  if (isPostgresBridgeEnabled()) {
+    const pullMinutes = Math.max(1, Number(process.env.PG_BRIDGE_PULL_MINUTES || 5));
+    setInterval(() => {
+      void hydrateSqliteFromPostgres().catch((error) => {
+        console.error('[pg-bridge] Periodic pull failed:', error);
+      });
+    }, pullMinutes * 60 * 1000);
+  }
 
   app.listen(PORT, () => {
     console.log(`\n🏗️  305 opportunites fund API running on http://localhost:${PORT}`);

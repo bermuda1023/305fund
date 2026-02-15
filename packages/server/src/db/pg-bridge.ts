@@ -29,6 +29,7 @@ let sqliteProvider: (() => Database.Database) | null = null;
 let debounceTimer: NodeJS.Timeout | null = null;
 let pushInFlight = false;
 let pushQueued = false;
+let pullInFlight = false;
 
 function quoteIdent(value: string) {
   return `"${value.replace(/"/g, '""')}"`;
@@ -132,30 +133,29 @@ async function syncPostgresToSqlite(database: Database.Database) {
     }
 
     database.exec('PRAGMA foreign_keys = OFF');
-    database.exec('BEGIN');
     try {
-      for (const table of [...TABLES_IN_ORDER].reverse()) {
-        database.prepare(`DELETE FROM ${table}`).run();
-      }
-
       for (const table of TABLES_IN_ORDER) {
         const columns = sqliteColumns(database, table);
         if (columns.length === 0) continue;
         const colList = columns.map(quoteIdent).join(', ');
         const result = await client.query(`SELECT ${colList} FROM ${quoteIdent(table)}`);
-        if (!result.rows.length) continue;
 
-        const values = columns.map(() => '?').join(', ');
-        const stmt = database.prepare(`INSERT INTO ${table} (${colList}) VALUES (${values})`);
-        for (const row of result.rows as Record<string, unknown>[]) {
-          stmt.run(...columns.map((col) => row[col] ?? null));
+        database.exec('BEGIN');
+        try {
+          database.prepare(`DELETE FROM ${table}`).run();
+          if (result.rows.length) {
+            const values = columns.map(() => '?').join(', ');
+            const stmt = database.prepare(`INSERT INTO ${table} (${colList}) VALUES (${values})`);
+            for (const row of result.rows as Record<string, unknown>[]) {
+              stmt.run(...columns.map((col) => row[col] ?? null));
+            }
+          }
+          database.exec('COMMIT');
+        } catch (tableError) {
+          database.exec('ROLLBACK');
+          console.error(`[pg-bridge] Pull skipped table "${table}":`, tableError);
         }
       }
-
-      database.exec('COMMIT');
-    } catch (error) {
-      database.exec('ROLLBACK');
-      throw error;
     } finally {
       database.exec('PRAGMA foreign_keys = ON');
     }
@@ -176,14 +176,20 @@ export function configurePostgresBridge(provider: () => Database.Database) {
 
 export async function hydrateSqliteFromPostgres(): Promise<void> {
   if (!isPostgresBridgeEnabled() || !sqliteProvider) return;
-  await syncPostgresToSqlite(sqliteProvider());
-  console.log('[pg-bridge] Startup pull complete');
+  if (pushInFlight || pullInFlight) return;
+  pullInFlight = true;
+  try {
+    await syncPostgresToSqlite(sqliteProvider());
+    console.log('[pg-bridge] Pull complete');
+  } finally {
+    pullInFlight = false;
+  }
 }
 
 async function runPush(reason: string) {
   if (!sqliteProvider || !isPostgresBridgeEnabled()) return;
 
-  if (pushInFlight) {
+  if (pushInFlight || pullInFlight) {
     pushQueued = true;
     return;
   }
