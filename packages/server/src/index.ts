@@ -12,6 +12,12 @@ import path from 'path';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { initDb, getDb } from './db/database';
+import {
+  configurePostgresBridge,
+  hydrateSqliteFromPostgres,
+  isPostgresBridgeEnabled,
+  schedulePostgresPush,
+} from './db/pg-bridge';
 import { requireAuth } from './middleware/auth';
 import { getStorageBackend, readStoredFile } from './lib/storage';
 import { validateRuntimeEnv } from './lib/env';
@@ -61,6 +67,20 @@ app.use(rateLimit({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+// Runtime bridge: keep SQLite runtime in sync with managed Postgres.
+app.use((req, res, next) => {
+  const isMutation = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE';
+  const shouldSkip = req.path === '/api/auth/login';
+  if (isMutation && !shouldSkip) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) {
+        schedulePostgresPush(`${req.method} ${req.path}`);
+      }
+    });
+  }
+  next();
+});
+
 // Serve uploaded files (local backend only)
 const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
 if (getStorageBackend() === 'local') {
@@ -108,26 +128,45 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Initialize DB and start
-initDb();
-
-// Background rent reminder sweep (monthly deduped per tenant)
-const sweepMinutes = Math.max(5, Number(process.env.RENT_REMINDER_SWEEP_MINUTES || 60));
-setInterval(() => {
-  try {
-    const result = runRentReminderSweepCore(getDb());
-    if (result.alerts > 0) {
-      console.log(`[rent-reminders] month=${result.month} alerts=${result.alerts} checked=${result.checked}`);
+async function start() {
+  // Initialize DB runtime
+  initDb();
+  configurePostgresBridge(getDb);
+  if (isPostgresBridgeEnabled()) {
+    try {
+      await hydrateSqliteFromPostgres();
+    } catch (error) {
+      console.error('[pg-bridge] Startup pull failed. Continuing with local SQLite state.', error);
     }
-  } catch (err) {
-    console.error('[rent-reminders] sweep failed:', err);
   }
-}, sweepMinutes * 60 * 1000);
 
-app.listen(PORT, () => {
-  console.log(`\n🏗️  305 opportunites fund API running on http://localhost:${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/api/health`);
-  console.log(`   Environment: ${process.env.NODE_ENV || 'development'}\n`);
+  // Background rent reminder sweep (monthly deduped per tenant)
+  const sweepMinutes = Math.max(5, Number(process.env.RENT_REMINDER_SWEEP_MINUTES || 60));
+  setInterval(() => {
+    try {
+      const result = runRentReminderSweepCore(getDb());
+      if (result.alerts > 0) {
+        console.log(`[rent-reminders] month=${result.month} alerts=${result.alerts} checked=${result.checked}`);
+      }
+    } catch (err) {
+      console.error('[rent-reminders] sweep failed:', err);
+    }
+  }, sweepMinutes * 60 * 1000);
+
+  app.listen(PORT, () => {
+    console.log(`\n🏗️  305 opportunites fund API running on http://localhost:${PORT}`);
+    console.log(`   Health: http://localhost:${PORT}/api/health`);
+    console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+    if (isPostgresBridgeEnabled()) {
+      console.log('   Postgres bridge: enabled');
+    }
+    console.log('');
+  });
+}
+
+start().catch((error) => {
+  console.error('Server startup failed:', error);
+  process.exit(1);
 });
 
 export default app;
