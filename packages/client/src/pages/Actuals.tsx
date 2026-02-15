@@ -2,6 +2,7 @@ import { useState, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
 import { fmtCurrency, fmtNumber } from '../lib/format';
+import { formatNumberInput } from '../lib/numberInput';
 
 /* ── Interfaces ──────────────────────────────────────────────── */
 
@@ -802,7 +803,7 @@ export default function Actuals() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Amount</label>
-                  <input className="form-input" type="number" step="0.01" value={receiptForm.amount} onChange={(e) => setReceiptForm((p) => ({ ...p, amount: e.target.value }))} required />
+                  <input className="form-input" type="text" inputMode="decimal" value={formatNumberInput(receiptForm.amount, { maxFractionDigits: 2 })} onChange={(e) => setReceiptForm((p) => ({ ...p, amount: e.target.value.replace(/,/g, '') }))} required />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Category</label>
@@ -878,11 +879,12 @@ export default function Actuals() {
                 <label className="form-label">Amount</label>
                 <input
                   className="form-input"
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   step="0.01"
                   placeholder="e.g. 2800 or -1369"
-                  value={form.amount}
-                  onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                  value={formatNumberInput(form.amount, { maxFractionDigits: 2 })}
+                  onChange={(e) => setForm({ ...form, amount: e.target.value.replace(/,/g, '') })}
                   required
                 />
               </div>

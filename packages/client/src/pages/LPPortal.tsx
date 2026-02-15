@@ -4,6 +4,7 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtCurrency, fmtNumber } from '../lib/format';
+import { formatNumberInput } from '../lib/numberInput';
 import DocumentUpload from '../components/DocumentUpload';
 
 interface LPAccount {
@@ -250,11 +251,12 @@ function GPInvestorSection() {
                 <label className="form-label">Commitment ($) *</label>
                 <input
                   className="form-input"
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
                   required
                   min="0"
-                  value={onboardForm.commitment}
-                  onChange={(e) => setOnboardForm({ ...onboardForm, commitment: e.target.value })}
+                  value={formatNumberInput(onboardForm.commitment)}
+                  onChange={(e) => setOnboardForm({ ...onboardForm, commitment: e.target.value.replace(/,/g, '') })}
                 />
               </div>
               <div className="form-group">
@@ -511,11 +513,12 @@ function GPCapitalCallSection() {
               <label className="form-label">Total Amount ($) *</label>
               <input
                 className="form-input"
-                type="number"
+                type="text"
+                inputMode="numeric"
                 required
                 min="0"
-                value={createForm.totalAmount}
-                onChange={(e) => setCreateForm({ ...createForm, totalAmount: e.target.value })}
+                value={formatNumberInput(createForm.totalAmount)}
+                onChange={(e) => setCreateForm({ ...createForm, totalAmount: e.target.value.replace(/,/g, '') })}
               />
             </div>
             <div className="form-group">

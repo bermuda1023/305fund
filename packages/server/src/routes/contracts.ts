@@ -135,8 +135,23 @@ router.get('/progress', (req: Request, res: Response) => {
       COUNT(*) as total,
       SUM(CASE WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'signed' THEN 1 ELSE 0 END) as signed_consensus,
       SUM(CASE WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'signed' THEN 1 ELSE 0 END) as signed_listing,
-      SUM(CASE WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned' THEN 1 ELSE 0 END) as no_votes,
-      SUM(CASE WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unknown' THEN 1 ELSE 0 END) as abstain,
+      -- Explicit "no" = consensus not signed after listing agreement is signed.
+      -- Treat unsigned+unsigned as pending/no-response, not a hard objection.
+      SUM(CASE
+        WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned'
+         AND (CASE WHEN is_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'signed'
+        THEN 1 ELSE 0 END
+      ) as no_votes,
+      SUM(CASE
+        WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned'
+         AND (CASE WHEN is_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unsigned'
+        THEN 1 ELSE 0 END
+      ) as pending,
+      SUM(CASE
+        WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unknown'
+         AND (CASE WHEN is_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unknown'
+        THEN 1 ELSE 0 END
+      ) as abstain,
       SUM(CASE
         WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned'
           OR (CASE WHEN is_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unsigned'
@@ -170,8 +185,14 @@ router.get('/progress', (req: Request, res: Response) => {
       ), 0) as yes_ownership,
       COALESCE(SUM(CASE
         WHEN (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'unsigned'
+         AND (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'signed'
         THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END
       ), 0) as no_ownership,
+      COALESCE(SUM(CASE
+        WHEN (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'unsigned'
+         AND (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'unsigned'
+        THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END
+      ), 0) as pending_ownership,
       COALESCE(SUM(CASE WHEN bu.is_owned = 1 THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END), 0) as fund_ownership
     FROM normalized_units bu
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
@@ -182,11 +203,13 @@ router.get('/progress', (req: Request, res: Response) => {
   const signedConsensus = stats.signed_consensus || 0;
   const signedListing = stats.signed_listing || 0;
   const noVotes = stats.no_votes || 0;
+  const pending = stats.pending || 0;
   const abstain = stats.abstain || 0;
 
   const consensusPct = total > 0 ? signedConsensus / total * 100 : 0;
   const listingPct = total > 0 ? signedListing / total * 100 : 0;
   const noVotePct = total > 0 ? noVotes / total * 100 : 0;
+  const pendingPct = total > 0 ? pending / total * 100 : 0;
   const abstainPct = total > 0 ? abstain / total * 100 : 0;
 
   // 5% no votes blocks the deal even if 80% yes
@@ -207,12 +230,15 @@ router.get('/progress', (req: Request, res: Response) => {
     // New voting logic fields
     noVotes,
     noVotePct,
+    pending,
+    pendingPct,
     isBlocked,
     abstain,
     abstainPct,
     canPass,
     // Ownership-weighted percentages
     noVoteOwnershipPct: weighted.no_ownership || 0,
+    pendingOwnershipPct: weighted.pending_ownership || 0,
     yesVoteOwnershipPct: weighted.yes_ownership || 0,
     fundOwnedUnits: stats.fund_owned || 0,
     fundOwnershipPct: weighted.fund_ownership || 0,

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
 import { fmtCurrency, fmtNumber } from '../lib/format';
+import { formatNumberInput, parseNumberInput } from '../lib/numberInput';
 
 /* ---------- GET /api/listings row (snake_case from SQLite) ---------- */
 interface Listing {
@@ -171,9 +172,10 @@ export default function Listings() {
                 <label className="form-label">Asking Price</label>
                 <input
                   className="form-input"
-                  type="number"
-                  value={form.askingPrice}
-                  onChange={(e) => setForm({ ...form, askingPrice: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(form.askingPrice)}
+                  onChange={(e) => setForm({ ...form, askingPrice: parseNumberInput(e.target.value) })}
                   required
                 />
               </div>
@@ -240,9 +242,10 @@ export default function Listings() {
                     <label className="form-label">Asking Price</label>
                     <input
                       className="form-input"
-                      type="number"
-                      value={editForm.askingPrice}
-                      onChange={(e) => setEditForm({ ...editForm, askingPrice: Number(e.target.value) })}
+                      type="text"
+                      inputMode="numeric"
+                      value={formatNumberInput(editForm.askingPrice)}
+                      onChange={(e) => setEditForm({ ...editForm, askingPrice: parseNumberInput(e.target.value) })}
                       required
                     />
                   </div>

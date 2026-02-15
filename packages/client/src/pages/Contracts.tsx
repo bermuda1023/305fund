@@ -39,11 +39,14 @@ interface VoteProgress {
   remainingToReach80: number;
   noVotes: number;
   noVotePct: number;
+  pending: number;
+  pendingPct: number;
   isBlocked: boolean;
   abstain: number;
   abstainPct: number;
   canPass: boolean;
   noVoteOwnershipPct: number;
+  pendingOwnershipPct: number;
   yesVoteOwnershipPct: number;
   fundOwnedUnits: number;
   fundOwnershipPct: number;
@@ -200,7 +203,7 @@ export default function Contracts() {
         >
           <span style={{ fontSize: '1.25rem' }}>&#9888;</span>
           <span style={{ color: '#ef4444', fontWeight: 600 }}>
-            BLOCKED &mdash; {(progress.noVotePct).toFixed(1)}% of units voted NO (5% threshold exceeded)
+            BLOCKED &mdash; {(progress.noVotePct).toFixed(1)}% explicit NO votes (5% threshold exceeded)
           </span>
         </div>
       )}
@@ -277,7 +280,7 @@ export default function Contracts() {
         {/* No-vote danger bar */}
         <div style={{ marginBottom: '0.25rem' }}>
           <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginBottom: 4 }}>
-            No Votes: {(progress?.noVotePct ?? 0).toFixed(1)}% (unit count) | {(progress?.noVoteOwnershipPct ?? 0).toFixed(2)}% (ownership weighted)
+            Explicit No Votes: {(progress?.noVotePct ?? 0).toFixed(1)}% (unit count) | {(progress?.noVoteOwnershipPct ?? 0).toFixed(2)}% (ownership weighted)
           </div>
           <div style={{ background: 'var(--bg-tertiary)', borderRadius: 8, height: 16, overflow: 'hidden', position: 'relative' }}>
             <div
@@ -323,7 +326,7 @@ export default function Contracts() {
             borderColor: (progress?.noVotePct ?? 0) >= 5 ? 'rgba(239, 68, 68, 0.4)' : undefined,
             background: (progress?.noVotePct ?? 0) >= 5 ? 'rgba(239, 68, 68, 0.08)' : undefined,
           }}>
-            <div className="metric-label">No Votes</div>
+            <div className="metric-label">Explicit No Votes</div>
             <div className="metric-value red">{num(progress?.noVotes ?? 0)}</div>
             <div style={{ fontSize: '0.65rem', color: (progress?.noVotePct ?? 0) >= 5 ? '#ef4444' : 'var(--text-dim)' }}>
               {(progress?.noVotePct ?? 0).toFixed(1)}% units | {(progress?.noVoteOwnershipPct ?? 0).toFixed(2)}% ownership
@@ -331,10 +334,10 @@ export default function Contracts() {
             </div>
           </div>
           <div className="metric-card">
-            <div className="metric-label">Abstained / No Reply</div>
-            <div className="metric-value">{num(progress?.abstain ?? 0)}</div>
+            <div className="metric-label">Pending / No Reply</div>
+            <div className="metric-value">{num((progress?.pending ?? 0) + (progress?.abstain ?? 0))}</div>
             <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)' }}>
-              {(progress?.abstainPct ?? 0).toFixed(1)}% of units
+              {((progress?.pendingPct ?? 0) + (progress?.abstainPct ?? 0)).toFixed(1)}% of units
             </div>
           </div>
           <div className="metric-card">

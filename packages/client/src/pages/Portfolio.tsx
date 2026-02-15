@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
 import DocumentUpload from '../components/DocumentUpload';
 import { fmtCurrency, fmtPctRaw, fmtNumber } from '../lib/format';
+import { formatNumberInput, parseNumberInput } from '../lib/numberInput';
 
 /* ── Interfaces ──────────────────────────────────────────────── */
 
@@ -535,9 +536,10 @@ export default function Portfolio() {
                 <label style={labelStyle}>Purchase Price</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={form.purchasePrice}
-                  onChange={(e) => handlePriceChange(Number(e.target.value))}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(form.purchasePrice)}
+                  onChange={(e) => handlePriceChange(parseNumberInput(e.target.value))}
                   required
                 />
               </div>
@@ -545,27 +547,30 @@ export default function Portfolio() {
                 <label style={labelStyle}>Closing Costs</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={form.closingCosts}
-                  onChange={(e) => setForm({ ...form, closingCosts: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(form.closingCosts)}
+                  onChange={(e) => setForm({ ...form, closingCosts: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
                 <label style={labelStyle}>Transfer Tax</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={form.transferTax}
-                  onChange={(e) => setForm({ ...form, transferTax: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(form.transferTax)}
+                  onChange={(e) => setForm({ ...form, transferTax: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
                 <label style={labelStyle}>Inspection Cost</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={form.inspectionCost}
-                  onChange={(e) => setForm({ ...form, inspectionCost: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(form.inspectionCost)}
+                  onChange={(e) => setForm({ ...form, inspectionCost: parseNumberInput(e.target.value) })}
                 />
               </div>
             </div>
@@ -576,27 +581,30 @@ export default function Portfolio() {
                 <label style={labelStyle}>Monthly Rent</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={form.monthlyRent}
-                  onChange={(e) => setForm({ ...form, monthlyRent: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(form.monthlyRent)}
+                  onChange={(e) => setForm({ ...form, monthlyRent: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
                 <label style={labelStyle}>Annual Insurance (one payment)</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={form.monthlyInsurance}
-                  onChange={(e) => setForm({ ...form, monthlyInsurance: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(form.monthlyInsurance)}
+                  onChange={(e) => setForm({ ...form, monthlyInsurance: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
                 <label style={labelStyle}>Annual Property Tax (one payment)</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={form.monthlyTax}
-                  onChange={(e) => setForm({ ...form, monthlyTax: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(form.monthlyTax)}
+                  onChange={(e) => setForm({ ...form, monthlyTax: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
@@ -931,36 +939,40 @@ function DetailsTab({ unit, entities, onDeleted }: { unit: PortfolioUnit; entiti
                 <label style={labelStyle}>Monthly Rent</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={editForm.monthlyRent}
-                  onChange={(e) => setEditForm({ ...editForm, monthlyRent: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(editForm.monthlyRent)}
+                  onChange={(e) => setEditForm({ ...editForm, monthlyRent: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
                 <label style={labelStyle}>Monthly HOA</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={editForm.monthlyHOA}
-                  onChange={(e) => setEditForm({ ...editForm, monthlyHOA: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(editForm.monthlyHOA)}
+                  onChange={(e) => setEditForm({ ...editForm, monthlyHOA: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
                 <label style={labelStyle}>Annual Insurance (one payment)</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={editForm.monthlyInsurance}
-                  onChange={(e) => setEditForm({ ...editForm, monthlyInsurance: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(editForm.monthlyInsurance)}
+                  onChange={(e) => setEditForm({ ...editForm, monthlyInsurance: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
                 <label style={labelStyle}>Annual Property Tax (one payment)</label>
                 <input
                   style={inputStyle}
-                  type="number"
-                  value={editForm.monthlyTax}
-                  onChange={(e) => setEditForm({ ...editForm, monthlyTax: Number(e.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={formatNumberInput(editForm.monthlyTax)}
+                  onChange={(e) => setEditForm({ ...editForm, monthlyTax: parseNumberInput(e.target.value) })}
                 />
               </div>
               <div style={formGroupStyle}>
@@ -1353,11 +1365,11 @@ function TenantsTab({ unitId }: { unitId: number }) {
             </div>
             <div style={formGroupStyle}>
               <label style={labelStyle}>Monthly Rent</label>
-              <input style={inputStyle} type="number" value={tenantForm.monthlyRent} onChange={(e) => setTenantForm({ ...tenantForm, monthlyRent: Number(e.target.value) })} />
+              <input style={inputStyle} type="text" inputMode="numeric" value={formatNumberInput(tenantForm.monthlyRent)} onChange={(e) => setTenantForm({ ...tenantForm, monthlyRent: parseNumberInput(e.target.value) })} />
             </div>
             <div style={formGroupStyle}>
               <label style={labelStyle}>Security Deposit</label>
-              <input style={inputStyle} type="number" value={tenantForm.securityDeposit} onChange={(e) => setTenantForm({ ...tenantForm, securityDeposit: Number(e.target.value) })} />
+              <input style={inputStyle} type="text" inputMode="numeric" value={formatNumberInput(tenantForm.securityDeposit)} onChange={(e) => setTenantForm({ ...tenantForm, securityDeposit: parseNumberInput(e.target.value) })} />
             </div>
           </div>
           <div style={formGroupStyle}>
@@ -1418,11 +1430,11 @@ function TenantsTab({ unitId }: { unitId: number }) {
                 </div>
                 <div style={formGroupStyle}>
                   <label style={labelStyle}>Monthly Rent</label>
-                  <input style={inputStyle} type="number" value={editTenantForm.monthlyRent} onChange={(e) => setEditTenantForm({ ...editTenantForm, monthlyRent: Number(e.target.value) })} />
+                  <input style={inputStyle} type="text" inputMode="numeric" value={formatNumberInput(editTenantForm.monthlyRent)} onChange={(e) => setEditTenantForm({ ...editTenantForm, monthlyRent: parseNumberInput(e.target.value) })} />
                 </div>
                 <div style={formGroupStyle}>
                   <label style={labelStyle}>Security Deposit</label>
-                  <input style={inputStyle} type="number" value={editTenantForm.securityDeposit} onChange={(e) => setEditTenantForm({ ...editTenantForm, securityDeposit: Number(e.target.value) })} />
+                  <input style={inputStyle} type="text" inputMode="numeric" value={formatNumberInput(editTenantForm.securityDeposit)} onChange={(e) => setEditTenantForm({ ...editTenantForm, securityDeposit: parseNumberInput(e.target.value) })} />
                 </div>
               </div>
               <div style={formGroupStyle}>
@@ -1747,7 +1759,7 @@ function RenovationsTab({ unitId }: { unitId: number }) {
             </div>
             <div style={formGroupStyle}>
               <label style={labelStyle}>Estimated Cost</label>
-              <input style={inputStyle} type="number" value={renoForm.estimatedCost} onChange={(e) => setRenoForm({ ...renoForm, estimatedCost: Number(e.target.value) })} />
+              <input style={inputStyle} type="text" inputMode="numeric" value={formatNumberInput(renoForm.estimatedCost)} onChange={(e) => setRenoForm({ ...renoForm, estimatedCost: parseNumberInput(e.target.value) })} />
             </div>
             <div style={formGroupStyle}>
               <label style={labelStyle}>Expense Source</label>
@@ -1825,11 +1837,11 @@ function RenovationsTab({ unitId }: { unitId: number }) {
               <div style={formRowStyle}>
                 <div style={formGroupStyle}>
                   <label style={labelStyle}>Estimated Cost</label>
-                  <input style={inputStyle} type="number" value={editRenoForm.estimatedCost} onChange={(e) => setEditRenoForm({ ...editRenoForm, estimatedCost: Number(e.target.value) })} />
+                  <input style={inputStyle} type="text" inputMode="numeric" value={formatNumberInput(editRenoForm.estimatedCost)} onChange={(e) => setEditRenoForm({ ...editRenoForm, estimatedCost: parseNumberInput(e.target.value) })} />
                 </div>
                 <div style={formGroupStyle}>
                   <label style={labelStyle}>Actual Cost</label>
-                  <input style={inputStyle} type="number" value={editRenoForm.actualCost} onChange={(e) => setEditRenoForm({ ...editRenoForm, actualCost: Number(e.target.value) })} />
+                  <input style={inputStyle} type="text" inputMode="numeric" value={formatNumberInput(editRenoForm.actualCost ?? 0)} onChange={(e) => setEditRenoForm({ ...editRenoForm, actualCost: parseNumberInput(e.target.value) })} />
                 </div>
                 <div style={formGroupStyle}>
                   <label style={labelStyle}>Expense Source</label>
