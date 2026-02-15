@@ -468,7 +468,7 @@ router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res:
 
 // ---- GP-Only: Capital Calls ----
 
-// GET /api/lp/capital-call-items/open - Open call items for reconciliation in Actuals (GP)
+// GET /api/lp/capital-call-items/open - Call items for reconciliation in Actuals (GP)
 router.get('/capital-call-items/open', requireAuth, requireGP, (req: Request, res: Response) => {
   const db = getDb();
   const lpAccountId = req.query.lpAccountId ? Number(req.query.lpAccountId) : null;
@@ -490,7 +490,7 @@ router.get('/capital-call-items/open', requireAuth, requireGP, (req: Request, re
     FROM capital_call_items cci
     JOIN capital_calls cc ON cc.id = cci.capital_call_id
     JOIN lp_accounts lpa ON lpa.id = cci.lp_account_id
-    WHERE cc.status IN ('draft', 'sent', 'partially_received')
+    WHERE cc.status IN ('draft', 'sent', 'partially_received', 'completed')
   `;
   const params: any[] = [];
   if (lpAccountId) {
