@@ -170,6 +170,20 @@ export default function Contracts() {
         <p style={{ color: 'var(--text-muted)' }}>Track building-wide consensus and listing agreement progress</p>
       </div>
 
+      <div className="card mb-4">
+        <div className="card-header">
+          <span className="card-title">Florida Condo Termination Vote (Plain English)</span>
+        </div>
+        <div style={{ padding: '0.9rem 1rem', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: 1.55 }}>
+          <div>To pass, you generally need <strong>80% yes</strong> of total voting interests.</div>
+          <div>If <strong>5% or more vote no</strong>, the plan is blocked.</div>
+          <div>That means up to about <strong>15%</strong> can be no-response/abstain, as long as yes is at least 80% and no stays below 5%.</div>
+          <div style={{ marginTop: '0.45rem', color: 'var(--text-dim)', fontSize: '0.78rem' }}>
+            Reference: Fla. Stat. 718.117 (optional termination summary; not legal advice).
+          </div>
+        </div>
+      </div>
+
       {/* Vote Status Banner */}
       {progress?.isBlocked && (
         <div

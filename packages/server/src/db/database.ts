@@ -34,21 +34,18 @@ function bootstrapReferenceData(database: Database.Database): void {
     INSERT OR IGNORE INTO building_units (floor, unit_letter, unit_number, unit_type_id)
     VALUES (?, ?, ?, ?)
   `);
-  const updateBuildingUnit = database.prepare(`
-    UPDATE building_units
-    SET floor = ?, unit_letter = ?, unit_type_id = ?
-    WHERE unit_number = ?
-  `);
-  const buildingUnits = generateBuildingUnits();
-  for (const bu of buildingUnits) {
-    let typeId = unitTypeMap.get(bu.unitLetter);
-    if (!typeId) {
-      const letter = bu.unitLetter.replace(/^\d+/, '');
-      typeId = unitTypeMap.get(letter);
+  const existingBuildingUnits = Number((database.prepare('SELECT COUNT(*) as c FROM building_units').get() as any)?.c || 0);
+  if (existingBuildingUnits === 0) {
+    const buildingUnits = generateBuildingUnits();
+    for (const bu of buildingUnits) {
+      let typeId = unitTypeMap.get(bu.unitLetter);
+      if (!typeId) {
+        const letter = bu.unitLetter.replace(/^\d+/, '');
+        typeId = unitTypeMap.get(letter);
+      }
+      if (!typeId) continue;
+      insertBuildingUnit.run(bu.floor, bu.unitLetter, bu.unitNumber, typeId);
     }
-    if (!typeId) continue;
-    insertBuildingUnit.run(bu.floor, bu.unitLetter, bu.unitNumber, typeId);
-    updateBuildingUnit.run(bu.floor, bu.unitLetter, typeId, bu.unitNumber);
   }
 
   const assumptionsCount = Number((database.prepare('SELECT COUNT(*) as c FROM fund_assumptions').get() as any)?.c || 0);
