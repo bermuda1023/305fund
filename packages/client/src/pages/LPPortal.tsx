@@ -447,12 +447,18 @@ function GPCapitalCallSection() {
   const sendCallMutation = useMutation({
     mutationFn: (callId: number) =>
       api.post(`/lp/capital-calls/${callId}/send`, { bccMode: sendAsBcc }).then((r) => r.data),
-    onSuccess: () => {
+    onSuccess: (result: { sentCount?: number; failedCount?: number; message?: string }) => {
       queryClient.invalidateQueries({ queryKey: ['gp-capital-calls-all'] });
       queryClient.invalidateQueries({ queryKey: ['gp-capital-call-items', expandedCallId] });
       queryClient.invalidateQueries({ queryKey: ['lp-capital-calls'] });
       queryClient.invalidateQueries({ queryKey: ['gp-investors'] });
       queryClient.invalidateQueries({ queryKey: ['lp-account'] });
+      window.alert(
+        `Capital call send complete.\nSent: ${result?.sentCount ?? 0}\nFailed: ${result?.failedCount ?? 0}`
+      );
+    },
+    onError: (err: any) => {
+      window.alert(err?.response?.data?.error || 'Failed to send capital call emails.');
     },
   });
 

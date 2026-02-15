@@ -665,9 +665,9 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
     const subject = renderMergeTemplate(baseSubject, mergeVars);
     const body = renderMergeTemplate(baseBody, mergeVars);
 
-    // Default behavior keeps investor addresses hidden using BCC mode.
-    const toAddress = bccMode ? fromEmail : item.investor_email.trim();
-    const bcc = bccMode ? [item.investor_email.trim()] : undefined;
+    // Send directly to each LP for reliability. Optional BCC sends a copy to fund inbox.
+    const toAddress = item.investor_email.trim();
+    const bcc = bccMode ? [fromEmail] : undefined;
 
     const ok = await sendTransactionalEmail({
       to: toAddress,
