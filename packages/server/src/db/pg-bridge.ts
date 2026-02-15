@@ -203,6 +203,7 @@ async function syncPostgresToSqlite(database: Database.Database) {
 
         database.exec('BEGIN');
         try {
+          const beforeCount = Number((database.prepare(`SELECT COUNT(*) as c FROM ${table}`).get() as any)?.c || 0);
           database.prepare(`DELETE FROM ${table}`).run();
           if (result.rows.length) {
             const values = columns.map(() => '?').join(', ');
@@ -237,6 +238,13 @@ async function syncPostgresToSqlite(database: Database.Database) {
             }
             if (skipped > 0) {
               console.warn(`[pg-bridge] Pull partially loaded ${table}: inserted=${inserted}, skipped=${skipped}`);
+            }
+            // Safety: never commit a destructive empty-table replacement when source had rows.
+            // If all rows failed to insert, rollback so previously loaded runtime data remains available.
+            if (inserted === 0 && result.rows.length > 0) {
+              throw new Error(
+                `[pg-bridge] Refusing to clear ${table}: source_rows=${result.rows.length}, inserted=0, previous_rows=${beforeCount}`
+              );
             }
           }
           database.exec('COMMIT');

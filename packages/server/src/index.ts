@@ -39,6 +39,8 @@ import documentsRoutes from './routes/documents';
 const app = express();
 const PORT = process.env.PORT || 3001;
 const isProduction = (process.env.NODE_ENV || 'development') === 'production';
+const pgBridgeReadPullEnabled = String(process.env.PG_BRIDGE_READ_PULL || '').toLowerCase() === '1';
+const pgBridgePeriodicPullEnabled = String(process.env.PG_BRIDGE_PERIODIC_PULL || '').toLowerCase() === '1';
 
 validateRuntimeEnv();
 
@@ -68,8 +70,13 @@ app.use(rateLimit({
 }));
 app.use(express.json({ limit: '10mb' }));
 
-// Keep key read-heavy views fresh from Postgres with a short staleness window.
+// Optional read-refresh from Postgres. Disabled by default to avoid clobbering
+// runtime state when upstream data quality/mapping issues exist.
 app.use(async (req, res, next) => {
+  if (!pgBridgeReadPullEnabled) {
+    next();
+    return;
+  }
   const isFreshReadPath = req.method === 'GET'
     && (req.path.startsWith('/api/portfolio') || req.path.startsWith('/api/contracts'));
   if (!isFreshReadPath || !isPostgresBridgeEnabled()) {
@@ -171,7 +178,7 @@ async function start() {
     }
   }, sweepMinutes * 60 * 1000);
 
-  if (isPostgresBridgeEnabled()) {
+  if (isPostgresBridgeEnabled() && pgBridgePeriodicPullEnabled) {
     const pullMinutes = Math.max(1, Number(process.env.PG_BRIDGE_PULL_MINUTES || 5));
     setInterval(() => {
       void hydrateSqliteFromPostgres().catch((error) => {
@@ -186,6 +193,8 @@ async function start() {
     console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
     if (isPostgresBridgeEnabled()) {
       console.log('   Postgres bridge: enabled');
+      console.log(`   Postgres read-pull: ${pgBridgeReadPullEnabled ? 'enabled' : 'disabled'}`);
+      console.log(`   Postgres periodic pull: ${pgBridgePeriodicPullEnabled ? 'enabled' : 'disabled'}`);
     }
     console.log('');
   });
