@@ -53,6 +53,18 @@ function sqliteColumns(database: Database.Database, table: string): string[] {
   return cols.map((c) => c.name);
 }
 
+function toSqliteBindable(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number' || typeof value === 'string' || typeof value === 'bigint') return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
 async function replacePostgresTableFromRows(
   client: Client,
   table: string,
@@ -184,7 +196,7 @@ async function syncPostgresToSqlite(database: Database.Database) {
             const values = columns.map(() => '?').join(', ');
             const stmt = database.prepare(`INSERT INTO ${table} (${colList}) VALUES (${values})`);
             for (const row of result.rows as Record<string, unknown>[]) {
-              stmt.run(...columns.map((col) => row[col] ?? null));
+              stmt.run(...columns.map((col) => toSqliteBindable(row[col])));
             }
           }
           database.exec('COMMIT');
