@@ -67,8 +67,6 @@ export default function Contracts() {
   const [filter, setFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [selectedUnitId, setSelectedUnitId] = useState<number | null>(null);
-  const [masterListFile, setMasterListFile] = useState<File | null>(null);
-  const [importResult, setImportResult] = useState<string>('');
   const [detailForm, setDetailForm] = useState({
     residentName: '',
     residentType: '',
@@ -130,27 +128,6 @@ export default function Contracts() {
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
       queryClient.invalidateQueries({ queryKey: ['contracts-flagged'] });
       queryClient.invalidateQueries({ queryKey: ['listings'] });
-    },
-  });
-
-  const importMasterList = useMutation({
-    mutationFn: async (file: File) => {
-      const form = new FormData();
-      form.append('file', file);
-      const { data } = await api.post('/contracts/import-master-list', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      return data as { totalRows: number; matched: number; skipped: number };
-    },
-    onSuccess: (data) => {
-      setImportResult(`Imported ${data.matched}/${data.totalRows} rows (${data.skipped} unmatched).`);
-      queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      queryClient.invalidateQueries({ queryKey: ['contracts-progress'] });
-      queryClient.invalidateQueries({ queryKey: ['contracts-flagged'] });
-      setMasterListFile(null);
-    },
-    onError: (error: any) => {
-      setImportResult(error?.response?.data?.error || 'Import failed');
     },
   });
 
@@ -366,38 +343,6 @@ export default function Contracts() {
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="card mb-4">
-        <div className="card-header">
-          <span className="card-title">Import Voting & Contact Master List</span>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
-          <input
-            type="file"
-            accept=".xlsx"
-            onChange={(e) => {
-              const file = e.target.files?.[0] ?? null;
-              setMasterListFile(file);
-              setImportResult('');
-            }}
-          />
-          <button
-            className="btn btn-secondary"
-            disabled={!masterListFile || importMasterList.isPending}
-            onClick={() => {
-              if (masterListFile) importMasterList.mutate(masterListFile);
-            }}
-          >
-            {importMasterList.isPending ? 'Importing...' : 'Import .xlsx'}
-          </button>
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-            Use the BTH master sheet with unit data in column D.
-          </span>
-        </div>
-        {importResult && (
-          <div style={{ marginTop: '0.75rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{importResult}</div>
-        )}
       </div>
 
       {/* Building Grid */}

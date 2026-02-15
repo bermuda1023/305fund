@@ -473,6 +473,15 @@ type Period = 'Monthly' | 'Quarterly' | 'Yearly';
 interface ChartRow {
   label: string;
   noi: number;
+  rentIn: number;
+  hoaOut: number;
+  insuranceOut: number;
+  taxOut: number;
+  fundOpexOut: number;
+  renovationsOut: number;
+  mgmtFeeOut: number;
+  debtCostOut: number;
+  mmIncomeIn: number;
   capitalCalls: number;
   deployments: number;
   renovations: number;
@@ -493,16 +502,34 @@ function toMonthly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
       const reno = (cf.renovationCost || 0) / 3;
       const fundOpex = Math.max(0, ((cf.operatingExpense || 0) - (cf.renovationCost || 0)) / 3);
       const mgmtFee = (cf.mgmtFee || 0) / 3;
-      const operatingCashFlow = (cf.netOperatingIncome - mgmtFee);
+      const rentIn = cf.netRent / 3;
+      const hoaOut = -(cf.hoaExpense / 3);
+      const insuranceOut = -((cf.insuranceExpense || 0) / 3);
+      const taxOut = -((cf.taxExpense || 0) / 3);
+      const fundOpexOut = -fundOpex;
+      const renovationsOut = -reno;
+      const mgmtFeeOut = -mgmtFee;
+      const debtCostOut = -((cf.interestExpense || 0) / 3);
+      const mmIncomeIn = (cf.mmIncome || 0) / 3;
+      const operatingCashFlow = rentIn + hoaOut + insuranceOut + taxOut + fundOpexOut + renovationsOut + mgmtFeeOut + debtCostOut + mmIncomeIn;
       rows.push({
         label,
         noi: cf.netOperatingIncome / 3,
+        rentIn,
+        hoaOut,
+        insuranceOut,
+        taxOut,
+        fundOpexOut,
+        renovationsOut,
+        mgmtFeeOut,
+        debtCostOut,
+        mmIncomeIn,
         capitalCalls: cf.capitalCalls / 3,
         deployments: cf.acquisitionCost / 3,
         renovations: reno,
         fundOpex,
         mgmtFee,
-        operatingCashFlow: operatingCashFlow / 3,
+        operatingCashFlow,
         netCashFlow: cf.netCashFlow / 3,
         cumulativeCashFlow: 0,
       });
@@ -550,6 +577,8 @@ function toMonthlyWithRenovationTiming(
     const baseFundOpexMonthly = Math.max(0, ((cf.operatingExpense || 0) - quarterReno) / 3);
     const baseNetWithoutCap = (cf.netCashFlow + cf.capitalCalls + quarterReno) / 3;
     const baseMgmtMonthly = (cf.mgmtFee || 0) / 3;
+    const baseDebtCostMonthly = (cf.interestExpense || 0) / 3;
+    const baseMmIncomeMonthly = (cf.mmIncome || 0) / 3;
     const baseCallMonthly = cf.capitalCalls / 3;
 
     for (let m = 0; m < 3; m++) {
@@ -562,15 +591,34 @@ function toMonthlyWithRenovationTiming(
       const deploymentThisMonth = deployByMonth.get(key) || 0;
       const noi = baseNoiMonthly - renoThisMonth;
       const netCashFlow = baseNetWithoutCap - renoThisMonth - callThisMonth;
+      const rentIn = cf.netRent / 3;
+      const hoaOut = -(cf.hoaExpense / 3);
+      const insuranceOut = -((cf.insuranceExpense || 0) / 3);
+      const taxOut = -((cf.taxExpense || 0) / 3);
+      const fundOpexOut = -baseFundOpexMonthly;
+      const renovationsOut = -renoThisMonth;
+      const mgmtFeeOut = -baseMgmtMonthly;
+      const debtCostOut = -baseDebtCostMonthly;
+      const mmIncomeIn = baseMmIncomeMonthly;
+      const operatingCashFlow = rentIn + hoaOut + insuranceOut + taxOut + fundOpexOut + renovationsOut + mgmtFeeOut + debtCostOut + mmIncomeIn;
       rows.push({
         label,
         noi,
+        rentIn,
+        hoaOut,
+        insuranceOut,
+        taxOut,
+        fundOpexOut,
+        renovationsOut,
+        mgmtFeeOut,
+        debtCostOut,
+        mmIncomeIn,
         capitalCalls: callThisMonth,
         deployments: deploymentThisMonth,
         renovations: renoThisMonth,
         fundOpex: baseFundOpexMonthly,
         mgmtFee: baseMgmtMonthly,
-        operatingCashFlow: noi - baseMgmtMonthly,
+        operatingCashFlow,
         netCashFlow,
         cumulativeCashFlow: 0,
       });
@@ -589,12 +637,30 @@ function toQuarterly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
   return cashFlows.map((cf) => ({
     label: cf.quarter,
     noi: cf.netOperatingIncome,
+    rentIn: cf.netRent,
+    hoaOut: -cf.hoaExpense,
+    insuranceOut: -(cf.insuranceExpense || 0),
+    taxOut: -(cf.taxExpense || 0),
+    fundOpexOut: -Math.max(0, (cf.operatingExpense || 0) - (cf.renovationCost || 0)),
+    renovationsOut: -(cf.renovationCost || 0),
+    mgmtFeeOut: -(cf.mgmtFee || 0),
+    debtCostOut: -(cf.interestExpense || 0),
+    mmIncomeIn: cf.mmIncome || 0,
     capitalCalls: cf.capitalCalls,
     deployments: cf.acquisitionCost || 0,
     renovations: cf.renovationCost || 0,
     fundOpex: Math.max(0, (cf.operatingExpense || 0) - (cf.renovationCost || 0)),
     mgmtFee: cf.mgmtFee || 0,
-    operatingCashFlow: cf.netOperatingIncome - (cf.mgmtFee || 0),
+    operatingCashFlow:
+      cf.netRent
+      - cf.hoaExpense
+      - (cf.insuranceExpense || 0)
+      - (cf.taxExpense || 0)
+      - Math.max(0, (cf.operatingExpense || 0) - (cf.renovationCost || 0))
+      - (cf.renovationCost || 0)
+      - (cf.mgmtFee || 0)
+      - (cf.interestExpense || 0)
+      + (cf.mmIncome || 0),
     netCashFlow: cf.netCashFlow,
     cumulativeCashFlow: cf.cumulativeCashFlow,
   }));
@@ -607,6 +673,15 @@ function toYearly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
     if (!yearMap.has(year)) yearMap.set(year, {
       label: year,
       noi: 0,
+      rentIn: 0,
+      hoaOut: 0,
+      insuranceOut: 0,
+      taxOut: 0,
+      fundOpexOut: 0,
+      renovationsOut: 0,
+      mgmtFeeOut: 0,
+      debtCostOut: 0,
+      mmIncomeIn: 0,
       capitalCalls: 0,
       deployments: 0,
       renovations: 0,
@@ -618,6 +693,15 @@ function toYearly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
     });
     const row = yearMap.get(year)!;
     row.noi += cf.netOperatingIncome;
+    row.rentIn += cf.netRent;
+    row.hoaOut += -cf.hoaExpense;
+    row.insuranceOut += -(cf.insuranceExpense || 0);
+    row.taxOut += -(cf.taxExpense || 0);
+    row.fundOpexOut += -Math.max(0, (cf.operatingExpense || 0) - (cf.renovationCost || 0));
+    row.renovationsOut += -(cf.renovationCost || 0);
+    row.mgmtFeeOut += -(cf.mgmtFee || 0);
+    row.debtCostOut += -(cf.interestExpense || 0);
+    row.mmIncomeIn += (cf.mmIncome || 0);
     row.capitalCalls += cf.capitalCalls;
     row.deployments += cf.acquisitionCost || 0;
     row.renovations += cf.renovationCost || 0;
@@ -1182,7 +1266,15 @@ export default function Model() {
       const capCallAdj = includeCapitalCalls ? row.capitalCalls : 0;
       const fundOpexAdj = includeFundOpex ? row.fundOpex : 0;
       const feeAdj = includeMgmtFees ? row.mgmtFee : 0;
-      const operatingCF = row.noi - feeAdj - renoAdj - fundOpexAdj;
+      const operatingCF = row.rentIn
+        + row.hoaOut
+        + row.insuranceOut
+        + row.taxOut
+        + (includeFundOpex ? row.fundOpexOut : 0)
+        + (includeRenovations ? row.renovationsOut : 0)
+        + (includeMgmtFees ? row.mgmtFeeOut : 0)
+        + row.debtCostOut
+        + row.mmIncomeIn;
       const netCashFlow = cashViewMode === 'operating' ? operatingCF : operatingCF - capCallAdj;
       cumulative += netCashFlow;
       return {
@@ -1632,14 +1724,18 @@ export default function Model() {
               </div>
             </div>
             <div style={{ padding: '0 1rem 0.75rem', display: 'flex', gap: '0.9rem', flexWrap: 'wrap' }}>
-              <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                <input type="checkbox" checked={includeCapitalCalls} onChange={(e) => setIncludeCapitalCalls(e.target.checked)} />
-                Capital calls
-              </label>
-              <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                <input type="checkbox" checked={includeDeployments} onChange={(e) => setIncludeDeployments(e.target.checked)} />
-                Deployments (acquisition)
-              </label>
+              {cashViewMode === 'overall' && (
+                <>
+                  <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    <input type="checkbox" checked={includeCapitalCalls} onChange={(e) => setIncludeCapitalCalls(e.target.checked)} />
+                    Capital calls
+                  </label>
+                  <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    <input type="checkbox" checked={includeDeployments} onChange={(e) => setIncludeDeployments(e.target.checked)} />
+                    Deployments (acquisition)
+                  </label>
+                </>
+              )}
               <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                 <input type="checkbox" checked={includeRenovations} onChange={(e) => setIncludeRenovations(e.target.checked)} />
                 Renovations
@@ -1656,6 +1752,11 @@ export default function Model() {
                 <input type="checkbox" checked={showCumulative} onChange={(e) => setShowCumulative(e.target.checked)} />
                 Cumulative line
               </label>
+              {cashViewMode === 'operating' && (
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Operating view excludes capital calls and deployments.
+                </span>
+              )}
             </div>
             <div style={{ padding: '0 1rem 0.75rem', borderTop: '1px solid var(--border)', marginTop: '-0.25rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
@@ -1727,21 +1828,44 @@ export default function Model() {
                   <YAxis yAxisId="right" orientation="right" tickFormatter={(v: number) => fmtCompact(v, '')} tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
                   <Tooltip formatter={(v: number, name: string) => [fmt(v), name]} contentStyle={tooltipStyle} />
                   <Legend wrapperStyle={{ fontSize: '0.8rem' }} />
-                  <Area yAxisId="left" type="monotone" dataKey="noi" name="NOI" stroke="var(--teal)" strokeWidth={2} fill="url(#gradNOI)" dot={false} activeDot={{ r: 4, fill: 'var(--teal)', stroke: 'var(--bg-primary)', strokeWidth: 2 }} />
-                  {includeCapitalCalls && (
-                    <Area yAxisId="left" type="monotone" dataKey="capitalCalls" name="Capital Calls" stroke="var(--accent-light)" strokeWidth={2} fill="url(#gradCapCalls)" dot={false} activeDot={{ r: 4, fill: 'var(--accent-light)', stroke: 'var(--bg-primary)', strokeWidth: 2 }} />
+                  {cashViewMode === 'overall' && (
+                    <>
+                      <Area yAxisId="left" type="monotone" dataKey="noi" name="NOI" stroke="var(--teal)" strokeWidth={2} fill="url(#gradNOI)" dot={false} activeDot={{ r: 4, fill: 'var(--teal)', stroke: 'var(--bg-primary)', strokeWidth: 2 }} />
+                      {includeCapitalCalls && (
+                        <Area yAxisId="left" type="monotone" dataKey="capitalCalls" name="Capital Calls" stroke="var(--accent-light)" strokeWidth={2} fill="url(#gradCapCalls)" dot={false} activeDot={{ r: 4, fill: 'var(--accent-light)', stroke: 'var(--bg-primary)', strokeWidth: 2 }} />
+                      )}
+                      {includeDeployments && (
+                        <Area yAxisId="left" type="monotone" dataKey="deployments" name="Deployments" stroke="var(--red)" strokeWidth={1.8} fillOpacity={0.08} fill="var(--red)" dot={false} />
+                      )}
+                      {includeRenovations && (
+                        <Area yAxisId="left" type="monotone" dataKey="renovations" name="Renovations" stroke="var(--gold)" strokeWidth={1.5} fillOpacity={0.1} fill="var(--gold)" dot={false} />
+                      )}
+                      {includeFundOpex && (
+                        <Area yAxisId="left" type="monotone" dataKey="fundOpex" name="Fund Opex" stroke="#ff9f43" strokeWidth={1.5} fillOpacity={0.1} fill="#ff9f43" dot={false} />
+                      )}
+                      {includeMgmtFees && (
+                        <Area yAxisId="left" type="monotone" dataKey="mgmtFee" name="Mgmt Fees" stroke="#ff7f50" strokeWidth={1.5} fillOpacity={0.08} fill="#ff7f50" dot={false} />
+                      )}
+                    </>
                   )}
-                  {includeDeployments && (
-                    <Area yAxisId="left" type="monotone" dataKey="deployments" name="Deployments" stroke="var(--red)" strokeWidth={1.8} fillOpacity={0.08} fill="var(--red)" dot={false} />
-                  )}
-                  {includeRenovations && (
-                    <Area yAxisId="left" type="monotone" dataKey="renovations" name="Renovations" stroke="var(--gold)" strokeWidth={1.5} fillOpacity={0.1} fill="var(--gold)" dot={false} />
-                  )}
-                  {includeFundOpex && (
-                    <Area yAxisId="left" type="monotone" dataKey="fundOpex" name="Fund Opex" stroke="#ff9f43" strokeWidth={1.5} fillOpacity={0.1} fill="#ff9f43" dot={false} />
-                  )}
-                  {includeMgmtFees && (
-                    <Area yAxisId="left" type="monotone" dataKey="mgmtFee" name="Mgmt Fees" stroke="#ff7f50" strokeWidth={1.5} fillOpacity={0.08} fill="#ff7f50" dot={false} />
+                  {cashViewMode === 'operating' && (
+                    <>
+                      <Area yAxisId="left" type="monotone" dataKey="rentIn" name="Rent (in)" stroke="var(--green)" strokeWidth={1.8} fillOpacity={0.12} fill="var(--green)" dot={false} />
+                      <Area yAxisId="left" type="monotone" dataKey="mmIncomeIn" name="MM Gains (in)" stroke="var(--teal)" strokeWidth={1.5} fillOpacity={0.1} fill="var(--teal)" dot={false} />
+                      <Area yAxisId="left" type="monotone" dataKey="hoaOut" name="HOA (out)" stroke="var(--red)" strokeWidth={1.3} fillOpacity={0.08} fill="var(--red)" dot={false} />
+                      <Area yAxisId="left" type="monotone" dataKey="insuranceOut" name="Insurance (out)" stroke="#f87171" strokeWidth={1.2} fillOpacity={0.08} fill="#f87171" dot={false} />
+                      <Area yAxisId="left" type="monotone" dataKey="taxOut" name="Tax (out)" stroke="#ef4444" strokeWidth={1.2} fillOpacity={0.08} fill="#ef4444" dot={false} />
+                      {includeFundOpex && (
+                        <Area yAxisId="left" type="monotone" dataKey="fundOpexOut" name="Fund Opex (out)" stroke="#ff9f43" strokeWidth={1.3} fillOpacity={0.08} fill="#ff9f43" dot={false} />
+                      )}
+                      {includeRenovations && (
+                        <Area yAxisId="left" type="monotone" dataKey="renovationsOut" name="Renovations (out)" stroke="var(--gold)" strokeWidth={1.3} fillOpacity={0.08} fill="var(--gold)" dot={false} />
+                      )}
+                      {includeMgmtFees && (
+                        <Area yAxisId="left" type="monotone" dataKey="mgmtFeeOut" name="Mgmt Fee (out)" stroke="#ff7f50" strokeWidth={1.3} fillOpacity={0.08} fill="#ff7f50" dot={false} />
+                      )}
+                      <Area yAxisId="left" type="monotone" dataKey="debtCostOut" name="Debt Cost (out)" stroke="#a855f7" strokeWidth={1.3} fillOpacity={0.08} fill="#a855f7" dot={false} />
+                    </>
                   )}
                   <Area yAxisId="left" type="monotone" dataKey="netCashFlow" name={cashViewMode === 'operating' ? 'Operating CF' : 'Net CF'} stroke="var(--green)" strokeWidth={2} fill="none" dot={false} />
                   {showCumulative && (
