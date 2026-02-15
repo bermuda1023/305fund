@@ -40,7 +40,13 @@ export default function BuildingGrid({ units, onUnitClick }: BuildingGridProps) 
     return map;
   }, [units]);
 
-  const floors = Array.from({ length: 21 }, (_, i) => 21 - i);
+  const floors = useMemo(() => {
+    const uniqueFloors = Array.from(new Set(units.map((u) => Number(u.floor))))
+      .filter((n) => Number.isFinite(n))
+      .sort((a, b) => b - a);
+    if (uniqueFloors.length > 0) return uniqueFloors;
+    return Array.from({ length: 21 }, (_, i) => 21 - i);
+  }, [units]);
 
   return (
     <div className="building-grid" style={{ gridTemplateColumns: '1fr' }}>

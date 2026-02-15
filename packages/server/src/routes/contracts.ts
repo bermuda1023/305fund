@@ -254,12 +254,12 @@ router.post('/import-master-list', importUpload.single('file'), async (req: Requ
      */
     function normalizeUnit(excelUnit: string): string {
       let unit = excelUnit.trim().toUpperCase();
-      // Handle PH- prefix → floor 21
+      // Handle PH- prefix -> floor 22
       if (unit.startsWith('PH-')) {
-        return '21' + unit.slice(3);
+        return '22' + unit.slice(3);
       }
       if (unit.startsWith('PH')) {
-        return '21' + unit.slice(2);
+        return '22' + unit.slice(2);
       }
       // Handle CU- prefix → ground floor commercial units
       if (unit.startsWith('CU-')) {
