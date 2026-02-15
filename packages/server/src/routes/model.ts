@@ -57,6 +57,7 @@ function rowToAssumptions(row: any): FundAssumptions {
     refiCostPct: row.refi_cost_pct,
     rentGrowthPct: row.rent_growth_pct,
     hoaGrowthPct: row.hoa_growth_pct,
+    taxGrowthPct: row.tax_growth_pct ?? row.hoa_growth_pct,
     vacancyPct: row.vacancy_pct,
     annualFundOpexMode: row.annual_fund_opex_mode === 'threshold_pct' ? 'threshold_pct' : 'fixed',
     annualFundOpexFixed: Number(row.annual_fund_opex_fixed ?? 75_000),
@@ -84,7 +85,7 @@ function assumptionsToRow(a: FundAssumptions) {
     a.tier1SplitLP, a.tier1SplitGP, a.tier2HurdleIRR, a.tier2SplitLP, a.tier2SplitGP,
     a.tier3HurdleIRR, a.tier3SplitLP, a.tier3SplitGP,
     a.refiEnabled ? 1 : 0, a.refiYear, a.refiLTV, a.refiRate, a.refiTermYears, a.refiCostPct,
-    a.rentGrowthPct, a.hoaGrowthPct, a.vacancyPct,
+    a.rentGrowthPct, a.hoaGrowthPct, a.taxGrowthPct, a.vacancyPct,
     a.annualFundOpexMode, a.annualFundOpexFixed, a.annualFundOpexThresholdPct, a.annualFundOpexAdjustPct,
     a.presentDayLandValue,
     a.landValueTotal, a.landGrowthPct, a.landPSF,
@@ -306,7 +307,8 @@ function getAnnualExpenseEvents(
         if (!Number.isNaN(purchase.getTime()) && d >= purchase) {
           const qIdx = quarterIndexFromDate(date);
           if (qIdx >= 0 && qIdx < maxQuarter) {
-            const grownTax = Number(r.annual_tax) * Math.pow(1 + assumptions.hoaGrowthPct, y);
+            const taxGrowthPct = Number((assumptions as any).taxGrowthPct ?? assumptions.hoaGrowthPct ?? 0);
+            const grownTax = Number(r.annual_tax) * Math.pow(1 + taxGrowthPct, y);
             byQuarterTax.set(qIdx, (byQuarterTax.get(qIdx) || 0) + grownTax);
             events.push({ paidDate: date, category: 'tax', amount: grownTax });
           }
@@ -824,13 +826,13 @@ router.post('/scenarios', (req: Request, res: Response) => {
       tier1_split_lp, tier1_split_gp, tier2_hurdle_irr, tier2_split_lp, tier2_split_gp,
       tier3_hurdle_irr, tier3_split_lp, tier3_split_gp,
       refi_enabled, refi_year, refi_ltv, refi_rate, refi_term_years, refi_cost_pct,
-      rent_growth_pct, hoa_growth_pct, vacancy_pct,
+      rent_growth_pct, hoa_growth_pct, tax_growth_pct, vacancy_pct,
       annual_fund_opex_mode, annual_fund_opex_fixed, annual_fund_opex_threshold_pct, annual_fund_opex_adjust_pct,
       present_day_land_value,
       land_value_total, land_growth_pct, land_psf,
       mm_rate, excess_cash_mode, building_valuation,
       bonus_irr_threshold, bonus_max_years, bonus_yield_threshold
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(...assumptionsToRow(a));
 
   res.status(201).json({ id: result.lastInsertRowid });
@@ -856,7 +858,7 @@ router.put('/scenarios/:id', (req: Request, res: Response) => {
       tier1_split_lp = ?, tier1_split_gp = ?, tier2_hurdle_irr = ?, tier2_split_lp = ?, tier2_split_gp = ?,
       tier3_hurdle_irr = ?, tier3_split_lp = ?, tier3_split_gp = ?,
       refi_enabled = ?, refi_year = ?, refi_ltv = ?, refi_rate = ?, refi_term_years = ?, refi_cost_pct = ?,
-      rent_growth_pct = ?, hoa_growth_pct = ?, vacancy_pct = ?,
+      rent_growth_pct = ?, hoa_growth_pct = ?, tax_growth_pct = ?, vacancy_pct = ?,
       annual_fund_opex_mode = ?, annual_fund_opex_fixed = ?, annual_fund_opex_threshold_pct = ?, annual_fund_opex_adjust_pct = ?,
       present_day_land_value = ?,
       land_value_total = ?, land_growth_pct = ?, land_psf = ?,

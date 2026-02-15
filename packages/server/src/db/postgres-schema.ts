@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS fund_assumptions (
   refi_cost_pct DOUBLE PRECISION NOT NULL DEFAULT 0.02,
   rent_growth_pct DOUBLE PRECISION NOT NULL DEFAULT 0.03,
   hoa_growth_pct DOUBLE PRECISION NOT NULL DEFAULT 0.02,
+  tax_growth_pct DOUBLE PRECISION NOT NULL DEFAULT 0.02,
   vacancy_pct DOUBLE PRECISION NOT NULL DEFAULT 0.05,
   annual_fund_opex_mode TEXT NOT NULL DEFAULT 'fixed'
     CHECK (annual_fund_opex_mode IN ('fixed', 'threshold_pct')),

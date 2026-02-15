@@ -48,6 +48,7 @@ interface FundAssumptions {
   refiCostPct: number;
   rentGrowthPct: number;
   hoaGrowthPct: number;
+  taxGrowthPct: number;
   vacancyPct: number;
   annualFundOpexMode: 'fixed' | 'threshold_pct';
   annualFundOpexFixed: number;
@@ -93,6 +94,7 @@ const DEFAULT_ASSUMPTIONS: FundAssumptions = {
   refiCostPct: 0.02,
   rentGrowthPct: 0.03,
   hoaGrowthPct: 0.02,
+  taxGrowthPct: 0.02,
   vacancyPct: 0.05,
   annualFundOpexMode: 'fixed',
   annualFundOpexFixed: 75_000,
@@ -1025,6 +1027,7 @@ const fieldGroups: { title: string; fields: FieldDef[] }[] = [
     fields: [
       { key: 'rentGrowthPct', label: 'Rent Growth (Annual)', type: 'pct' },
       { key: 'hoaGrowthPct', label: 'HOA Growth (Annual)', type: 'pct' },
+      { key: 'taxGrowthPct', label: 'Tax Growth (Annual)', type: 'pct' },
       { key: 'vacancyPct', label: 'Vacancy Rate', type: 'pct' },
     ],
   },

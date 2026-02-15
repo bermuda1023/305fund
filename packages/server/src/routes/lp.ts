@@ -62,6 +62,7 @@ function rowToAssumptions(row: any): FundAssumptions {
     refiCostPct: row.refi_cost_pct,
     rentGrowthPct: row.rent_growth_pct,
     hoaGrowthPct: row.hoa_growth_pct,
+    taxGrowthPct: row.tax_growth_pct ?? row.hoa_growth_pct,
     vacancyPct: row.vacancy_pct,
     annualFundOpexMode: row.annual_fund_opex_mode === 'threshold_pct' ? 'threshold_pct' : 'fixed',
     annualFundOpexFixed: Number(row.annual_fund_opex_fixed ?? 75_000),

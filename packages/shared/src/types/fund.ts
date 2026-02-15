@@ -39,6 +39,7 @@ export interface FundAssumptions {
   // Growth assumptions
   rentGrowthPct: number;       // Annual, e.g., 0.03 = 3%
   hoaGrowthPct: number;
+  taxGrowthPct: number;        // Annual property tax growth (separate toggle)
   vacancyPct: number;
 
   // Fund operating overhead

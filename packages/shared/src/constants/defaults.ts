@@ -41,6 +41,7 @@ export const DEFAULT_ASSUMPTIONS: Omit<FundAssumptions, 'id' | 'createdAt'> = {
   // Growth
   rentGrowthPct: 0.03,
   hoaGrowthPct: 0.02,
+  taxGrowthPct: 0.02,
   vacancyPct: 0.05,
 
   // Fund operating overhead

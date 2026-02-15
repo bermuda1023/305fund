@@ -110,8 +110,9 @@ export function projectCashFlows(input: CashFlowInput): QuarterlyCashFlow[] {
     const insPerUnit = isAnnualExpenseQuarter
       ? applyGrowth(input.baseAnnualInsurance, assumptions.hoaGrowthPct, q)
       : 0;
+    const taxGrowthPct = assumptions.taxGrowthPct ?? assumptions.hoaGrowthPct;
     const taxPerUnit = isAnnualExpenseQuarter
-      ? applyGrowth(input.baseAnnualTax, assumptions.hoaGrowthPct, q)
+      ? applyGrowth(input.baseAnnualTax, taxGrowthPct, q)
       : 0;
 
     const grossRent = cumulativeUnits * rentPerUnit;
