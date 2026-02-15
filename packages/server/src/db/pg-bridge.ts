@@ -55,13 +55,25 @@ function sqliteColumns(database: Database.Database, table: string): string[] {
 
 function toSqliteBindable(value: unknown): unknown {
   if (value === null || value === undefined) return null;
-  if (typeof value === 'number' || typeof value === 'string' || typeof value === 'bigint') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'boolean') return value ? 1 : 0;
   if (Buffer.isBuffer(value)) return value;
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Uint8Array) return Buffer.from(value);
+  if (typeof value === 'object' && value !== null && typeof (value as any).valueOf === 'function') {
+    const primitive = (value as any).valueOf();
+    if (primitive !== value) return toSqliteBindable(primitive);
+  }
   if (Array.isArray(value)) return JSON.stringify(value);
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
   return String(value);
 }
 
@@ -195,8 +207,36 @@ async function syncPostgresToSqlite(database: Database.Database) {
           if (result.rows.length) {
             const values = columns.map(() => '?').join(', ');
             const stmt = database.prepare(`INSERT INTO ${table} (${colList}) VALUES (${values})`);
+            let inserted = 0;
+            let skipped = 0;
             for (const row of result.rows as Record<string, unknown>[]) {
-              stmt.run(...columns.map((col) => toSqliteBindable(row[col])));
+              const bindValues = columns.map((col) => toSqliteBindable(row[col]));
+              try {
+                stmt.run(...bindValues);
+                inserted += 1;
+              } catch (rowError) {
+                // Last-resort fallback: force every non-buffer into string/number/null primitives.
+                const fallback = bindValues.map((v) => {
+                  if (v === null || v === undefined) return null;
+                  if (Buffer.isBuffer(v)) return v;
+                  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+                  if (typeof v === 'string') return v;
+                  if (typeof v === 'bigint') return v.toString();
+                  return String(v);
+                });
+                try {
+                  stmt.run(...fallback);
+                  inserted += 1;
+                } catch {
+                  skipped += 1;
+                  if (skipped <= 3) {
+                    console.warn(`[pg-bridge] Skipped row in ${table} during pull`, rowError);
+                  }
+                }
+              }
+            }
+            if (skipped > 0) {
+              console.warn(`[pg-bridge] Pull partially loaded ${table}: inserted=${inserted}, skipped=${skipped}`);
             }
           }
           database.exec('COMMIT');
