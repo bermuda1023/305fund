@@ -145,6 +145,8 @@ interface QuarterlyCashFlow {
   cumulativeCashFlow: number;
 }
 
+type AnnualExpenseEvent = { paidDate: string; category: 'insurance' | 'tax'; amount: number };
+
 interface WaterfallTier {
   name: string;
   lpAmount: number;
@@ -234,6 +236,7 @@ interface ModelRunResult {
     quarterIndex: number;
     amount: number;
   }>;
+  annualExpenseEvents?: AnnualExpenseEvent[];
   liquidityLedger?: Array<{
     label: string;
     month: string;
@@ -544,11 +547,14 @@ function toMonthlyWithRenovationTiming(
   cashFlows: QuarterlyCashFlow[],
   renovationEvents: Array<{ paidDate: string; amount: number }>,
   capitalCallEvents: Array<{ paidDate: string; amount: number }>,
-  acquisitionEvents: Array<{ paidDate: string; amount: number }>
+  acquisitionEvents: Array<{ paidDate: string; amount: number }>,
+  annualExpenseEvents: AnnualExpenseEvent[],
 ): ChartRow[] {
   const renoByMonth = new Map<string, number>();
   const callByMonth = new Map<string, number>();
   const deployByMonth = new Map<string, number>();
+  const insuranceByMonth = new Map<string, number>();
+  const taxByMonth = new Map<string, number>();
 
   for (const ev of renovationEvents) {
     const d = new Date(ev.paidDate);
@@ -568,14 +574,24 @@ function toMonthlyWithRenovationTiming(
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     deployByMonth.set(key, (deployByMonth.get(key) || 0) + ev.amount);
   }
+  for (const ev of annualExpenseEvents) {
+    const d = new Date(ev.paidDate);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (ev.category === 'insurance') {
+      insuranceByMonth.set(key, (insuranceByMonth.get(key) || 0) + ev.amount);
+    } else if (ev.category === 'tax') {
+      taxByMonth.set(key, (taxByMonth.get(key) || 0) + ev.amount);
+    }
+  }
 
   const hasCallEvents = capitalCallEvents.length > 0;
+  const hasAnnualExpenseEvents = annualExpenseEvents.length > 0;
+  const hasAcquisitionEvents = acquisitionEvents.length > 0;
   const rows: ChartRow[] = [];
   for (const cf of cashFlows) {
     const quarterReno = cf.renovationCost || 0;
-    const baseNoiMonthly = (cf.netOperatingIncome + quarterReno) / 3;
     const baseFundOpexMonthly = Math.max(0, ((cf.operatingExpense || 0) - quarterReno) / 3);
-    const baseNetWithoutCap = (cf.netCashFlow + cf.capitalCalls + quarterReno) / 3;
     const baseMgmtMonthly = (cf.mgmtFee || 0) / 3;
     const baseDebtCostMonthly = (cf.interestExpense || 0) / 3;
     const baseMmIncomeMonthly = (cf.mmIncome || 0) / 3;
@@ -587,20 +603,32 @@ function toMonthlyWithRenovationTiming(
       const key = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`;
       const label = `${monthDate.toLocaleString('default', { month: 'short' })} ${monthDate.getFullYear()}`;
       const renoThisMonth = renoByMonth.get(key) || 0;
-      const callThisMonth = hasCallEvents ? (callByMonth.get(key) || 0) : baseCallMonthly;
-      const deploymentThisMonth = deployByMonth.get(key) || 0;
-      const noi = baseNoiMonthly - renoThisMonth;
-      const netCashFlow = baseNetWithoutCap - renoThisMonth - callThisMonth;
+      // Never smooth discrete events (calls/deployments). If we don't have real events,
+      // post the projected quarterly amount as a single lump in the first month.
+      const callThisMonth = hasCallEvents
+        ? (callByMonth.get(key) || 0)
+        : (m === 0 ? (cf.capitalCalls || 0) : 0);
+      const deploymentThisMonth = hasAcquisitionEvents
+        ? (deployByMonth.get(key) || 0)
+        : (m === 0 ? (cf.acquisitionCost || 0) : 0);
       const rentIn = cf.netRent / 3;
       const hoaOut = -(cf.hoaExpense / 3);
-      const insuranceOut = -((cf.insuranceExpense || 0) / 3);
-      const taxOut = -((cf.taxExpense || 0) / 3);
+      // When we have dated events, post expenses exactly in that month.
+      // Otherwise (defaults mode), keep it as an annual lump (no smoothing).
+      const insuranceOut = hasAnnualExpenseEvents
+        ? -(insuranceByMonth.get(key) || 0)
+        : (m === 0 ? -(cf.insuranceExpense || 0) : 0);
+      const taxOut = hasAnnualExpenseEvents
+        ? -(taxByMonth.get(key) || 0)
+        : (m === 0 ? -(cf.taxExpense || 0) : 0);
       const fundOpexOut = -baseFundOpexMonthly;
       const renovationsOut = -renoThisMonth;
       const mgmtFeeOut = -baseMgmtMonthly;
       const debtCostOut = -baseDebtCostMonthly;
       const mmIncomeIn = baseMmIncomeMonthly;
       const operatingCashFlow = rentIn + hoaOut + insuranceOut + taxOut + fundOpexOut + renovationsOut + mgmtFeeOut + debtCostOut + mmIncomeIn;
+      const noi = rentIn + hoaOut + insuranceOut + taxOut + fundOpexOut;
+      const netCashFlow = operatingCashFlow + callThisMonth - deploymentThisMonth;
       rows.push({
         label,
         noi,
@@ -777,11 +805,14 @@ function toTableMonthlyWithRenovationTiming(
   cashFlows: QuarterlyCashFlow[],
   renovationEvents: Array<{ paidDate: string; amount: number }>,
   capitalCallEvents: Array<{ paidDate: string; amount: number }>,
-  acquisitionEvents: Array<{ paidDate: string; amount: number }>
+  acquisitionEvents: Array<{ paidDate: string; amount: number }>,
+  annualExpenseEvents: AnnualExpenseEvent[],
 ): TableRow[] {
   const renoByMonth = new Map<string, number>();
   const callByMonth = new Map<string, number>();
   const deployByMonth = new Map<string, number>();
+  const insuranceByMonth = new Map<string, number>();
+  const taxByMonth = new Map<string, number>();
   for (const ev of renovationEvents) {
     const d = new Date(ev.paidDate);
     if (Number.isNaN(d.getTime())) continue;
@@ -800,15 +831,24 @@ function toTableMonthlyWithRenovationTiming(
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     deployByMonth.set(key, (deployByMonth.get(key) || 0) + ev.amount);
   }
+  for (const ev of annualExpenseEvents) {
+    const d = new Date(ev.paidDate);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (ev.category === 'insurance') {
+      insuranceByMonth.set(key, (insuranceByMonth.get(key) || 0) + ev.amount);
+    } else if (ev.category === 'tax') {
+      taxByMonth.set(key, (taxByMonth.get(key) || 0) + ev.amount);
+    }
+  }
   const hasCallEvents = capitalCallEvents.length > 0;
+  const hasAnnualExpenseEvents = annualExpenseEvents.length > 0;
+  const hasAcquisitionEvents = acquisitionEvents.length > 0;
 
   const rows: TableRow[] = [];
   for (const cf of cashFlows) {
     const quarterReno = cf.renovationCost || 0;
-    const baseInsuranceMonthly = (cf.insuranceExpense || 0) / 3;
-    const baseTaxMonthly = (cf.taxExpense || 0) / 3;
     const baseFundOpexMonthly = Math.max(0, ((cf.operatingExpense || 0) - quarterReno) / 3);
-    const baseNetWithoutCap = (cf.netCashFlow + cf.capitalCalls + quarterReno) / 3;
     const baseMgmtMonthly = (cf.mgmtFee || 0) / 3;
     const baseCallMonthly = cf.capitalCalls / 3;
 
@@ -818,14 +858,33 @@ function toTableMonthlyWithRenovationTiming(
       const dateStr = monthDate.toISOString().slice(0, 10);
       const key = dateStr.slice(0, 7);
       const renoThisMonth = renoByMonth.get(key) || 0;
-      const callThisMonth = hasCallEvents ? (callByMonth.get(key) || 0) : baseCallMonthly;
-      const deploymentThisMonth = deployByMonth.get(key) || 0;
+      const callThisMonth = hasCallEvents
+        ? (callByMonth.get(key) || 0)
+        : (m === 0 ? (cf.capitalCalls || 0) : 0);
+      const deploymentThisMonth = hasAcquisitionEvents
+        ? (deployByMonth.get(key) || 0)
+        : (m === 0 ? (cf.acquisitionCost || 0) : 0);
+      const insuranceThisMonth = hasAnnualExpenseEvents
+        ? (insuranceByMonth.get(key) || 0)
+        : (m === 0 ? (cf.insuranceExpense || 0) : 0);
+      const taxThisMonth = hasAnnualExpenseEvents
+        ? (taxByMonth.get(key) || 0)
+        : (m === 0 ? (cf.taxExpense || 0) : 0);
       const noi = (cf.netRent / 3)
         - (cf.hoaExpense / 3)
-        - baseInsuranceMonthly
-        - baseTaxMonthly
+        - insuranceThisMonth
+        - taxThisMonth
         - baseFundOpexMonthly
         - renoThisMonth;
+      const operatingCashFlow = (cf.netRent / 3)
+        - (cf.hoaExpense / 3)
+        - insuranceThisMonth
+        - taxThisMonth
+        - baseFundOpexMonthly
+        - renoThisMonth
+        - baseMgmtMonthly
+        + (cf.mmIncome || 0) / 3
+        - (cf.interestExpense || 0) / 3;
       rows.push({
         label: `${monthDate.toLocaleString('default', { month: 'short' })} ${monthDate.getFullYear()}`,
         date: dateStr,
@@ -833,8 +892,8 @@ function toTableMonthlyWithRenovationTiming(
         deployments: deploymentThisMonth,
         grossRent: cf.grossRent / 3,
         hoaExpense: cf.hoaExpense / 3,
-        insuranceExpense: baseInsuranceMonthly,
-        taxExpense: baseTaxMonthly,
+        insuranceExpense: insuranceThisMonth,
+        taxExpense: taxThisMonth,
         fundOpex: baseFundOpexMonthly,
         renovationCost: renoThisMonth,
         mgmtFee: baseMgmtMonthly,
@@ -842,7 +901,7 @@ function toTableMonthlyWithRenovationTiming(
         noi,
         debtBalance: cf.debtBalance,
         mmBalance: cf.mmBalance,
-        netCashFlow: baseNetWithoutCap - renoThisMonth - callThisMonth,
+        netCashFlow: operatingCashFlow + callThisMonth - deploymentThisMonth,
         cumulativeCashFlow: 0,
       });
     }
@@ -1243,6 +1302,7 @@ export default function Model() {
   const renovationEvents = result?.renovationEvents ?? [];
   const acquisitionEvents = result?.acquisitionEvents ?? [];
   const capitalCallEvents = result?.capitalCallEvents ?? [];
+  const annualExpenseEvents = result?.annualExpenseEvents ?? [];
   const liquidityLedger = result?.liquidityLedger ?? [];
   const mmIncomeTotal = useMemo(
     () => (cashFlows ?? []).reduce((sum, cf) => sum + (cf.mmIncome || 0), 0),
@@ -1253,11 +1313,11 @@ export default function Model() {
     if (!cashFlows || cashFlows.length === 0) return [];
     const renoEvents = renovationEvents;
     switch (period) {
-      case 'Monthly': return toMonthlyWithRenovationTiming(cashFlows, renoEvents, capitalCallEvents, acquisitionEvents);
+      case 'Monthly': return toMonthlyWithRenovationTiming(cashFlows, renoEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents);
       case 'Quarterly': return toQuarterly(cashFlows);
       case 'Yearly': return toYearly(cashFlows);
     }
-  }, [cashFlows, period, renovationEvents, capitalCallEvents, acquisitionEvents]);
+  }, [cashFlows, period, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents]);
 
   const chartData = useMemo(() => {
     let cumulative = 0;
@@ -1299,11 +1359,11 @@ export default function Model() {
   const tableData = useMemo(() => {
     if (!cashFlows || cashFlows.length === 0) return [];
     switch (period) {
-      case 'Monthly': return toTableMonthlyWithRenovationTiming(cashFlows, renovationEvents, capitalCallEvents, acquisitionEvents);
+      case 'Monthly': return toTableMonthlyWithRenovationTiming(cashFlows, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents);
       case 'Quarterly': return toTableQuarterly(cashFlows);
       case 'Yearly': return toTableYearly(cashFlows);
     }
-  }, [cashFlows, period, renovationEvents, capitalCallEvents, acquisitionEvents]);
+  }, [cashFlows, period, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents]);
 
   const waterfallData = useMemo(() => {
     if (!waterfall) return [];

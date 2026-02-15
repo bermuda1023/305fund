@@ -237,6 +237,20 @@ function quarterIndexFromDate(dateStr: string): number {
   return Math.max(0, yearOff * 4 + Math.floor(d.getMonth() / 3));
 }
 
+function monthKeyFromDate(dateStr: string): string | null {
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthStartFromQuarterMonth(cfDate: string, monthOffsetInQuarter: number): Date | null {
+  const d = new Date(cfDate);
+  if (Number.isNaN(d.getTime())) return null;
+  // Engine quarter dates are the first month of the quarter (YYYY-MM-01).
+  // Expand into 3 month-start points.
+  return new Date(d.getFullYear(), d.getMonth() + monthOffsetInQuarter, 1);
+}
+
 function dateFromMonthDay(year: number, month: number, day: number): string {
   const safeMonth = Math.max(1, Math.min(12, Math.round(month || 1)));
   const dim = new Date(year, safeMonth, 0).getDate();
@@ -264,6 +278,7 @@ function getAnnualExpenseEvents(
 
   const byQuarterInsurance = new Map<number, number>();
   const byQuarterTax = new Map<number, number>();
+  const events: Array<{ paidDate: string; category: 'insurance' | 'tax'; amount: number }> = [];
   const startYear = 2026;
   const maxQuarter = fundTermYears * 4;
 
@@ -280,6 +295,7 @@ function getAnnualExpenseEvents(
           if (qIdx >= 0 && qIdx < maxQuarter) {
             const grownInsurance = Number(r.annual_insurance) * Math.pow(1 + assumptions.hoaGrowthPct, y);
             byQuarterInsurance.set(qIdx, (byQuarterInsurance.get(qIdx) || 0) + grownInsurance);
+            events.push({ paidDate: date, category: 'insurance', amount: grownInsurance });
           }
         }
       }
@@ -292,13 +308,14 @@ function getAnnualExpenseEvents(
           if (qIdx >= 0 && qIdx < maxQuarter) {
             const grownTax = Number(r.annual_tax) * Math.pow(1 + assumptions.hoaGrowthPct, y);
             byQuarterTax.set(qIdx, (byQuarterTax.get(qIdx) || 0) + grownTax);
+            events.push({ paidDate: date, category: 'tax', amount: grownTax });
           }
         }
       }
     }
   }
 
-  return { byQuarterInsurance, byQuarterTax };
+  return { byQuarterInsurance, byQuarterTax, events };
 }
 
 function getRenovationEvents(db: ReturnType<typeof getDb>) {
@@ -463,6 +480,7 @@ type ModelEvalResult = {
   renovationEvents: any[];
   acquisitionEvents: any[];
   capitalCallEvents: any[];
+  annualExpenseEvents: Array<{ paidDate: string; category: 'insurance' | 'tax'; amount: number }>;
   liquidityLedger: any[];
   dataSource: {
     type: 'portfolio' | 'defaults';
@@ -534,12 +552,75 @@ function evaluateAssumptions(assumptions: FundAssumptions, db: ReturnType<typeof
   const fundMOIC = calcMOIC(totalDistributions + interimDistributions, totalCapitalDeployed);
 
   // Build XIRR cash flows
-  const xirrFlows = cashFlows
-    .filter(cf => Math.abs(cf.netCashFlow || 0) > 0.0001)
-    .map(cf => ({
-      date: new Date(cf.date),
-      amount: cf.netCashFlow,
-    }));
+  // Compute IRR using monthly-dated cash flows (no quarterly smoothing for discrete events).
+  // This keeps tax/insurance/capital calls/renovations on their actual months/dates.
+  const insuranceByMonth = new Map<string, number>();
+  const taxByMonth = new Map<string, number>();
+  for (const ev of annualOps.events) {
+    const k = monthKeyFromDate(ev.paidDate);
+    if (!k) continue;
+    if (ev.category === 'insurance') insuranceByMonth.set(k, (insuranceByMonth.get(k) || 0) + ev.amount);
+    if (ev.category === 'tax') taxByMonth.set(k, (taxByMonth.get(k) || 0) + ev.amount);
+  }
+  const renoByMonth = new Map<string, number>();
+  for (const ev of reno.events) {
+    const k = monthKeyFromDate(ev.paidDate);
+    if (!k) continue;
+    renoByMonth.set(k, (renoByMonth.get(k) || 0) + ev.amount);
+  }
+  const callByMonth = new Map<string, number>();
+  for (const ev of capitalCallEvents) {
+    const k = monthKeyFromDate(ev.paidDate);
+    if (!k) continue;
+    callByMonth.set(k, (callByMonth.get(k) || 0) + ev.amount);
+  }
+  const hasCallEvents = capitalCallEvents.length > 0;
+  const hasAnnualOpsEvents = annualOps.events.length > 0;
+
+  const xirrFlows: Array<{ date: Date; amount: number }> = [];
+  for (const cf of cashFlows) {
+    const quarterReno = Number(cf.renovationCost || 0);
+    const baseFundOpexMonthly = Math.max(0, (Number(cf.operatingExpense || 0) - quarterReno) / 3);
+    const baseMgmtMonthly = Number(cf.mgmtFee || 0) / 3;
+    const baseDebtRepayMonthly = Number(cf.debtRepayment || 0) / 3;
+    const baseInterestMonthly = Number(cf.interestExpense || 0) / 3;
+
+    for (let m = 0; m < 3; m++) {
+      const monthStart = monthStartFromQuarterMonth(String(cf.date), m);
+      if (!monthStart) continue;
+      const k = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}`;
+
+      // Discrete events: never smooth. If we don't have actual events, post projected quarter in first month.
+      const capitalCall = hasCallEvents ? (callByMonth.get(k) || 0) : (m === 0 ? Number(cf.capitalCalls || 0) : 0);
+      const insurance = hasAnnualOpsEvents ? (insuranceByMonth.get(k) || 0) : (m === 0 ? Number(cf.insuranceExpense || 0) : 0);
+      const tax = hasAnnualOpsEvents ? (taxByMonth.get(k) || 0) : (m === 0 ? Number(cf.taxExpense || 0) : 0);
+      const renovations = renoByMonth.get(k) || 0;
+
+      // Continuous items: allocate evenly within the quarter (we only have quarterly outputs from the engine).
+      const netRentMonthly = Number(cf.netRent || 0) / 3;
+      const hoaMonthly = Number(cf.hoaExpense || 0) / 3;
+      const debtDrawdown = m === 0 ? Number(cf.debtDrawdown || 0) : 0;
+      const grossSaleProceeds = m === 2 ? Number(cf.grossSaleProceeds || 0) : 0;
+      const mmLiquidation = m === 2 ? Number(cf.mmLiquidation || 0) : 0;
+      const lpDistributions = m === 2 ? Number(cf.lpDistributions || 0) : 0;
+
+      const noi = netRentMonthly - hoaMonthly - insurance - tax - baseFundOpexMonthly - renovations;
+      const netCF =
+        -capitalCall
+        + noi
+        - baseMgmtMonthly
+        + debtDrawdown
+        - baseDebtRepayMonthly
+        - baseInterestMonthly
+        + grossSaleProceeds
+        + mmLiquidation
+        - lpDistributions;
+
+      if (Math.abs(netCF) > 0.0001) {
+        xirrFlows.push({ date: monthStart, amount: netCF });
+      }
+    }
+  }
 
   let fundIRR = 0;
   try {
@@ -586,6 +667,7 @@ function evaluateAssumptions(assumptions: FundAssumptions, db: ReturnType<typeof
     renovationEvents: reno.events,
     acquisitionEvents,
     capitalCallEvents,
+    annualExpenseEvents: annualOps.events,
     liquidityLedger,
     dataSource,
     returns: {
