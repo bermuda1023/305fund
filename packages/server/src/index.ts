@@ -20,6 +20,7 @@ import {
   schedulePostgresPush,
 } from './db/pg-bridge';
 import { requireAuth } from './middleware/auth';
+import { Client } from 'pg';
 import { getStorageBackend, readStoredFile } from './lib/storage';
 import { validateRuntimeEnv } from './lib/env';
 
@@ -135,6 +136,53 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     version: '0.1.0',
     postgresBridge: {
+      enabled: isPostgresBridgeEnabled(),
+      readPullEnabled: pgBridgeReadPullEnabled,
+      periodicPullEnabled: pgBridgePeriodicPullEnabled,
+    },
+  });
+});
+
+// Diagnostic endpoint: helps confirm runtime SQLite vs Postgres connectivity.
+// Requires auth so we don't leak data publicly.
+app.get('/api/diag/db', requireAuth, async (req, res) => {
+  const db = getDb();
+  const sqliteCounts: Record<string, number> = {};
+  const tables = ['building_units', 'portfolio_units', 'contracts', 'unit_types', 'users'] as const;
+  for (const t of tables) {
+    try {
+      sqliteCounts[t] = Number((db.prepare(`SELECT COUNT(*) as c FROM ${t}`).get() as any)?.c || 0);
+    } catch {
+      sqliteCounts[t] = -1; // table missing or query failed
+    }
+  }
+
+  let postgresCounts: Record<string, number> | null = null;
+  const rawUrl = String(process.env.DATABASE_URL || '').trim();
+  if (isPostgresBridgeEnabled() && rawUrl) {
+    postgresCounts = {};
+    const client = new Client({ connectionString: rawUrl });
+    try {
+      await client.connect();
+      for (const t of tables) {
+        try {
+          const r = await client.query(`SELECT COUNT(*)::int AS c FROM "${t}"`);
+          postgresCounts[t] = Number(r.rows[0]?.c || 0);
+        } catch {
+          postgresCounts[t] = -1;
+        }
+      }
+    } catch {
+      postgresCounts = null;
+    } finally {
+      try { await client.end(); } catch { /* ignore */ }
+    }
+  }
+
+  res.json({
+    sqlite: sqliteCounts,
+    postgres: postgresCounts,
+    bridge: {
       enabled: isPostgresBridgeEnabled(),
       readPullEnabled: pgBridgeReadPullEnabled,
       periodicPullEnabled: pgBridgePeriodicPullEnabled,
