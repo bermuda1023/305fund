@@ -223,13 +223,13 @@ router.get('/', (req: Request, res: Response) => {
     SELECT
       pu.*,
       bu.floor, bu.unit_number, bu.unit_letter,
-      ut.beds, ut.sqft, ut.ownership_pct,
+      COALESCE(ut.beds, 0) as beds, COALESCE(ut.sqft, 0) as sqft, COALESCE(ut.ownership_pct, 0) as ownership_pct,
       e.name as entity_name,
       t.name as tenant_name, t.status as tenant_status, t.monthly_rent as tenant_rent,
       t.lease_start, t.lease_end, t.email as tenant_email, t.phone as tenant_phone
     FROM portfolio_units pu
     JOIN building_units bu ON pu.building_unit_id = bu.id
-    JOIN unit_types ut ON bu.unit_type_id = ut.id
+    LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
     LEFT JOIN entities e ON pu.entity_id = e.id
     LEFT JOIN tenants t ON t.portfolio_unit_id = pu.id AND t.status IN ('active', 'month_to_month')
     ORDER BY bu.floor, bu.unit_letter
@@ -244,15 +244,15 @@ router.get('/summary', (req: Request, res: Response) => {
   const summary = db.prepare(`
     SELECT
       COUNT(*) as total_units_owned,
-      SUM(ut.ownership_pct) as total_ownership_pct,
+      COALESCE(SUM(ut.ownership_pct), 0) as total_ownership_pct,
       SUM(pu.total_acquisition_cost) as total_invested,
       SUM(pu.monthly_rent) as total_monthly_rent,
       SUM(pu.monthly_hoa) as total_monthly_hoa,
       SUM(pu.monthly_rent - pu.monthly_hoa - (pu.monthly_insurance / 12.0) - (pu.monthly_tax / 12.0)) as total_monthly_noi,
-      SUM(ut.sqft) as total_sqft
+      COALESCE(SUM(ut.sqft), 0) as total_sqft
     FROM portfolio_units pu
     JOIN building_units bu ON pu.building_unit_id = bu.id
-    JOIN unit_types ut ON bu.unit_type_id = ut.id
+    LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
   `).get() as any;
 
   const renoSpend = db.prepare(`

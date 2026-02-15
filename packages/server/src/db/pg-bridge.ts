@@ -30,6 +30,7 @@ let debounceTimer: NodeJS.Timeout | null = null;
 let pushInFlight = false;
 let pushQueued = false;
 let pullInFlight = false;
+let lastPullAt = 0;
 
 function quoteIdent(value: string) {
   return `"${value.replace(/"/g, '""')}"`;
@@ -180,10 +181,18 @@ export async function hydrateSqliteFromPostgres(): Promise<void> {
   pullInFlight = true;
   try {
     await syncPostgresToSqlite(sqliteProvider());
+    lastPullAt = Date.now();
     console.log('[pg-bridge] Pull complete');
   } finally {
     pullInFlight = false;
   }
+}
+
+export async function hydrateSqliteFromPostgresIfStale(maxAgeMs = 20_000): Promise<void> {
+  if (!isPostgresBridgeEnabled()) return;
+  const age = Date.now() - lastPullAt;
+  if (age < maxAgeMs) return;
+  await hydrateSqliteFromPostgres();
 }
 
 async function runPush(reason: string) {

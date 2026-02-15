@@ -15,6 +15,7 @@ import { initDb, getDb } from './db/database';
 import {
   configurePostgresBridge,
   hydrateSqliteFromPostgres,
+  hydrateSqliteFromPostgresIfStale,
   isPostgresBridgeEnabled,
   schedulePostgresPush,
 } from './db/pg-bridge';
@@ -66,6 +67,22 @@ app.use(rateLimit({
   legacyHeaders: false,
 }));
 app.use(express.json({ limit: '10mb' }));
+
+// Keep key read-heavy views fresh from Postgres with a short staleness window.
+app.use(async (req, res, next) => {
+  const isFreshReadPath = req.method === 'GET'
+    && (req.path.startsWith('/api/portfolio') || req.path.startsWith('/api/contracts'));
+  if (!isFreshReadPath || !isPostgresBridgeEnabled()) {
+    next();
+    return;
+  }
+  try {
+    await hydrateSqliteFromPostgresIfStale(Math.max(5_000, Number(process.env.PG_BRIDGE_READ_PULL_MS || 20_000)));
+  } catch (error) {
+    console.error('[pg-bridge] Read-refresh pull failed:', error);
+  }
+  next();
+});
 
 // Runtime bridge: keep SQLite runtime in sync with managed Postgres.
 app.use((req, res, next) => {
