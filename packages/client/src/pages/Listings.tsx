@@ -130,7 +130,7 @@ export default function Listings() {
     <div>
       <div className="page-header flex-between">
         <div>
-          <h2>Listings</h2>
+          <h2>Units for Sale</h2>
           <p style={{ color: 'var(--text-muted)' }}>Units currently for sale at Brickell Town House</p>
         </div>
         <button className="btn btn-primary" onClick={() => setShowAdd(!showAdd)}>

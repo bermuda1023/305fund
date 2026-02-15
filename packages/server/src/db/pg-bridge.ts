@@ -90,6 +90,41 @@ async function replacePostgresTableFromRows(
   }
 }
 
+async function bestEffortUpsertTableFromRows(
+  client: Client,
+  table: string,
+  columns: string[],
+  rows: Record<string, unknown>[]
+) {
+  if (rows.length === 0 || columns.length === 0) return;
+
+  const colList = columns.map(quoteIdent).join(', ');
+  const hasId = columns.includes('id');
+  const updateColumns = columns.filter((c) => c !== 'id');
+  let synced = 0;
+  let skipped = 0;
+
+  for (const row of rows) {
+    const params = columns.map((col) => row[col] ?? null);
+    const slots = columns.map((_, idx) => `$${idx + 1}`).join(', ');
+    const upsertSql = hasId
+      ? `INSERT INTO ${quoteIdent(table)} (${colList}) VALUES (${slots})
+         ON CONFLICT (id) DO UPDATE SET ${updateColumns.map((c) => `${quoteIdent(c)} = EXCLUDED.${quoteIdent(c)}`).join(', ')}`
+      : `INSERT INTO ${quoteIdent(table)} (${colList}) VALUES (${slots})`;
+    try {
+      await client.query(upsertSql, params);
+      synced += 1;
+    } catch (error) {
+      skipped += 1;
+      if (skipped <= 5) {
+        console.warn(`[pg-bridge] Skipped row while syncing ${table}:`, error);
+      }
+    }
+  }
+
+  console.warn(`[pg-bridge] Best-effort sync for ${table}: synced=${synced}, skipped=${skipped}`);
+}
+
 async function syncSqliteToPostgres(database: Database.Database) {
   const connectionString = getConnectionString();
   if (!connectionString) return;
@@ -111,7 +146,8 @@ async function syncSqliteToPostgres(database: Database.Database) {
         await client.query('COMMIT');
       } catch (error) {
         await client.query('ROLLBACK');
-        throw error;
+        console.warn(`[pg-bridge] Full-table sync failed for ${table}. Falling back to best-effort upsert.`, error);
+        await bestEffortUpsertTableFromRows(client, table, columns, rows);
       }
     }
   } finally {

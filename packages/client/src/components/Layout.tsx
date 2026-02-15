@@ -7,7 +7,7 @@ const gpLinks = [
   { to: '/model', label: 'Model', icon: '◈' },
   { to: '/sensitivity', label: 'Sensitivity', icon: '◍' },
   { to: '/contracts', label: 'Voting Consensus', icon: '◪' },
-  { to: '/listings', label: 'Listings', icon: '◧' },
+  { to: '/listings', label: 'Units for Sale', icon: '◧' },
   { to: '/market', label: 'Market Data', icon: '◬' },
   { to: '/entities', label: 'Entities', icon: '◇' },
   { to: '/actuals', label: 'Actuals', icon: '◈' },
