@@ -450,45 +450,47 @@ export default function Contracts() {
             <span className="card-title">Flagged Holdouts</span>
             <span className="badge badge-red">{num(flagged.length)} unsigned</span>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Unit</th>
-                <th>Resident</th>
-                <th>Type</th>
-                <th>Owner Contact</th>
-                <th>Ownership %</th>
-                <th>Consensus</th>
-                <th>Listing</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {flagged.slice(0, 10).map((u, i) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{u.unit_number}</td>
-                  <td>{u.resident_name || '—'}</td>
-                  <td>
-                    {u.resident_type
-                      ? (u.resident_type === 'residential' ? 'Resident' : 'Investment')
-                      : 'Unknown'}
-                  </td>
-                  <td style={{ fontSize: '0.75rem' }}>
-                    <div>{u.owner_name || '—'}</div>
-                    <div style={{ color: 'var(--text-dim)' }}>{u.owner_email || u.owner_phone || '—'}</div>
-                  </td>
-                  <td style={{ fontFamily: 'var(--font-mono)' }}>{u.ownership_pct?.toFixed(4)}%</td>
-                  <td><span className="badge badge-red">{u.consensus_status}</span></td>
-                  <td>
-                    <span className={`badge badge-${u.listing_agreement === 'signed' ? 'green' : 'red'}`}>
-                      {u.listing_agreement}
-                    </span>
-                  </td>
-                  <td style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{u.notes || '—'}</td>
+          <div style={{ maxHeight: 360, overflow: 'auto' }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Unit</th>
+                  <th>Resident</th>
+                  <th>Type</th>
+                  <th>Owner Contact</th>
+                  <th>Ownership %</th>
+                  <th>Consensus</th>
+                  <th>Listing</th>
+                  <th>Notes</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {flagged.map((u, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{u.unit_number}</td>
+                    <td>{u.resident_name || '—'}</td>
+                    <td>
+                      {u.resident_type
+                        ? (u.resident_type === 'residential' ? 'Resident' : 'Investment')
+                        : 'Unknown'}
+                    </td>
+                    <td style={{ fontSize: '0.75rem' }}>
+                      <div>{u.owner_name || '—'}</div>
+                      <div style={{ color: 'var(--text-dim)' }}>{u.owner_email || u.owner_phone || '—'}</div>
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>{u.ownership_pct?.toFixed(4)}%</td>
+                    <td><span className="badge badge-red">{u.consensus_status}</span></td>
+                    <td>
+                      <span className={`badge badge-${u.listing_agreement === 'signed' ? 'green' : 'red'}`}>
+                        {u.listing_agreement}
+                      </span>
+                    </td>
+                    <td style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{u.notes || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

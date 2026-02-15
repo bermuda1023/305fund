@@ -200,8 +200,8 @@ router.get('/flagged', (req: Request, res: Response) => {
            bu.notes, COALESCE(ut.ownership_pct, 0) as ownership_pct
     FROM building_units bu
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
-    WHERE (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'unsigned'
-       OR (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'unsigned'
+    WHERE (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'signed'
+      AND (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'unsigned'
     ORDER BY bu.floor, bu.unit_letter
   `).all();
   res.json(flagged);
