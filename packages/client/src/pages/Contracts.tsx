@@ -166,7 +166,7 @@ export default function Contracts() {
   return (
     <div>
       <div className="page-header">
-        <h2>Contracts &amp; Consensus</h2>
+        <h2>Voting Consensus</h2>
         <p style={{ color: 'var(--text-muted)' }}>Track building-wide consensus and listing agreement progress</p>
       </div>
 

@@ -314,6 +314,7 @@ export default function Portfolio() {
       queryClient.invalidateQueries({ queryKey: ['portfolio'] });
       queryClient.invalidateQueries({ queryKey: ['portfolio-summary'] });
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      queryClient.invalidateQueries({ queryKey: ['contracts-progress'] });
       queryClient.invalidateQueries({ queryKey: ['listings'] });
       setShowAddForm(false);
       setForm(emptyForm);

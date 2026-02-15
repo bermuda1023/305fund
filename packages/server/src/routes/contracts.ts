@@ -29,25 +29,34 @@ function worksheetToMatrix(worksheet: ExcelJS.Worksheet): unknown[][] {
 router.get('/', (req: Request, res: Response) => {
   const db = getDb();
   const units = db.prepare(`
+    WITH normalized_units AS (
+      SELECT
+        bu.*,
+        CASE
+          WHEN LOWER(TRIM(COALESCE(CAST(bu.is_fund_owned AS TEXT), '0'))) IN ('1', 'true', 't', 'yes', 'y') THEN 1
+          ELSE 0
+        END AS is_owned
+      FROM building_units bu
+    )
     SELECT
       bu.id,
       bu.floor,
       bu.unit_letter,
       bu.unit_number,
       bu.unit_type_id,
-      bu.is_fund_owned,
-      CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END as consensus_status,
-      CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.listing_agreement END as listing_agreement,
-      CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(t.name, bu.resident_name) ELSE bu.resident_name END as resident_name,
-      CASE WHEN bu.is_fund_owned = 1 THEN 'investment' ELSE bu.resident_type END as resident_type,
-      CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(e.name, bu.owner_name) ELSE bu.owner_name END as owner_name,
+      bu.is_owned as is_fund_owned,
+      CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END as consensus_status,
+      CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END as listing_agreement,
+      CASE WHEN bu.is_owned = 1 THEN COALESCE(t.name, bu.resident_name) ELSE bu.resident_name END as resident_name,
+      CASE WHEN bu.is_owned = 1 THEN 'investment' ELSE bu.resident_type END as resident_type,
+      CASE WHEN bu.is_owned = 1 THEN COALESCE(e.name, bu.owner_name) ELSE bu.owner_name END as owner_name,
       bu.owner_email,
       bu.owner_phone,
-      CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(e.name, bu.owner_company) ELSE bu.owner_company END as owner_company,
+      CASE WHEN bu.is_owned = 1 THEN COALESCE(e.name, bu.owner_company) ELSE bu.owner_company END as owner_company,
       bu.notes,
       COALESCE(ut.ownership_pct, 0) as ownership_pct, COALESCE(ut.sqft, 0) as sqft, COALESCE(ut.beds, 0) as beds,
-      CASE WHEN bu.is_fund_owned THEN 'Fund Owned' ELSE NULL END as fund_status
-    FROM building_units bu
+      CASE WHEN bu.is_owned = 1 THEN 'Fund Owned' ELSE NULL END as fund_status
+    FROM normalized_units bu
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
     LEFT JOIN portfolio_units pu ON pu.building_unit_id = bu.id
     LEFT JOIN entities e ON pu.entity_id = e.id
@@ -113,40 +122,58 @@ router.get('/progress', (req: Request, res: Response) => {
 
   // Unit-count based stats
   const stats = db.prepare(`
+    WITH normalized_units AS (
+      SELECT
+        bu.*,
+        CASE
+          WHEN LOWER(TRIM(COALESCE(CAST(bu.is_fund_owned AS TEXT), '0'))) IN ('1', 'true', 't', 'yes', 'y') THEN 1
+          ELSE 0
+        END AS is_owned
+      FROM building_units bu
+    )
     SELECT
       COUNT(*) as total,
-      SUM(CASE WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'signed' THEN 1 ELSE 0 END) as signed_consensus,
-      SUM(CASE WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'signed' THEN 1 ELSE 0 END) as signed_listing,
-      SUM(CASE WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned' THEN 1 ELSE 0 END) as no_votes,
-      SUM(CASE WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unknown' THEN 1 ELSE 0 END) as abstain,
+      SUM(CASE WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'signed' THEN 1 ELSE 0 END) as signed_consensus,
+      SUM(CASE WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'signed' THEN 1 ELSE 0 END) as signed_listing,
+      SUM(CASE WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned' THEN 1 ELSE 0 END) as no_votes,
+      SUM(CASE WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unknown' THEN 1 ELSE 0 END) as abstain,
       SUM(CASE
-        WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned'
-          OR (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unsigned'
+        WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unsigned'
+          OR (CASE WHEN is_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unsigned'
         THEN 1 ELSE 0 END
       ) as unsigned,
       SUM(CASE
-        WHEN (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unknown'
-         AND (CASE WHEN is_fund_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unknown'
+        WHEN (CASE WHEN is_owned = 1 THEN 'signed' ELSE consensus_status END) = 'unknown'
+         AND (CASE WHEN is_owned = 1 THEN 'signed' ELSE listing_agreement END) = 'unknown'
         THEN 1 ELSE 0 END
       ) as unknown,
-      SUM(CASE WHEN is_fund_owned = 1 THEN 1 ELSE 0 END) as fund_owned
-    FROM building_units
+      SUM(CASE WHEN is_owned = 1 THEN 1 ELSE 0 END) as fund_owned
+    FROM normalized_units
   `).get() as any;
 
   // Ownership-weighted stats (join unit_types for ownership_pct)
   const weighted = db.prepare(`
+    WITH normalized_units AS (
+      SELECT
+        bu.*,
+        CASE
+          WHEN LOWER(TRIM(COALESCE(CAST(bu.is_fund_owned AS TEXT), '0'))) IN ('1', 'true', 't', 'yes', 'y') THEN 1
+          ELSE 0
+        END AS is_owned
+      FROM building_units bu
+    )
     SELECT
       COALESCE(SUM(COALESCE(ut.ownership_pct, 0)), 0) as total_ownership,
       COALESCE(SUM(CASE
-        WHEN (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'signed'
+        WHEN (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'signed'
         THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END
       ), 0) as yes_ownership,
       COALESCE(SUM(CASE
-        WHEN (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'unsigned'
+        WHEN (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'unsigned'
         THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END
       ), 0) as no_ownership,
-      COALESCE(SUM(CASE WHEN bu.is_fund_owned = 1 THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END), 0) as fund_ownership
-    FROM building_units bu
+      COALESCE(SUM(CASE WHEN bu.is_owned = 1 THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END), 0) as fund_ownership
+    FROM normalized_units bu
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
   `).get() as any;
 
@@ -196,12 +223,21 @@ router.get('/progress', (req: Request, res: Response) => {
 router.get('/flagged', (req: Request, res: Response) => {
   const db = getDb();
   const flagged = db.prepare(`
+    WITH normalized_units AS (
+      SELECT
+        bu.*,
+        CASE
+          WHEN LOWER(TRIM(COALESCE(CAST(bu.is_fund_owned AS TEXT), '0'))) IN ('1', 'true', 't', 'yes', 'y') THEN 1
+          ELSE 0
+        END AS is_owned
+      FROM building_units bu
+    )
     SELECT bu.unit_number, bu.resident_name, bu.resident_type, bu.owner_name, bu.owner_email, bu.owner_phone, bu.consensus_status, bu.listing_agreement,
            bu.notes, COALESCE(ut.ownership_pct, 0) as ownership_pct
-    FROM building_units bu
+    FROM normalized_units bu
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
-    WHERE (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'signed'
-      AND (CASE WHEN bu.is_fund_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'unsigned'
+    WHERE (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'signed'
+      AND (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'unsigned'
     ORDER BY bu.floor, bu.unit_letter
   `).all();
   res.json(flagged);
