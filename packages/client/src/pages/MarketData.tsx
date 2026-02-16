@@ -47,16 +47,16 @@ export default function MarketData() {
 
   const { data: fredData = [] } = useQuery<FREDPoint[]>({
     queryKey: ['fred'],
-    queryFn: () => api.get('/market/fred').then((r) => r.data),
+    queryFn: () => api.get('market/fred').then((r) => r.data),
   });
 
   const { data: valuation } = useQuery<PortfolioValuation>({
     queryKey: ['valuation'],
-    queryFn: () => api.get('/market/valuation').then((r) => r.data),
+    queryFn: () => api.get('market/valuation').then((r) => r.data),
   });
 
   const refreshFred = useMutation({
-    mutationFn: () => api.post('/market/fred/refresh'),
+    mutationFn: () => api.post('market/fred/refresh'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['fred'] }),
   });
 
@@ -67,7 +67,8 @@ export default function MarketData() {
       const form = new FormData();
       form.append('file', f);
       // seriesId is optional; server will infer from CSV header.
-      return api.post('/market/fred/import', form, { headers: { 'Content-Type': 'multipart/form-data' } }).then((r) => r.data);
+      // Let axios set the multipart boundary; hard-coding Content-Type can break uploads in some environments.
+      return api.post('market/fred/import', form).then((r) => r.data);
     },
     onSuccess: (data: any) => {
       setImportFeedback(`Imported ${data?.imported ?? 0} rows for ${data?.series ?? 'series'}.`);

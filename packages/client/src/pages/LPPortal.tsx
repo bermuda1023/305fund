@@ -1158,7 +1158,7 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
                       href="#"
                       onClick={(e) => {
                         e.preventDefault();
-                        void downloadFromEndpoint(`/lp/documents/${d.id}/download`, d.name).catch((err) => {
+                        void downloadFromEndpoint(`lp/documents/${d.id}/download`, d.name).catch((err) => {
                           window.alert(err?.response?.data?.error || err?.message || 'Failed to download document');
                         });
                       }}

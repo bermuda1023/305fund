@@ -7,7 +7,7 @@ function inferKeyFromPath(filePath: string): { url: string; filename?: string } 
   // We always fetch via an authenticated API call so the JWT is included.
   if (filePath.startsWith('/uploads/')) {
     const key = filePath.replace('/uploads/', '');
-    return { url: `/files/${encodeURIComponent(key)}` };
+    return { url: `files/${encodeURIComponent(key)}` };
   }
   if (filePath.startsWith('/api/files/')) {
     // Use as-is (absolute path) so it works regardless of api.baseURL.

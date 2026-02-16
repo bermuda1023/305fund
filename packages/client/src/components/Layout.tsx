@@ -1,4 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../lib/auth';
 
 const gpLinks = [
@@ -21,27 +22,71 @@ const lpLinks = [
 export default function Layout() {
   const { user, logout, isGP } = useAuth();
   const navigate = useNavigate();
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sidebar_collapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  // Auto-collapse on small screens unless user already chose.
+  useEffect(() => {
+    try {
+      const hasPref = localStorage.getItem('sidebar_collapsed') !== null;
+      if (hasPref) return;
+      if (window.innerWidth < 900) setCollapsed(true);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [collapsed]);
 
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
 
-  const links = isGP ? gpLinks : lpLinks;
+  const links = useMemo(() => (isGP ? gpLinks : lpLinks), [isGP]);
 
   return (
-    <div className="app-layout">
+    <div className={`app-layout ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <h1>305 opportunites fund</h1>
-          <span>control equity platform</span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+            <div className="sidebar-brand">
+              <h1>305 opportunites fund</h1>
+              <span>control equity platform</span>
+            </div>
+            <button
+              className="sidebar-toggle"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              type="button"
+            >
+              {collapsed ? '›' : '‹'}
+            </button>
+          </div>
         </div>
 
         <nav className="sidebar-nav">
           {links.map((link) => (
-            <NavLink key={link.to} to={link.to} className={({ isActive }) => isActive ? 'active' : ''}>
+            <NavLink
+              key={link.to}
+              to={link.to}
+              className={({ isActive }) => isActive ? 'active' : ''}
+              title={collapsed ? link.label : undefined}
+            >
               <span>{link.icon}</span>
-              {link.label}
+              <span className="sidebar-label">{link.label}</span>
             </NavLink>
           ))}
         </nav>
