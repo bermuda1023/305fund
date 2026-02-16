@@ -103,7 +103,7 @@ interface LPDocument {
 }
 
 interface LPMarksRow {
-  quarter: string;
+  month: string;
   contributions: number;
   distributions: number;
   net: number;
@@ -118,7 +118,15 @@ interface LPMarksResponse {
   ending_balance: number;
   total_contributed: number;
   total_distributed: number;
-  quarterly: LPMarksRow[];
+  monthly: LPMarksRow[];
+  nav?: {
+    series_id: string;
+    latest_fund_nav: number;
+    latest_lp_nav: number;
+    latest_fred_date: string | null;
+    latest_fred_value: number | null;
+    fred_points: number;
+  };
 }
 
 const fmt = fmtCurrency;
@@ -1059,16 +1067,16 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
         )}
       </div>
 
-      {/* Quarterly Marks */}
+      {/* Monthly Marks */}
       <div className="card mt-4">
         <div className="card-header">
           <span className="card-title">
-            Quarterly Marks
+            Monthly Marks
             <InfoTip
               text={[
                 'NAV v1 (estimated): we mark your units using FRED MIXRNSA as an objective index.',
                 'Basis = acquisition basis (total acquisition cost) + reconciled renovation spend-to-date (repair).',
-                'Index values are reduced to quarter-end points and we use straight-line interpolation inside each quarter.',
+                'Index values are monthly observations and we use straight-line interpolation between them.',
                 'TVPI = (cumulative distributions + estimated NAV) / cumulative contributions.',
                 'This is a rules-based estimate, not an appraisal.',
               ].join(' ')}
@@ -1076,6 +1084,21 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
           </span>
           <span className="badge badge-blue">Your economics</span>
         </div>
+        {(() => {
+          const latestDate = marks?.nav?.latest_fred_date || null;
+          const latest = latestDate ? new Date(latestDate) : null;
+          const ageDays = latest ? Math.floor((Date.now() - latest.getTime()) / (1000 * 60 * 60 * 24)) : null;
+          // Case-Shiller often lags; treat this as informational until it gets unusually stale.
+          const warnDays = 150;
+          if (!latest || ageDays === null || !Number.isFinite(ageDays)) return null;
+          const color = ageDays >= warnDays ? 'var(--gold)' : 'var(--text-muted)';
+          const label = ageDays >= warnDays ? 'FRED data stale' : 'FRED data lag';
+          return (
+            <div style={{ padding: '0 1rem 0.75rem', color, fontSize: '0.8rem' }}>
+              {label}: latest MIXRNSA observation {latestDate} ({ageDays} days old).
+            </div>
+          );
+        })()}
         <div className="metrics-grid" style={{ marginBottom: 0 }}>
           <div className="metric-card">
             <div className="metric-label">LP IRR</div>
@@ -1095,12 +1118,12 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
           </div>
         </div>
 
-        {marks?.quarterly?.length ? (
+        {marks?.monthly?.length ? (
           <div style={{ padding: '0 1rem 1rem' }}>
             <table className="data-table" style={{ marginBottom: 0 }}>
               <thead>
                 <tr>
-                  <th>Quarter</th>
+                  <th>Month</th>
                   <th>Contributions</th>
                   <th>Distributions</th>
                   <th>Net</th>
@@ -1109,27 +1132,27 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
                 </tr>
               </thead>
               <tbody>
-                {marks.quarterly.slice(-12).map((q) => (
-                  <tr key={q.quarter}>
-                    <td style={{ fontFamily: 'var(--font-mono)' }}>{q.quarter}</td>
-                    <td style={{ fontWeight: 600 }}>{fmt(q.contributions)}</td>
-                    <td style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(q.distributions)}</td>
-                    <td style={{ fontWeight: 600, color: q.net >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                      {q.net >= 0 ? '+' : ''}{fmt(q.net)}
+                {marks.monthly.slice(-24).map((m) => (
+                  <tr key={m.month}>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>{m.month}</td>
+                    <td style={{ fontWeight: 600 }}>{fmt(m.contributions)}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(m.distributions)}</td>
+                    <td style={{ fontWeight: 600, color: m.net >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                      {m.net >= 0 ? '+' : ''}{fmt(m.net)}
                     </td>
-                    <td style={{ fontWeight: 600 }}>{fmt(q.lp_nav ?? 0)}</td>
-                    <td style={{ fontWeight: 600 }}>{q.tvpi != null ? `${q.tvpi.toFixed(2)}x` : '—'}</td>
+                    <td style={{ fontWeight: 600 }}>{fmt(m.lp_nav ?? 0)}</td>
+                    <td style={{ fontWeight: 600 }}>{m.tvpi != null ? `${m.tvpi.toFixed(2)}x` : '—'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div style={{ paddingTop: '0.5rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              Estimated NAV uses FRED MIXRNSA quarter marks with straight-line interpolation inside quarters.
+              Estimated NAV uses monthly FRED MIXRNSA observations with straight-line interpolation between months.
             </div>
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
-            No quarterly data yet.
+            No monthly data yet.
           </div>
         )}
       </div>

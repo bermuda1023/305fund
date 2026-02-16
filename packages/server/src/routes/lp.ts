@@ -239,27 +239,27 @@ router.get('/documents', requireAuth, requireAnyRole, (req: Request, res: Respon
   res.json(docs);
 });
 
-function toQuarter(dateIso: string): string {
+function toMonthKey(dateIso: string): string {
   const d = new Date(dateIso);
   const year = d.getFullYear();
-  const q = Math.floor(d.getMonth() / 3) + 1;
-  return `${year}-Q${q}`;
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
 }
 
-function quarterEndDateFromKey(qKey: string): string | null {
-  const m = qKey.match(/^(\d{4})-Q([1-4])$/);
+function monthEndDateFromKey(mKey: string): string | null {
+  const m = mKey.match(/^(\d{4})-(\d{2})$/);
   if (!m) return null;
   const year = Number(m[1]);
-  const q = Number(m[2]);
-  const month = q * 3;
-  const d = new Date(Date.UTC(year, month, 0));
+  const month0 = Number(m[2]) - 1;
+  if (!Number.isFinite(year) || !Number.isFinite(month0) || month0 < 0 || month0 > 11) return null;
+  const d = new Date(Date.UTC(year, month0 + 1, 0));
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function interpolateQuarterSeries(points: Array<{ date: string; value: number }>, targetDateIso: string): number | null {
+function interpolateSeries(points: Array<{ date: string; value: number }>, targetDateIso: string): number | null {
   if (!points.length) return null;
   const t = new Date(targetDateIso).getTime();
   if (!Number.isFinite(t)) return null;
@@ -280,7 +280,7 @@ function interpolateQuarterSeries(points: Array<{ date: string; value: number }>
   return points[points.length - 1].value;
 }
 
-// GET /api/lp/marks - Quarterly LP marks (contrib/distrib, ending balance, IRR/MOIC)
+// GET /api/lp/marks - Monthly LP marks (contrib/distrib, NAV, TVPI, IRR/MOIC)
 router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) => {
   const db = getDb();
   const account = db.prepare(`
@@ -300,7 +300,7 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
     ORDER BY date ASC, id ASC
   `).all(account.id) as Array<{ id: number; type: 'call' | 'distribution'; amount: number; date: string; notes: string | null }>;
 
-  const quarterly: Record<string, { quarter: string; contributions: number; distributions: number; net: number; ending_balance: number; cumulative_contributed: number; cumulative_distributed: number }> = {};
+  const byMonth: Record<string, { month: string; contributions: number; distributions: number; net: number; ending_balance: number; cumulative_contributed: number; cumulative_distributed: number }> = {};
   let cumulativeContrib = 0;
   let cumulativeDistrib = 0;
 
@@ -308,10 +308,10 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
   const irrFlows: Array<{ amount: number; date: Date }> = [];
 
   for (const t of txns) {
-    const q = toQuarter(t.date);
-    if (!quarterly[q]) {
-      quarterly[q] = {
-        quarter: q,
+    const m = toMonthKey(t.date);
+    if (!byMonth[m]) {
+      byMonth[m] = {
+        month: m,
         contributions: 0,
         distributions: 0,
         net: 0,
@@ -321,17 +321,17 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
       };
     }
     if (t.type === 'call') {
-      quarterly[q].contributions += Number(t.amount || 0);
+      byMonth[m].contributions += Number(t.amount || 0);
       irrFlows.push({ amount: -Math.abs(Number(t.amount || 0)), date: new Date(t.date) });
     } else if (t.type === 'distribution') {
-      quarterly[q].distributions += Number(t.amount || 0);
+      byMonth[m].distributions += Number(t.amount || 0);
       irrFlows.push({ amount: Math.abs(Number(t.amount || 0)), date: new Date(t.date) });
     }
   }
 
-  const sortedQuarters = Object.keys(quarterly).sort();
-  for (const q of sortedQuarters) {
-    const row = quarterly[q];
+  const sortedMonths = Object.keys(byMonth).sort();
+  for (const m of sortedMonths) {
+    const row = byMonth[m];
     row.net = row.distributions - row.contributions;
     cumulativeContrib += row.contributions;
     cumulativeDistrib += row.distributions;
@@ -364,20 +364,12 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
     ORDER BY date ASC
   `).all(MIAMI_INDEX_SERIES) as Array<{ date: string; value: number }>;
 
-  const byQuarter = new Map<string, { obsDate: string; value: number }>();
-  for (const r of fredRows) {
-    const d = String(r.date || '').slice(0, 10);
-    if (!d) continue;
-    const q = toQuarter(d);
-    const existing = byQuarter.get(q);
-    if (!existing || d > existing.obsDate) {
-      byQuarter.set(q, { obsDate: d, value: Number(r.value) });
-    }
-  }
-  const quarterSeries = Array.from(byQuarter.entries())
-    .map(([q, v]) => ({ quarter: q, date: quarterEndDateFromKey(q)!, value: v.value }))
-    .filter((p) => !!p.date)
+  const monthSeries = fredRows
+    .map((r) => ({ date: String(r.date || '').slice(0, 10), value: Number(r.value) }))
+    .filter((p) => !!p.date && Number.isFinite(p.value))
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  const latestFred = monthSeries.length ? monthSeries[monthSeries.length - 1] : null;
 
   const units = db.prepare(`
     SELECT
@@ -410,45 +402,54 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
     repairsByUnit.set(unitId, list);
   }
 
-  const fundNavByQuarter: Record<string, number> = {};
-  for (const qp of quarterSeries) fundNavByQuarter[qp.quarter] = 0;
+  const fundNavByMonth: Record<string, number> = {};
+
+  // Build mark months from FRED months + transaction months (so table doesn't jump around).
+  const allMonthKeys = new Set<string>([
+    ...Object.keys(byMonth),
+    ...monthSeries.map((p) => toMonthKey(p.date)),
+  ]);
+  const allSortedMonths = Array.from(allMonthKeys).sort();
+  const markMonths = allSortedMonths
+    .map((m) => ({ month: m, date: monthEndDateFromKey(m) }))
+    .filter((m) => !!m.date) as Array<{ month: string; date: string }>;
+
+  for (const m of markMonths) fundNavByMonth[m.month] = 0;
 
   for (const u of units) {
     const purchaseDate = String(u.purchase_date).slice(0, 10);
-    const purchaseIndex = interpolateQuarterSeries(quarterSeries, purchaseDate);
+    const purchaseIndex = interpolateSeries(monthSeries, purchaseDate);
     if (!purchaseIndex || purchaseIndex === 0) continue;
 
     const events = (repairsByUnit.get(Number(u.unit_id)) || []).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     let i = 0;
     let cumulativeReno = 0;
 
-    for (const qp of quarterSeries) {
+    for (const mp of markMonths) {
       // Only mark units after they exist.
-      if (purchaseDate > qp.date) continue;
+      if (purchaseDate > mp.date) continue;
 
-      // Add reconciled renovation spend up to this quarter end.
-      while (i < events.length && events[i].date <= qp.date) {
+      // Add reconciled renovation spend up to this month end.
+      while (i < events.length && events[i].date <= mp.date) {
         cumulativeReno += events[i].delta;
         i += 1;
       }
 
       const basis = Number(u.acquisition_basis || 0) + cumulativeReno;
-      fundNavByQuarter[qp.quarter] += basis * (Number(qp.value) / purchaseIndex);
+      const indexAtMark = interpolateSeries(monthSeries, mp.date);
+      if (!indexAtMark) continue;
+      fundNavByMonth[mp.month] += basis * (Number(indexAtMark) / purchaseIndex);
     }
   }
 
   const ownershipFrac = Number(account.ownership_pct || 0) / 100;
 
-  // Combine quarters: transaction quarters + NAV quarters
-  const allQuarterKeys = new Set<string>([...Object.keys(quarterly), ...Object.keys(fundNavByQuarter)]);
-  const allSorted = Array.from(allQuarterKeys).sort();
-
-  // Recompute cumulative fields across the union so the table is stable even when a quarter has no cash movement.
+  // Recompute cumulative fields across the union so the table is stable even when a month has no cash movement.
   let cumC = 0;
   let cumD = 0;
-  const rows = allSorted.map((q) => {
-    const base = quarterly[q] || {
-      quarter: q,
+  const rows = markMonths.map(({ month }) => {
+    const base = byMonth[month] || {
+      month,
       contributions: 0,
       distributions: 0,
       net: 0,
@@ -463,7 +464,7 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
     base.cumulative_distributed = cumD;
     base.ending_balance = cumC - cumD;
 
-    const fundNav = fundNavByQuarter[q] ?? 0;
+    const fundNav = fundNavByMonth[month] ?? 0;
     const lpNav = fundNav * ownershipFrac;
     const totalValue = cumD + lpNav;
     const tvpi = cumC > 0 ? totalValue / cumC : 0;
@@ -486,11 +487,14 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
     ending_balance: totalContributed - totalDistributed,
     moic,
     irr,
-    quarterly: rows,
+    monthly: rows,
     nav: {
       series_id: MIAMI_INDEX_SERIES,
       latest_fund_nav: rows.length ? rows[rows.length - 1].fund_nav : 0,
       latest_lp_nav: rows.length ? rows[rows.length - 1].lp_nav : 0,
+      latest_fred_date: latestFred?.date || null,
+      latest_fred_value: latestFred?.value ?? null,
+      fred_points: monthSeries.length,
     },
   });
 });

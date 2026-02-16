@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, BarChart, Bar } from 'recharts';
 import api from '../lib/api';
 import { fmtCurrency, fmtCurrencyCompact, fmtNumber } from '../lib/format';
@@ -43,7 +43,7 @@ export default function MarketData() {
   const navTip =
     "Valuation uses NAV v1: mark a unit's cost basis by the FRED MIXRNSA index. " +
     'Cost basis = total acquisition cost (or purchase price fallback) + reconciled renovation spend (repair). ' +
-    'Index is reduced to quarter-end points and linearly interpolated within each quarter (mid-quarter = half the move).';
+    'Index is monthly and we linearly interpolate between monthly observations (mid-month = half the move).';
 
   const { data: fredData = [] } = useQuery<FREDPoint[]>({
     queryKey: ['fred'],
@@ -91,6 +91,23 @@ export default function MarketData() {
       value: d.value,
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
+
+  const latestFredDate = useMemo(() => {
+    if (!fredData.length) return null;
+    let max = String(fredData[0].date || '').slice(0, 10);
+    for (const p of fredData) {
+      const d = String(p.date || '').slice(0, 10);
+      if (d && d > max) max = d;
+    }
+    return max || null;
+  }, [fredData]);
+
+  const fredAgeDays = useMemo(() => {
+    if (!latestFredDate) return null;
+    const t = new Date(latestFredDate).getTime();
+    if (!Number.isFinite(t)) return null;
+    return Math.floor((Date.now() - t) / (1000 * 60 * 60 * 24));
+  }, [latestFredDate]);
 
   // Per-unit gain/loss bar chart data
   const unitChartData = (valuation?.unitMarks ?? []).map((u) => ({
@@ -184,6 +201,11 @@ export default function MarketData() {
           </span>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{num(fredData.length)} data points</span>
         </div>
+        {latestFredDate && fredAgeDays != null && (
+          <div style={{ padding: '0 1.5rem 0.75rem', color: fredAgeDays >= 150 ? 'var(--gold)' : 'var(--text-muted)', fontSize: '0.8rem' }}>
+            Latest observation: {latestFredDate} ({fredAgeDays} days old){fredAgeDays >= 150 ? ' — may be unusually stale' : ''}.
+          </div>
+        )}
         {chartData.length > 0 ? (
           <div style={{ width: '100%', height: 350 }}>
             <ResponsiveContainer>

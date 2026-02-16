@@ -13,52 +13,26 @@ export interface MarkToMarketUnit {
 }
 
 /**
- * Convert an ISO date into a quarter key (e.g. 2026-Q1).
+ * Normalize and sort FRED points (monthly observations).
  */
-function quarterKey(dateIso: string): { year: number; q: number; key: string } {
-  const d = new Date(dateIso);
-  const year = d.getFullYear();
-  const q = Math.floor(d.getMonth() / 3) + 1;
-  return { year, q, key: `${year}-Q${q}` };
-}
-
-function quarterEndDate(year: number, q: number): string {
-  // q: 1..4
-  const month = q * 3; // 3, 6, 9, 12
-  const d = new Date(Date.UTC(year, month, 0)); // day 0 of next month = last day of quarter
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(d.getUTCDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
 type IndexPoint = { date: string; value: number };
 
-/**
- * The user’s intended rule is “quarterly index points + straight-line interpolation between them”.
- * FRED data might be monthly, so we reduce it into quarter-end points (using the latest obs in each quarter).
- */
-function toQuarterEndSeries(data: FREDDataPoint[]): IndexPoint[] {
+function toMonthlySeries(data: FREDDataPoint[]): IndexPoint[] {
   if (!data.length) return [];
-
-  const byQuarter = new Map<string, { obsDate: string; value: number; year: number; q: number }>();
+  const out: IndexPoint[] = [];
   for (const p of data) {
-    const dateIso = String(p.date || '').slice(0, 10);
-    if (!dateIso) continue;
-    const { year, q, key } = quarterKey(dateIso);
-    const existing = byQuarter.get(key);
-    if (!existing || dateIso > existing.obsDate) {
-      byQuarter.set(key, { obsDate: dateIso, value: Number(p.value), year, q });
-    }
+    const date = String(p.date || '').slice(0, 10);
+    const value = Number(p.value);
+    if (!date || !Number.isFinite(value)) continue;
+    out.push({ date, value });
   }
-
-  return Array.from(byQuarter.values())
-    .map((v) => ({ date: quarterEndDate(v.year, v.q), value: v.value }))
-    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return out;
 }
 
 /**
- * Linear interpolation between quarter-end points.
+ * Linear interpolation between monthly observation points.
+ * If the target is outside the observed range, we clamp to the nearest endpoint.
  */
 function interpolateIndex(points: IndexPoint[], targetDate: string): IndexPoint | null {
   if (points.length === 0) return null;
@@ -93,9 +67,9 @@ export function markUnit(
   fredData: FREDDataPoint[],
   currentDate: string
 ): ValuationMark | null {
-  const quarterSeries = toQuarterEndSeries(fredData);
-  const purchaseIndex = interpolateIndex(quarterSeries, unit.purchaseDate);
-  const currentIndex = interpolateIndex(quarterSeries, currentDate);
+  const series = toMonthlySeries(fredData);
+  const purchaseIndex = interpolateIndex(series, unit.purchaseDate);
+  const currentIndex = interpolateIndex(series, currentDate);
 
   if (!purchaseIndex || !currentIndex) return null;
   if (purchaseIndex.value === 0) return null;
@@ -128,11 +102,11 @@ export function markPortfolio(
   let totalCostBasis = 0;
   let totalCurrentMark = 0;
 
-  const quarterSeries = toQuarterEndSeries(fredData);
+  const series = toMonthlySeries(fredData);
   for (const unit of units) {
     // Compute per-unit marks off the same reduced/interpolated series.
-    const purchaseIndex = interpolateIndex(quarterSeries, unit.purchaseDate);
-    const currentIndex = interpolateIndex(quarterSeries, currentDate);
+    const purchaseIndex = interpolateIndex(series, unit.purchaseDate);
+    const currentIndex = interpolateIndex(series, currentDate);
     if (!purchaseIndex || !currentIndex) continue;
     if (purchaseIndex.value === 0) continue;
 
@@ -157,7 +131,7 @@ export function markPortfolio(
     }
   }
 
-  const currentIndex = interpolateIndex(quarterSeries, currentDate);
+  const currentIndex = interpolateIndex(series, currentDate);
 
   return {
     totalCostBasis,
