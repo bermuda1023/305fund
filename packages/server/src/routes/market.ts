@@ -106,11 +106,49 @@ router.post('/fred/import', csvUpload.single('file'), (req: Request, res: Respon
     return res.status(400).json({ error: 'CSV had no rows' });
   }
 
-  // FRED download format is typically: DATE,<SERIES>
   const headerKeys = Object.keys(records[0] || {});
-  const dateKey = headerKeys.find((k) => k.toLowerCase() === 'date') || headerKeys[0];
-  const valueKey = headerKeys.find((k) => k.toLowerCase() !== 'date') || headerKeys[1];
-  const seriesId = String(req.body.seriesId || valueKey || MIAMI_INDEX_SERIES).trim() || MIAMI_INDEX_SERIES;
+  if (headerKeys.length < 2) {
+    return res.status(400).json({ error: 'CSV must have at least 2 columns (date + value)' });
+  }
+
+  const norm = (s: string) => String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_');
+
+  // FRED CSV exports vary:
+  // - DATE,MIXRNSA
+  // - observation_date,MIXRNSA
+  // - DATE,value
+  const dateKey =
+    headerKeys.find((k) => norm(k) === 'date')
+    || headerKeys.find((k) => norm(k).includes('date')) // observation_date, observation date, etc.
+    || headerKeys[0];
+
+  const requestedSeries = String((req.body as any).seriesId || '').trim();
+
+  let valueKey: string | undefined;
+  if (requestedSeries) {
+    valueKey = headerKeys.find((k) => norm(k) === norm(requestedSeries));
+  }
+  if (!valueKey) {
+    valueKey = headerKeys.find((k) => norm(k) === norm(MIAMI_INDEX_SERIES));
+  }
+  if (!valueKey) {
+    valueKey = headerKeys.find((k) => norm(k) === 'value');
+  }
+  if (!valueKey) {
+    valueKey = headerKeys.find((k) => k !== dateKey);
+  }
+  if (!valueKey || valueKey === dateKey) {
+    return res.status(400).json({
+      error: 'Could not infer value column from CSV headers',
+      headers: headerKeys,
+      inferred: { dateKey, valueKey: valueKey || null },
+    });
+  }
+
+  const seriesId = (requestedSeries || valueKey || MIAMI_INDEX_SERIES).trim() || MIAMI_INDEX_SERIES;
 
   const db = getDb();
   const upsert = db.prepare(`
@@ -135,7 +173,13 @@ router.post('/fred/import', csvUpload.single('file'), (req: Request, res: Respon
   });
 
   insertMany();
-  res.json({ success: true, series: seriesId, imported, skipped });
+  res.json({
+    success: true,
+    series: seriesId,
+    imported,
+    skipped,
+    inferred: { dateKey, valueKey },
+  });
 });
 
 // GET /api/market/valuation - Portfolio mark-to-market

@@ -66,6 +66,7 @@ export default function MarketData() {
       if (!f) throw new Error('Select a CSV file first.');
       const form = new FormData();
       form.append('file', f);
+      form.append('seriesId', 'MIXRNSA');
       // seriesId is optional; server will infer from CSV header.
       // Let axios set the multipart boundary; hard-coding Content-Type can break uploads in some environments.
       return api.post('market/fred/import', form).then((r) => r.data);
