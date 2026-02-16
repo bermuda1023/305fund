@@ -84,10 +84,13 @@ export default function MarketData() {
     },
   });
 
-  const chartData = fredData.map((d) => ({
-    date: d.date.substring(0, 7),
-    value: d.value,
-  }));
+  // Ensure chart reads left->right oldest->newest (latest date on the right).
+  const chartData = [...fredData]
+    .map((d) => ({
+      date: d.date.substring(0, 7),
+      value: d.value,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   // Per-unit gain/loss bar chart data
   const unitChartData = (valuation?.unitMarks ?? []).map((u) => ({
@@ -197,7 +200,22 @@ export default function MarketData() {
                   tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
                   interval={Math.floor(chartData.length / 8)}
                 />
-                <YAxis tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
+                <YAxis
+                  tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
+                  domain={[
+                    (min: number) => {
+                      if (!Number.isFinite(min)) return 0;
+                      // Pad a bit so small moves are visible; keep a minimum pad.
+                      const pad = Math.max(1, Math.abs(min) * 0.003);
+                      return min - pad;
+                    },
+                    (max: number) => {
+                      if (!Number.isFinite(max)) return 0;
+                      const pad = Math.max(1, Math.abs(max) * 0.003);
+                      return max + pad;
+                    },
+                  ]}
+                />
                 <Tooltip
                   formatter={(v: number) => [v.toFixed(2), 'Index']}
                   labelFormatter={(l: string) => `Date: ${l}`}
