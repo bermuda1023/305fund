@@ -223,6 +223,16 @@ export default function Actuals() {
   // Upload feedback state
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
 
+  // Multiple screens fetch "actuals" under different query keys (e.g. unit cashflows in Portfolio,
+  // entity rollups in Entities). Invalidate by prefix so changes propagate everywhere.
+  const invalidateDownstreamActualsViews = () => {
+    queryClient.invalidateQueries({ queryKey: ['actuals-transactions-model'] });
+    queryClient.invalidateQueries({ queryKey: ['unit-actuals'] });
+    queryClient.invalidateQueries({ queryKey: ['unit-costs'] });
+    queryClient.invalidateQueries({ queryKey: ['entity-actuals'] });
+    queryClient.invalidateQueries({ queryKey: ['entity-actuals-direct'] });
+  };
+
   // Search / filter state
   const [searchText, setSearchText] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
@@ -327,6 +337,7 @@ export default function Actuals() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['actuals-transactions'] });
       queryClient.invalidateQueries({ queryKey: ['actuals-uploads'] });
+      invalidateDownstreamActualsViews();
     },
     onError: (err: any) => {
       setUploadFeedback(`Delete failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
@@ -359,6 +370,7 @@ export default function Actuals() {
       queryClient.invalidateQueries({ queryKey: ['actuals-bank-lines'] });
       queryClient.invalidateQueries({ queryKey: ['actuals-transactions'] });
       queryClient.invalidateQueries({ queryKey: ['actuals-uploads'] });
+      invalidateDownstreamActualsViews();
     },
     onError: (err: any) => {
       setUploadFeedback(`Add allocation failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
@@ -474,6 +486,7 @@ export default function Actuals() {
       queryClient.invalidateQueries({ queryKey: ['actuals-variance'] });
       queryClient.invalidateQueries({ queryKey: ['portfolio'] });
       queryClient.invalidateQueries({ queryKey: ['portfolio-summary'] });
+      invalidateDownstreamActualsViews();
       queryClient.invalidateQueries({ queryKey: ['capital-call-items-open'] });
       queryClient.invalidateQueries({ queryKey: ['capital-calls-all'] });
       queryClient.invalidateQueries({ queryKey: ['gp-capital-calls-all'] });
@@ -518,6 +531,7 @@ export default function Actuals() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['actuals-transactions'] });
+      invalidateDownstreamActualsViews();
       setUploadFeedback('Receipt saved and linked successfully.');
       setTimeout(() => setUploadFeedback(null), 5000);
       if (receiptInputRef.current) receiptInputRef.current.value = '';
@@ -559,6 +573,7 @@ export default function Actuals() {
       queryClient.invalidateQueries({ queryKey: ['actuals-variance'] });
       queryClient.invalidateQueries({ queryKey: ['portfolio'] });
       queryClient.invalidateQueries({ queryKey: ['portfolio-summary'] });
+      invalidateDownstreamActualsViews();
       queryClient.invalidateQueries({ queryKey: ['capital-calls-all'] });
       queryClient.invalidateQueries({ queryKey: ['capital-call-items-open'] });
       queryClient.invalidateQueries({ queryKey: ['gp-capital-calls-all'] });
@@ -580,6 +595,7 @@ export default function Actuals() {
       queryClient.invalidateQueries({ queryKey: ['actuals-transactions'] });
       queryClient.invalidateQueries({ queryKey: ['actuals-variance'] });
       queryClient.invalidateQueries({ queryKey: ['actuals-uploads'] });
+      invalidateDownstreamActualsViews();
     },
     onError: (err: any) => {
       setUploadFeedback(`Split failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);

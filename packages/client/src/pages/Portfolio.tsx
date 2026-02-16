@@ -1185,6 +1185,7 @@ function TenantsTab({ unitId }: { unitId: number }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenants', unitId] });
       queryClient.invalidateQueries({ queryKey: ['portfolio'] });
+      queryClient.invalidateQueries({ queryKey: ['portfolio-summary'] });
       setEditingTenantId(null);
     },
   });
@@ -1690,6 +1691,11 @@ function RenovationsTab({ unitId }: { unitId: number }) {
     mutationFn: (data: typeof renoForm) => api.post(`/portfolio/units/${unitId}/renovations`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['renovations', unitId] });
+      // Cash Flows tab uses a separate cache key for the same endpoint.
+      queryClient.invalidateQueries({ queryKey: ['unit-renovations-cf', unitId] });
+      queryClient.invalidateQueries({ queryKey: ['unit-costs', unitId] });
+      queryClient.invalidateQueries({ queryKey: ['entity-renovations'] });
+      queryClient.invalidateQueries({ queryKey: ['portfolio'] });
       queryClient.invalidateQueries({ queryKey: ['portfolio-summary'] });
       setShowAddReno(false);
       setRenoForm({ description: '', estimatedCost: 0, expenseSource: 'bank', reconcileRef: '', reconciled: false, contractor: '', startDate: '', endDate: '', notes: '' });
@@ -1701,6 +1707,10 @@ function RenovationsTab({ unitId }: { unitId: number }) {
       api.put(`/portfolio/renovations/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['renovations', unitId] });
+      queryClient.invalidateQueries({ queryKey: ['unit-renovations-cf', unitId] });
+      queryClient.invalidateQueries({ queryKey: ['unit-costs', unitId] });
+      queryClient.invalidateQueries({ queryKey: ['entity-renovations'] });
+      queryClient.invalidateQueries({ queryKey: ['portfolio'] });
       queryClient.invalidateQueries({ queryKey: ['portfolio-summary'] });
       setEditingRenoId(null);
     },
@@ -1710,6 +1720,10 @@ function RenovationsTab({ unitId }: { unitId: number }) {
     mutationFn: (id: number) => api.delete(`/portfolio/renovations/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['renovations', unitId] });
+      queryClient.invalidateQueries({ queryKey: ['unit-renovations-cf', unitId] });
+      queryClient.invalidateQueries({ queryKey: ['unit-costs', unitId] });
+      queryClient.invalidateQueries({ queryKey: ['entity-renovations'] });
+      queryClient.invalidateQueries({ queryKey: ['portfolio'] });
       queryClient.invalidateQueries({ queryKey: ['portfolio-summary'] });
     },
   });
