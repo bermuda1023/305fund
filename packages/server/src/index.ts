@@ -19,7 +19,7 @@ import {
   isPostgresBridgeEnabled,
   schedulePostgresPush,
 } from './db/pg-bridge';
-import { requireAuth } from './middleware/auth';
+import { requireAuth, requireGP } from './middleware/auth';
 import { Client } from 'pg';
 import { getStorageBackend, readStoredFile } from './lib/storage';
 import { validateRuntimeEnv } from './lib/env';
@@ -188,6 +188,17 @@ app.get('/api/diag/db', requireAuth, async (req, res) => {
       periodicPullEnabled: pgBridgePeriodicPullEnabled,
     },
   });
+});
+
+// Manually trigger a Postgres -> SQLite pull (GP only).
+// Useful when read-pull is disabled and you don't want to restart the server.
+app.post('/api/diag/pull', requireAuth, requireGP, async (req, res) => {
+  try {
+    await hydrateSqliteFromPostgres();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: String((error as any)?.message || error) });
+  }
 });
 
 // API Routes

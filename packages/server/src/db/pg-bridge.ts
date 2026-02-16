@@ -57,6 +57,30 @@ function sqliteColumns(database: Database.Database, table: string): string[] {
   return cols.map((c) => c.name);
 }
 
+async function postgresColumns(client: Client, table: string): Promise<string[]> {
+  try {
+    const result = await client.query(
+      `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1
+      ORDER BY ordinal_position
+      `,
+      [table]
+    );
+    return (result.rows as Array<{ column_name: string }>).map((r) => r.column_name);
+  } catch {
+    return [];
+  }
+}
+
+function intersectColumns(sqliteCols: string[], pgCols: string[]): string[] {
+  if (sqliteCols.length === 0 || pgCols.length === 0) return [];
+  const pgSet = new Set(pgCols);
+  // Keep SQLite ordering, since SQLite insert statement uses this order.
+  return sqliteCols.filter((c) => pgSet.has(c));
+}
+
 function toSqliteBindable(value: unknown): unknown {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -161,8 +185,14 @@ async function syncSqliteToPostgres(database: Database.Database) {
   await client.connect();
   try {
     for (const table of TABLES_IN_ORDER) {
-      const columns = sqliteColumns(database, table);
-      if (columns.length === 0) continue;
+      const sqliteCols = sqliteColumns(database, table);
+      if (sqliteCols.length === 0) continue;
+      const pgCols = await postgresColumns(client, table);
+      const columns = intersectColumns(sqliteCols, pgCols);
+      if (columns.length === 0) {
+        console.warn(`[pg-bridge] Skipping push for ${table}: no shared columns between SQLite and Postgres`);
+        continue;
+      }
       const colList = columns.map(quoteIdent).join(', ');
       const rows = database
         .prepare(`SELECT ${colList} FROM ${table}`)
@@ -216,8 +246,14 @@ async function syncPostgresToSqlite(database: Database.Database) {
     database.exec('PRAGMA foreign_keys = OFF');
     try {
       for (const table of TABLES_IN_ORDER) {
-        const columns = sqliteColumns(database, table);
-        if (columns.length === 0) continue;
+        const sqliteCols = sqliteColumns(database, table);
+        if (sqliteCols.length === 0) continue;
+        const pgCols = await postgresColumns(client, table);
+        const columns = intersectColumns(sqliteCols, pgCols);
+        if (columns.length === 0) {
+          console.warn(`[pg-bridge] Skipping pull for ${table}: no shared columns between SQLite and Postgres`);
+          continue;
+        }
         const colList = columns.map(quoteIdent).join(', ');
         const result = await client.query(`SELECT ${colList} FROM ${quoteIdent(table)}`);
 
