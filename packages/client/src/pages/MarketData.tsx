@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useRef, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area, BarChart, Bar } from 'recharts';
 import api from '../lib/api';
 import { fmtCurrency, fmtCurrencyCompact, fmtNumber } from '../lib/format';
@@ -12,7 +13,7 @@ interface ValuationMark {
   unitId: number;
   unitNumber: string;
   purchaseDate: string;
-  purchasePrice: number;
+  purchasePrice: number; // cost basis (acquisition + reconciled renovations)
   currentMark: number;
   markDate: string;
   changePct: number;
@@ -36,6 +37,13 @@ const num = fmtNumber;
 
 export default function MarketData() {
   const queryClient = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importFeedback, setImportFeedback] = useState<string | null>(null);
+
+  const navTip =
+    "Valuation uses NAV v1: mark a unit's cost basis by the FRED MIXRNSA index. " +
+    'Cost basis = total acquisition cost (or purchase price fallback) + reconciled renovation spend (repair). ' +
+    'Index is reduced to quarter-end points and linearly interpolated within each quarter (mid-quarter = half the move).';
 
   const { data: fredData = [] } = useQuery<FREDPoint[]>({
     queryKey: ['fred'],
@@ -50,6 +58,28 @@ export default function MarketData() {
   const refreshFred = useMutation({
     mutationFn: () => api.post('/market/fred/refresh'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['fred'] }),
+  });
+
+  const importFredCsv = useMutation({
+    mutationFn: async () => {
+      const f = fileRef.current?.files?.[0];
+      if (!f) throw new Error('Select a CSV file first.');
+      const form = new FormData();
+      form.append('file', f);
+      // seriesId is optional; server will infer from CSV header.
+      return api.post('/market/fred/import', form, { headers: { 'Content-Type': 'multipart/form-data' } }).then((r) => r.data);
+    },
+    onSuccess: (data: any) => {
+      setImportFeedback(`Imported ${data?.imported ?? 0} rows for ${data?.series ?? 'series'}.`);
+      setTimeout(() => setImportFeedback(null), 6000);
+      queryClient.invalidateQueries({ queryKey: ['fred'] });
+      queryClient.invalidateQueries({ queryKey: ['valuation'] });
+      if (fileRef.current) fileRef.current.value = '';
+    },
+    onError: (err: any) => {
+      setImportFeedback(`Import failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
+      setTimeout(() => setImportFeedback(null), 8000);
+    },
   });
 
   const chartData = fredData.map((d) => ({
@@ -71,10 +101,21 @@ export default function MarketData() {
           <h2>Market Data</h2>
           <p>S&P/Case-Shiller Miami Home Price Index and portfolio valuation</p>
         </div>
-        <button className="btn btn-primary" onClick={() => refreshFred.mutate()} disabled={refreshFred.isPending}>
-          {refreshFred.isPending ? 'Refreshing...' : 'Refresh FRED Data'}
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={() => importFredCsv.mutate()} disabled={importFredCsv.isPending}>
+            {importFredCsv.isPending ? 'Importing...' : 'Import MIXRNSA CSV'}
+          </button>
+          <input ref={fileRef} type="file" accept=".csv,text/csv" />
+          <button className="btn btn-primary" onClick={() => refreshFred.mutate()} disabled={refreshFred.isPending}>
+            {refreshFred.isPending ? 'Refreshing...' : 'Refresh FRED Data (API)'}
+          </button>
+        </div>
       </div>
+      {importFeedback && (
+        <div className="card mb-4" style={{ padding: '0.75rem 1rem' }}>
+          <span style={{ color: 'var(--text-muted)' }}>{importFeedback}</span>
+        </div>
+      )}
 
       {/* Valuation Summary */}
       {valuation && (
@@ -113,7 +154,29 @@ export default function MarketData() {
       {/* FRED Chart */}
       <div className="card mb-4">
         <div className="card-header">
-          <span className="card-title">Case-Shiller Miami Home Price Index (MIXRNSA)</span>
+          <span className="card-title">
+            Case-Shiller Miami Home Price Index (MIXRNSA)
+            <span
+              title={navTip}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                borderRadius: 9,
+                border: '1px solid var(--border)',
+                color: 'var(--text-muted)',
+                fontSize: 12,
+                cursor: 'help',
+                userSelect: 'none',
+                marginLeft: 8,
+              }}
+              aria-label="Info"
+            >
+              i
+            </span>
+          </span>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{num(fredData.length)} data points</span>
         </div>
         {chartData.length > 0 ? (
@@ -184,7 +247,7 @@ export default function MarketData() {
             <thead>
               <tr>
                 <th>Unit</th>
-                <th>Purchase Price</th>
+                <th>Cost Basis</th>
                 <th>Current Mark</th>
                 <th>Gain/Loss</th>
                 <th>Change %</th>

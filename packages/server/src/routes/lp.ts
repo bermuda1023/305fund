@@ -15,6 +15,7 @@ import {
 import type { FundAssumptions } from '@brickell/shared';
 import type { AcquisitionSchedule } from '@brickell/engine';
 import { sendTransactionalEmail } from '../lib/email';
+import { readStoredFile } from '../lib/storage';
 
 const router = Router();
 
@@ -236,6 +237,291 @@ router.get('/documents', requireAuth, requireAnyRole, (req: Request, res: Respon
     ORDER BY uploaded_at DESC
   `).all(account.id);
   res.json(docs);
+});
+
+function toQuarter(dateIso: string): string {
+  const d = new Date(dateIso);
+  const year = d.getFullYear();
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return `${year}-Q${q}`;
+}
+
+function quarterEndDateFromKey(qKey: string): string | null {
+  const m = qKey.match(/^(\d{4})-Q([1-4])$/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const q = Number(m[2]);
+  const month = q * 3;
+  const d = new Date(Date.UTC(year, month, 0));
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function interpolateQuarterSeries(points: Array<{ date: string; value: number }>, targetDateIso: string): number | null {
+  if (!points.length) return null;
+  const t = new Date(targetDateIso).getTime();
+  if (!Number.isFinite(t)) return null;
+  const firstT = new Date(points[0].date).getTime();
+  const lastT = new Date(points[points.length - 1].date).getTime();
+  if (t <= firstT) return points[0].value;
+  if (t >= lastT) return points[points.length - 1].value;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const ta = new Date(a.date).getTime();
+    const tb = new Date(b.date).getTime();
+    if (t < ta || t > tb) continue;
+    const span = tb - ta;
+    const frac = span > 0 ? (t - ta) / span : 0;
+    return a.value + frac * (b.value - a.value);
+  }
+  return points[points.length - 1].value;
+}
+
+// GET /api/lp/marks - Quarterly LP marks (contrib/distrib, ending balance, IRR/MOIC)
+router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) => {
+  const db = getDb();
+  const account = db.prepare(`
+    SELECT *
+    FROM lp_accounts
+    WHERE user_id = ?
+  `).get(req.user!.userId) as any;
+  if (!account) {
+    res.status(404).json({ error: 'No LP account found' });
+    return;
+  }
+
+  const txns = db.prepare(`
+    SELECT id, type, amount, date, notes
+    FROM capital_transactions
+    WHERE lp_account_id = ?
+    ORDER BY date ASC, id ASC
+  `).all(account.id) as Array<{ id: number; type: 'call' | 'distribution'; amount: number; date: string; notes: string | null }>;
+
+  const quarterly: Record<string, { quarter: string; contributions: number; distributions: number; net: number; ending_balance: number; cumulative_contributed: number; cumulative_distributed: number }> = {};
+  let cumulativeContrib = 0;
+  let cumulativeDistrib = 0;
+
+  // XIRR flows: calls are negative (LP cash out), distributions positive (cash in).
+  const irrFlows: Array<{ amount: number; date: Date }> = [];
+
+  for (const t of txns) {
+    const q = toQuarter(t.date);
+    if (!quarterly[q]) {
+      quarterly[q] = {
+        quarter: q,
+        contributions: 0,
+        distributions: 0,
+        net: 0,
+        ending_balance: 0,
+        cumulative_contributed: 0,
+        cumulative_distributed: 0,
+      };
+    }
+    if (t.type === 'call') {
+      quarterly[q].contributions += Number(t.amount || 0);
+      irrFlows.push({ amount: -Math.abs(Number(t.amount || 0)), date: new Date(t.date) });
+    } else if (t.type === 'distribution') {
+      quarterly[q].distributions += Number(t.amount || 0);
+      irrFlows.push({ amount: Math.abs(Number(t.amount || 0)), date: new Date(t.date) });
+    }
+  }
+
+  const sortedQuarters = Object.keys(quarterly).sort();
+  for (const q of sortedQuarters) {
+    const row = quarterly[q];
+    row.net = row.distributions - row.contributions;
+    cumulativeContrib += row.contributions;
+    cumulativeDistrib += row.distributions;
+    row.cumulative_contributed = cumulativeContrib;
+    row.cumulative_distributed = cumulativeDistrib;
+    row.ending_balance = cumulativeContrib - cumulativeDistrib;
+  }
+
+  const totalContributed = cumulativeContrib;
+  const totalDistributed = cumulativeDistrib;
+  const moic = totalContributed > 0 ? totalDistributed / totalContributed : 0;
+
+  let irr: number | null = null;
+  try {
+    const hasPos = irrFlows.some((f) => f.amount > 0);
+    const hasNeg = irrFlows.some((f) => f.amount < 0);
+    if (irrFlows.length >= 2 && hasPos && hasNeg) {
+      irr = xirr(irrFlows);
+    }
+  } catch {
+    irr = null;
+  }
+
+  // --- FRED-based NAV marks (quarterly + straight-line interpolation) ---
+  const MIAMI_INDEX_SERIES = 'MIXRNSA';
+  const fredRows = db.prepare(`
+    SELECT date, value
+    FROM fred_data
+    WHERE series_id = ?
+    ORDER BY date ASC
+  `).all(MIAMI_INDEX_SERIES) as Array<{ date: string; value: number }>;
+
+  const byQuarter = new Map<string, { obsDate: string; value: number }>();
+  for (const r of fredRows) {
+    const d = String(r.date || '').slice(0, 10);
+    if (!d) continue;
+    const q = toQuarter(d);
+    const existing = byQuarter.get(q);
+    if (!existing || d > existing.obsDate) {
+      byQuarter.set(q, { obsDate: d, value: Number(r.value) });
+    }
+  }
+  const quarterSeries = Array.from(byQuarter.entries())
+    .map(([q, v]) => ({ quarter: q, date: quarterEndDateFromKey(q)!, value: v.value }))
+    .filter((p) => !!p.date)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  const units = db.prepare(`
+    SELECT
+      pu.id as unit_id,
+      pu.purchase_date,
+      COALESCE(pu.total_acquisition_cost, pu.purchase_price) as acquisition_basis
+    FROM portfolio_units pu
+    WHERE pu.purchase_date IS NOT NULL
+  `).all() as Array<{ unit_id: number; purchase_date: string; acquisition_basis: number }>;
+
+  // Renovation/repair spend events (reconciled), used to add into basis only after the spend date.
+  // amount convention: statement debits are negative. Basis delta = -amount (so negative -> positive basis add).
+  const repairEvents = db.prepare(`
+    SELECT portfolio_unit_id as unit_id, date, amount
+    FROM cash_flow_actuals
+    WHERE portfolio_unit_id IS NOT NULL
+      AND reconciled = 1
+      AND category = 'repair'
+    ORDER BY date ASC, id ASC
+  `).all() as Array<{ unit_id: number; date: string; amount: number }>;
+
+  const repairsByUnit = new Map<number, Array<{ date: string; delta: number }>>();
+  for (const r of repairEvents) {
+    const unitId = Number(r.unit_id);
+    const date = String(r.date || '').slice(0, 10);
+    if (!unitId || !date) continue;
+    const delta = -Number(r.amount || 0);
+    const list = repairsByUnit.get(unitId) || [];
+    list.push({ date, delta });
+    repairsByUnit.set(unitId, list);
+  }
+
+  const fundNavByQuarter: Record<string, number> = {};
+  for (const qp of quarterSeries) fundNavByQuarter[qp.quarter] = 0;
+
+  for (const u of units) {
+    const purchaseDate = String(u.purchase_date).slice(0, 10);
+    const purchaseIndex = interpolateQuarterSeries(quarterSeries, purchaseDate);
+    if (!purchaseIndex || purchaseIndex === 0) continue;
+
+    const events = (repairsByUnit.get(Number(u.unit_id)) || []).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    let i = 0;
+    let cumulativeReno = 0;
+
+    for (const qp of quarterSeries) {
+      // Only mark units after they exist.
+      if (purchaseDate > qp.date) continue;
+
+      // Add reconciled renovation spend up to this quarter end.
+      while (i < events.length && events[i].date <= qp.date) {
+        cumulativeReno += events[i].delta;
+        i += 1;
+      }
+
+      const basis = Number(u.acquisition_basis || 0) + cumulativeReno;
+      fundNavByQuarter[qp.quarter] += basis * (Number(qp.value) / purchaseIndex);
+    }
+  }
+
+  const ownershipFrac = Number(account.ownership_pct || 0) / 100;
+
+  // Combine quarters: transaction quarters + NAV quarters
+  const allQuarterKeys = new Set<string>([...Object.keys(quarterly), ...Object.keys(fundNavByQuarter)]);
+  const allSorted = Array.from(allQuarterKeys).sort();
+
+  // Recompute cumulative fields across the union so the table is stable even when a quarter has no cash movement.
+  let cumC = 0;
+  let cumD = 0;
+  const rows = allSorted.map((q) => {
+    const base = quarterly[q] || {
+      quarter: q,
+      contributions: 0,
+      distributions: 0,
+      net: 0,
+      ending_balance: 0,
+      cumulative_contributed: 0,
+      cumulative_distributed: 0,
+    };
+    base.net = base.distributions - base.contributions;
+    cumC += base.contributions;
+    cumD += base.distributions;
+    base.cumulative_contributed = cumC;
+    base.cumulative_distributed = cumD;
+    base.ending_balance = cumC - cumD;
+
+    const fundNav = fundNavByQuarter[q] ?? 0;
+    const lpNav = fundNav * ownershipFrac;
+    const totalValue = cumD + lpNav;
+    const tvpi = cumC > 0 ? totalValue / cumC : 0;
+    return {
+      ...base,
+      fund_nav: fundNav,
+      lp_nav: lpNav,
+      tvpi,
+    };
+  });
+
+  res.json({
+    lp_account_id: account.id,
+    commitment: Number(account.commitment || 0),
+    called_capital: Number(account.called_capital || 0),
+    distributions: Number(account.distributions || 0),
+    unfunded: Number(account.commitment || 0) - Number(account.called_capital || 0),
+    total_contributed: totalContributed,
+    total_distributed: totalDistributed,
+    ending_balance: totalContributed - totalDistributed,
+    moic,
+    irr,
+    quarterly: rows,
+    nav: {
+      series_id: MIAMI_INDEX_SERIES,
+      latest_fund_nav: rows.length ? rows[rows.length - 1].fund_nav : 0,
+      latest_lp_nav: rows.length ? rows[rows.length - 1].lp_nav : 0,
+    },
+  });
+});
+
+// GET /api/lp/documents/:id/download - Secure LP doc download
+router.get('/documents/:id/download', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
+  const db = getDb();
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid document id' });
+
+  const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
+  if (!account) return res.status(404).json({ error: 'No LP account found' });
+
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as any;
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  const isFundDoc = doc.parent_type === 'fund';
+  const isMyLpDoc = doc.parent_type === 'lp' && Number(doc.parent_id) === Number(account.id);
+  if (!isFundDoc && !isMyLpDoc) {
+    return res.status(403).json({ error: 'Not authorized to access this document' });
+  }
+
+  try {
+    const file = await readStoredFile(String(doc.file_path));
+    res.setHeader('Content-Type', file.contentType || doc.file_type || 'application/octet-stream');
+    // Force download; viewing inline is still possible if the browser supports it.
+    res.setHeader('Content-Disposition', `attachment; filename="${String(doc.name || 'document').replace(/"/g, '')}"`);
+    file.body.pipe(res);
+  } catch {
+    res.status(404).json({ error: 'File not found' });
+  }
 });
 
 // GET /api/lp/performance - Fund performance

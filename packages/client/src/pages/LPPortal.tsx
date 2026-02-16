@@ -6,6 +6,7 @@ import { useAuth } from '../lib/auth';
 import { fmtCurrency, fmtNumber } from '../lib/format';
 import { formatNumberInput } from '../lib/numberInput';
 import DocumentUpload from '../components/DocumentUpload';
+import { downloadFromEndpoint } from '../lib/files';
 
 interface LPAccount {
   id: number;
@@ -101,8 +102,52 @@ interface LPDocument {
   signed_at: string | null;
 }
 
+interface LPMarksRow {
+  quarter: string;
+  contributions: number;
+  distributions: number;
+  net: number;
+  ending_balance: number;
+  lp_nav?: number;
+  tvpi?: number;
+}
+
+interface LPMarksResponse {
+  irr: number | null;
+  moic: number;
+  ending_balance: number;
+  total_contributed: number;
+  total_distributed: number;
+  quarterly: LPMarksRow[];
+}
+
 const fmt = fmtCurrency;
 const num = fmtNumber;
+
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span
+      title={text}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        border: '1px solid var(--border)',
+        color: 'var(--text-muted)',
+        fontSize: 12,
+        cursor: 'help',
+        userSelect: 'none',
+        marginLeft: 8,
+      }}
+      aria-label="Info"
+    >
+      i
+    </span>
+  );
+}
 
 /* ─── GP Investor Management Section ─────────────────────────────── */
 
@@ -840,6 +885,12 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
     enabled: !adminMode,
   });
 
+  const { data: marks } = useQuery<LPMarksResponse>({
+    queryKey: ['lp-marks'],
+    queryFn: () => api.get('/lp/marks').then((r) => r.data),
+    enabled: !adminMode,
+  });
+
   const unfunded = (account?.commitment ?? 0) - (account?.called_capital ?? 0);
 
   const capitalPie = account ? [
@@ -1008,6 +1059,81 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
         )}
       </div>
 
+      {/* Quarterly Marks */}
+      <div className="card mt-4">
+        <div className="card-header">
+          <span className="card-title">
+            Quarterly Marks
+            <InfoTip
+              text={[
+                'NAV v1 (estimated): we mark your units using FRED MIXRNSA as an objective index.',
+                'Basis = acquisition basis (total acquisition cost) + reconciled renovation spend-to-date (repair).',
+                'Index values are reduced to quarter-end points and we use straight-line interpolation inside each quarter.',
+                'TVPI = (cumulative distributions + estimated NAV) / cumulative contributions.',
+                'This is a rules-based estimate, not an appraisal.',
+              ].join(' ')}
+            />
+          </span>
+          <span className="badge badge-blue">Your economics</span>
+        </div>
+        <div className="metrics-grid" style={{ marginBottom: 0 }}>
+          <div className="metric-card">
+            <div className="metric-label">LP IRR</div>
+            <div className="metric-value teal">{marks?.irr != null ? `${(marks.irr * 100).toFixed(1)}%` : '—'}</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-label">LP MOIC</div>
+            <div className="metric-value teal">{marks ? `${marks.moic.toFixed(2)}x` : '—'}</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-label">Total Contributed</div>
+            <div className="metric-value">{fmt(marks?.total_contributed ?? 0)}</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-label">Total Distributed</div>
+            <div className="metric-value green">{fmt(marks?.total_distributed ?? 0)}</div>
+          </div>
+        </div>
+
+        {marks?.quarterly?.length ? (
+          <div style={{ padding: '0 1rem 1rem' }}>
+            <table className="data-table" style={{ marginBottom: 0 }}>
+              <thead>
+                <tr>
+                  <th>Quarter</th>
+                  <th>Contributions</th>
+                  <th>Distributions</th>
+                  <th>Net</th>
+                  <th>Estimated NAV</th>
+                  <th>TVPI</th>
+                </tr>
+              </thead>
+              <tbody>
+                {marks.quarterly.slice(-12).map((q) => (
+                  <tr key={q.quarter}>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>{q.quarter}</td>
+                    <td style={{ fontWeight: 600 }}>{fmt(q.contributions)}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--green)' }}>{fmt(q.distributions)}</td>
+                    <td style={{ fontWeight: 600, color: q.net >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                      {q.net >= 0 ? '+' : ''}{fmt(q.net)}
+                    </td>
+                    <td style={{ fontWeight: 600 }}>{fmt(q.lp_nav ?? 0)}</td>
+                    <td style={{ fontWeight: 600 }}>{q.tvpi != null ? `${q.tvpi.toFixed(2)}x` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ paddingTop: '0.5rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              Estimated NAV uses FRED MIXRNSA quarter marks with straight-line interpolation inside quarters.
+            </div>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
+            No quarterly data yet.
+          </div>
+        )}
+      </div>
+
       {/* Investor Document Vault */}
       <div className="card mt-4">
         <div className="card-header">
@@ -1028,7 +1154,16 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
               {lpDocuments.map((d) => (
                 <tr key={d.id}>
                   <td>
-                    <a href={d.file_path} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--teal)' }}>
+                    <a
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        void downloadFromEndpoint(`/lp/documents/${d.id}/download`, d.name).catch((err) => {
+                          window.alert(err?.response?.data?.error || err?.message || 'Failed to download document');
+                        });
+                      }}
+                      style={{ color: 'var(--teal)' }}
+                    >
                       {d.name}
                     </a>
                   </td>

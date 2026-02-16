@@ -109,7 +109,8 @@ app.use((req, res, next) => {
 // Serve uploaded files (local backend only)
 const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
 if (getStorageBackend() === 'local') {
-  app.use('/uploads', express.static(uploadDir));
+  // Keep local uploads behind auth; avoid exposing PII in dev/staging.
+  app.use('/uploads', requireAuth, express.static(uploadDir));
 }
 
 // Serve stored files when using cloud object storage.
@@ -121,6 +122,37 @@ app.get('/api/files/:key(*)', requireAuth, async (req, res) => {
       return;
     }
     const decodedKey = decodeURIComponent(key);
+
+    // Authorization: allow GP to fetch anything; LP can only fetch documents
+    // that belong to them or are fund-level docs.
+    if (req.user?.role === 'lp') {
+      const db = getDb();
+      const lp = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user.userId) as any;
+      if (!lp) {
+        res.status(403).json({ error: 'LP account not found' });
+        return;
+      }
+
+      // Map allowed documents -> allowed storage keys.
+      const docs = db.prepare(`
+        SELECT file_path
+        FROM documents
+        WHERE parent_type = 'fund'
+           OR (parent_type = 'lp' AND parent_id = ?)
+      `).all(lp.id) as Array<{ file_path: string }>;
+      const allowedKeys = new Set<string>();
+      for (const d of docs) {
+        const fp = String(d.file_path || '');
+        if (fp.startsWith('/api/files/')) allowedKeys.add(decodeURIComponent(fp.replace('/api/files/', '')));
+        else if (fp.startsWith('/uploads/')) allowedKeys.add(fp.replace('/uploads/', ''));
+      }
+
+      if (!allowedKeys.has(decodedKey)) {
+        res.status(403).json({ error: 'Not authorized to access this file' });
+        return;
+      }
+    }
+
     const file = await readStoredFile(decodedKey);
     res.setHeader('Content-Type', file.contentType);
     res.setHeader('Cache-Control', isProduction ? 'private, max-age=300' : 'no-store');

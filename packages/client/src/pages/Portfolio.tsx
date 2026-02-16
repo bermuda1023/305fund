@@ -1965,7 +1965,12 @@ function CashFlowsTab({ unit }: { unit: PortfolioUnit }) {
   // Fetch actuals for this unit
   const { data: actuals = [] } = useQuery<ActualTransaction[]>({
     queryKey: ['unit-actuals', unit.id],
-    queryFn: () => api.get(`/actuals/transactions?unit_id=${unit.id}&limit=50`).then((r) => r.data),
+    queryFn: () => api.get(`/actuals/transactions?unit_id=${unit.id}&reconciled=true&limit=200`).then((r) => r.data),
+  });
+
+  const { data: unitCosts } = useQuery<any>({
+    queryKey: ['unit-costs', unit.id],
+    queryFn: () => api.get(`/portfolio/units/${unit.id}/costs`).then((r) => r.data),
   });
 
   const actualCategories = useMemo(
@@ -2074,6 +2079,23 @@ function CashFlowsTab({ unit }: { unit: PortfolioUnit }) {
       <h4 style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.6rem' }}>
         12-Month Projected Cash Flows
       </h4>
+
+      {unitCosts && (
+        <div className="metrics-grid" style={{ marginBottom: '1rem' }}>
+          <div className="metric-card">
+            <div className="metric-label">Acquisition Cost</div>
+            <div className="metric-value teal">{fmt(Number(unitCosts.acquisitionCost || 0))}</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-label">Renovation Spend (Reconciled)</div>
+            <div className="metric-value gold">{fmt(Number(unitCosts.renovationSpend || 0))}</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-label">Total Basis</div>
+            <div className="metric-value">{fmt(Number(unitCosts.totalBasis || 0))}</div>
+          </div>
+        </div>
+      )}
 
       {/* Effective Land Price for this unit */}
       {unit.ownership_pct > 0 && (

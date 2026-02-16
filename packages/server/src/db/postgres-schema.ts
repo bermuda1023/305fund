@@ -235,9 +235,62 @@ CREATE TABLE IF NOT EXISTS documents (
   uploaded_by TEXT
 );
 
+CREATE TABLE IF NOT EXISTS bank_uploads (
+  id BIGSERIAL PRIMARY KEY,
+  filename TEXT NOT NULL,
+  upload_date TIMESTAMPTZ DEFAULT NOW(),
+  file_type TEXT NOT NULL CHECK (file_type IN ('csv', 'ofx', 'pdf', 'manual', 'xls', 'xlsx')),
+  row_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'parsed'
+    CHECK (status IN ('parsed', 'reconciled', 'error', 'pending_review')),
+  file_path TEXT,
+  file_type_check TEXT,
+  file_sha256 TEXT,
+  uploaded_by TEXT
+);
+
+-- If the table already exists, ensure new columns are present.
+ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS file_sha256 TEXT;
+ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS uploaded_by TEXT;
+
+CREATE TABLE IF NOT EXISTS bank_transactions (
+  id BIGSERIAL PRIMARY KEY,
+  bank_upload_id BIGINT REFERENCES bank_uploads(id),
+  date DATE NOT NULL,
+  amount DOUBLE PRECISION NOT NULL,
+  description TEXT,
+  source_file TEXT,
+  statement_ref TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS accounting_periods (
+  month TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  closed_at TIMESTAMPTZ,
+  closed_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  at TIMESTAMPTZ DEFAULT NOW(),
+  actor_email TEXT,
+  actor_user_id BIGINT,
+  action TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  record_id TEXT,
+  request_id TEXT,
+  ip TEXT,
+  before_json TEXT,
+  after_json TEXT
+);
+
 CREATE TABLE IF NOT EXISTS cash_flow_actuals (
   id BIGSERIAL PRIMARY KEY,
+  bank_transaction_id BIGINT REFERENCES bank_transactions(id),
   portfolio_unit_id BIGINT REFERENCES portfolio_units(id),
+  entity_id BIGINT REFERENCES entities(id),
+  unit_renovation_id BIGINT REFERENCES unit_renovations(id),
   lp_account_id BIGINT REFERENCES lp_accounts(id),
   capital_call_item_id BIGINT REFERENCES capital_call_items(id),
   date DATE NOT NULL,
@@ -249,18 +302,6 @@ CREATE TABLE IF NOT EXISTS cash_flow_actuals (
   statement_ref TEXT,
   receipt_document_id BIGINT REFERENCES documents(id),
   reconciled INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS bank_uploads (
-  id BIGSERIAL PRIMARY KEY,
-  filename TEXT NOT NULL,
-  upload_date TIMESTAMPTZ DEFAULT NOW(),
-  file_type TEXT NOT NULL CHECK (file_type IN ('csv', 'ofx', 'pdf', 'manual', 'xls', 'xlsx')),
-  row_count INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'parsed'
-    CHECK (status IN ('parsed', 'reconciled', 'error', 'pending_review')),
-  file_path TEXT,
-  file_type_check TEXT
 );
 
 CREATE TABLE IF NOT EXISTS learned_mappings (

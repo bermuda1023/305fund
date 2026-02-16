@@ -14,8 +14,11 @@ const TABLES_IN_ORDER = [
   'capital_calls',
   'capital_call_items',
   'documents',
-  'cash_flow_actuals',
   'bank_uploads',
+  'bank_transactions',
+  'accounting_periods',
+  'audit_log',
+  'cash_flow_actuals',
   'learned_mappings',
   'listings',
   'fred_data',
@@ -185,6 +188,46 @@ async function syncSqliteToPostgres(database: Database.Database) {
   await client.connect();
   try {
     for (const table of TABLES_IN_ORDER) {
+      // Special-case audit_log: append-only incremental sync, otherwise the full-table
+      // replace would get slower over time and re-upload the whole log every mutation.
+      if (table === 'audit_log') {
+        const sqliteCols = sqliteColumns(database, table);
+        if (sqliteCols.length === 0) continue;
+        const pgCols = await postgresColumns(client, table);
+        const columns = intersectColumns(sqliteCols, pgCols);
+        if (!columns.includes('id')) {
+          console.warn('[pg-bridge] Skipping push for audit_log: missing id column');
+          continue;
+        }
+        const colList = columns.map(quoteIdent).join(', ');
+        const remoteMax = await client.query(`SELECT COALESCE(MAX(id), 0)::bigint AS m FROM ${quoteIdent(table)}`);
+        const maxId = Number(remoteMax.rows[0]?.m || 0);
+        const pending = database
+          .prepare(`SELECT ${colList} FROM ${table} WHERE id > ? ORDER BY id ASC`)
+          .all(maxId) as Record<string, unknown>[];
+        if (pending.length === 0) continue;
+
+        const rowChunks = chunkRows(pending, 250);
+        for (const batch of rowChunks) {
+          const params: unknown[] = [];
+          let p = 1;
+          const tuples = batch.map((row) => {
+            const slots = columns.map((col) => {
+              params.push(row[col] ?? null);
+              return `$${p++}`;
+            });
+            return `(${slots.join(', ')})`;
+          });
+          const insertSql = `
+            INSERT INTO ${quoteIdent(table)} (${colList})
+            VALUES ${tuples.join(', ')}
+            ON CONFLICT (id) DO NOTHING
+          `;
+          await client.query(insertSql, params);
+        }
+        continue;
+      }
+
       const sqliteCols = sqliteColumns(database, table);
       if (sqliteCols.length === 0) continue;
       const pgCols = await postgresColumns(client, table);
@@ -246,6 +289,39 @@ async function syncPostgresToSqlite(database: Database.Database) {
     database.exec('PRAGMA foreign_keys = OFF');
     try {
       for (const table of TABLES_IN_ORDER) {
+        // Special-case audit_log: incremental pull without clearing local history.
+        if (table === 'audit_log') {
+          const sqliteCols = sqliteColumns(database, table);
+          if (sqliteCols.length === 0) continue;
+          const pgCols = await postgresColumns(client, table);
+          const columns = intersectColumns(sqliteCols, pgCols);
+          if (!columns.includes('id')) {
+            console.warn('[pg-bridge] Skipping pull for audit_log: missing id column');
+            continue;
+          }
+          const colList = columns.map(quoteIdent).join(', ');
+          const localMax = Number((database.prepare(`SELECT COALESCE(MAX(id), 0) as m FROM ${table}`).get() as any)?.m || 0);
+          const result = await client.query(
+            `SELECT ${colList} FROM ${quoteIdent(table)} WHERE id > $1 ORDER BY id ASC`,
+            [localMax]
+          );
+          if (result.rows.length === 0) continue;
+          const values = columns.map(() => '?').join(', ');
+          const stmt = database.prepare(`INSERT OR IGNORE INTO ${table} (${colList}) VALUES (${values})`);
+          database.exec('BEGIN');
+          try {
+            for (const row of result.rows as Record<string, unknown>[]) {
+              const bindValues = columns.map((col) => toSqliteBindable(row[col]));
+              stmt.run(...bindValues);
+            }
+            database.exec('COMMIT');
+          } catch (error) {
+            database.exec('ROLLBACK');
+            console.warn('[pg-bridge] audit_log incremental pull failed:', error);
+          }
+          continue;
+        }
+
         const sqliteCols = sqliteColumns(database, table);
         if (sqliteCols.length === 0) continue;
         const pgCols = await postgresColumns(client, table);

@@ -7,6 +7,8 @@ import ExcelJS from 'exceljs';
 import { parse as parseCsvSync } from 'csv-parse/sync';
 import { PDFParse } from 'pdf-parse';
 import { deleteStoredFile, saveUploadedBuffer } from '../lib/storage';
+import { createHash } from 'crypto';
+import { writeAuditLog } from '../lib/audit';
 
 const router = Router();
 router.use(requireAuth, requireGP);
@@ -83,6 +85,23 @@ const CATEGORY_PATTERNS: Array<{ pattern: RegExp; category: string }> = [
 const UNIT_NUMBER_PATTERN = /\b(?:unit\s*)?(\d{1,2}[A-Z](?:&[A-Z])?)\b/i;
 const MAX_STATEMENT_ROWS = 5000;
 const MAX_STATEMENT_COLS = 60;
+
+function monthKey(dateIso: string): string | null {
+  const d = new Date(dateIso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function assertPeriodOpen(db: ReturnType<typeof getDb>, dateIso: string) {
+  const m = monthKey(dateIso);
+  if (!m) return;
+  const row = db.prepare(`SELECT status FROM accounting_periods WHERE month = ?`).get(m) as any;
+  if (row && String(row.status) === 'closed') {
+    const err: any = new Error(`Accounting period ${m} is closed`);
+    err.statusCode = 409;
+    throw err;
+  }
+}
 
 function autoMapCategory(description: string, existingCategory?: string): string {
   if (existingCategory && existingCategory !== 'other') return existingCategory;
@@ -187,7 +206,9 @@ function syncUnitExpenseFromActual(
   const statementRef = String(row.statement_ref || '').trim();
   const fallbackRef = String(row.source_file || '').trim() || String(row.description || '').trim();
   const ref = statementRef || fallbackRef;
-  const shouldApply = !!statementRef || Number(row.reconciled) === 1;
+  // Only apply model-affecting updates once explicitly reconciled.
+  // A statement ref existing just means "imported from a statement", not "reviewed/confirmed".
+  const shouldApply = Number(row.reconciled) === 1;
   if (!ref || !shouldApply) return;
 
   const md = monthDayFromDate(row.date);
@@ -339,6 +360,7 @@ function syncCapitalCallFromActual(
     date: string;
     amount: number;
     category: string;
+    reconciled?: number;
   },
   previousLpId?: number | null,
   previousCallItemId?: number | null
@@ -351,7 +373,12 @@ function syncCapitalCallFromActual(
     LIMIT 1
   `).get(note) as any;
 
-  const shouldSync = row.category === 'capital_call' && !!row.lp_account_id && !!row.capital_call_item_id && row.amount > 0;
+  // Only treat a bank credit as a "received" capital call once reconciled.
+  const shouldSync = row.category === 'capital_call'
+    && !!row.lp_account_id
+    && !!row.capital_call_item_id
+    && row.amount > 0
+    && Number(row.reconciled || 0) === 1;
   if (!shouldSync) {
     if (existing) {
       db.prepare(`DELETE FROM capital_transactions WHERE id = ?`).run(existing.id);
@@ -671,9 +698,11 @@ function importTransactions(
     fileType: 'csv' | 'ofx' | 'pdf' | 'manual' | 'xls' | 'xlsx';
     status?: 'parsed' | 'pending_review';
     filePath?: string;
+    fileSha256?: string | null;
+    uploadedBy?: string | null;
   }
 ) {
-  const { filename, rows, fileType, status = 'parsed', filePath } = params;
+  const { filename, rows, fileType, status = 'parsed', filePath, fileSha256, uploadedBy } = params;
 
   const unitRows = db.prepare(`
     SELECT pu.id, bu.unit_number
@@ -688,13 +717,13 @@ function importTransactions(
   ).all() as Array<{ description_pattern: string; portfolio_unit_id: number; category: string | null }>;
 
   const checkDupe = db.prepare(
-    `SELECT id FROM cash_flow_actuals WHERE date = ? AND amount = ? AND description = ? LIMIT 1`
+    `SELECT id FROM bank_transactions WHERE date = ? AND amount = ? AND COALESCE(description, '') = ? LIMIT 1`
   );
 
   const upload = db.prepare(`
-    INSERT INTO bank_uploads (filename, upload_date, file_type, row_count, status, file_path)
-    VALUES (?, datetime('now'), ?, ?, ?, ?)
-  `).run(filename, fileType, rows.length, status, filePath || null);
+    INSERT INTO bank_uploads (filename, upload_date, file_type, row_count, status, file_path, file_sha256, uploaded_by)
+    VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?)
+  `).run(filename, fileType, rows.length, status, filePath || null, fileSha256 || null, uploadedBy || null);
 
   if (status !== 'parsed') {
     return {
@@ -706,11 +735,20 @@ function importTransactions(
     };
   }
 
+  const insertBank = db.prepare(`
+    INSERT INTO bank_transactions (
+      bank_upload_id, date, amount, description, source_file, statement_ref
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
   const insert = db.prepare(`
     INSERT INTO cash_flow_actuals (
-      portfolio_unit_id, lp_account_id, capital_call_item_id, date, amount, category, description, source_file, statement_ref, reconciled
+      bank_transaction_id,
+      portfolio_unit_id, entity_id, unit_renovation_id,
+      lp_account_id, capital_call_item_id,
+      date, amount, category, description, source_file, statement_ref, reconciled
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let rowsImported = 0;
@@ -723,6 +761,12 @@ function importTransactions(
       const amount = parseAmount(row.amount);
       const desc = String(row.description || '').trim();
       if (!date || amount === null) {
+        rowsInvalid++;
+        continue;
+      }
+      try {
+        assertPeriodOpen(db, date);
+      } catch {
         rowsInvalid++;
         continue;
       }
@@ -764,9 +808,21 @@ function importTransactions(
         if (learned.category && category === 'other') category = learned.category;
       }
 
-      const statementRef = String(row.statement_ref || row.statementRef || '').trim();
-      const reconciled = statementRef ? 1 : 0;
-      const insertResult = insert.run(unitId, lpAccountId, capitalCallItemId, date, amount, category, desc, filename, statementRef || null, reconciled);
+      // Keep a stable source reference if present (OFX/QFX often has FITID).
+      // Do NOT auto-mark reconciled just because a source ref exists — reconciliation is a user action.
+      const rawRef = String(row.statement_ref || row.statementRef || '').trim();
+      const statementRef = rawRef || `upload:${upload.lastInsertRowid}:row:${rowsImported + rowsSkipped + rowsInvalid + 1}`;
+      const reconciled = Number(row.reconciled ?? 0) === 1 ? 1 : 0;
+
+      const bankResult = insertBank.run(upload.lastInsertRowid, date, amount, desc, filename, statementRef || null);
+      const bankTransactionId = Number(bankResult.lastInsertRowid);
+
+      const insertResult = insert.run(
+        bankTransactionId,
+        unitId, null, null,
+        lpAccountId, capitalCallItemId,
+        date, amount, category, desc, filename, statementRef || null, reconciled
+      );
       const inserted = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(insertResult.lastInsertRowid)) as any;
       if (inserted) {
         syncUnitExpenseFromActual(db, inserted);
@@ -792,12 +848,23 @@ function importTransactions(
 // GET /api/actuals/transactions - List imported transactions
 router.get('/transactions', (req: Request, res: Response) => {
   const db = getDb();
-  const { unit_id, category, reconciled, limit = 100, offset = 0 } = req.query;
+  const { unit_id, entity_id, category, reconciled, upload_id, limit = 100, offset = 0 } = req.query;
 
-  let sql = `SELECT cfa.*, pu.id as portfolio_unit_id, bu.unit_number, lpa.name as lp_name,
+  let sql = `SELECT
+      cfa.*,
+      bt.amount as bank_amount,
+      bt.description as bank_description,
+      e.name as entity_name,
+      ur.description as renovation_description,
+      pu.id as portfolio_unit_id,
+      bu.unit_number,
+      lpa.name as lp_name,
       cci.capital_call_id, cc.call_number
     FROM cash_flow_actuals cfa
+    LEFT JOIN bank_transactions bt ON cfa.bank_transaction_id = bt.id
     LEFT JOIN portfolio_units pu ON cfa.portfolio_unit_id = pu.id
+    LEFT JOIN entities e ON cfa.entity_id = e.id
+    LEFT JOIN unit_renovations ur ON cfa.unit_renovation_id = ur.id
     LEFT JOIN building_units bu ON pu.building_unit_id = bu.id
     LEFT JOIN lp_accounts lpa ON cfa.lp_account_id = lpa.id
     LEFT JOIN capital_call_items cci ON cfa.capital_call_item_id = cci.id
@@ -809,6 +876,10 @@ router.get('/transactions', (req: Request, res: Response) => {
     sql += ` AND cfa.portfolio_unit_id = ?`;
     params.push(Number(unit_id));
   }
+  if (entity_id) {
+    sql += ` AND cfa.entity_id = ?`;
+    params.push(Number(entity_id));
+  }
   if (category) {
     sql += ` AND cfa.category = ?`;
     params.push(category);
@@ -816,6 +887,10 @@ router.get('/transactions', (req: Request, res: Response) => {
   if (reconciled !== undefined) {
     sql += ` AND cfa.reconciled = ?`;
     params.push(reconciled === 'true' ? 1 : 0);
+  }
+  if (upload_id) {
+    sql += ` AND bt.bank_upload_id = ?`;
+    params.push(Number(upload_id));
   }
 
   sql += ` ORDER BY cfa.date DESC LIMIT ? OFFSET ?`;
@@ -838,6 +913,17 @@ router.post('/upload', (req: Request, res: Response) => {
     filename,
     rows: csvRows,
     fileType: safeType as 'csv' | 'manual' | 'ofx' | 'pdf' | 'xls' | 'xlsx',
+    uploadedBy: String((req as any).user?.email || '') || null,
+  });
+  const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+  writeAuditLog({
+    db,
+    req,
+    action: 'import_statement',
+    tableName: 'bank_uploads',
+    recordId: result.upload_id as any,
+    before: null,
+    after: { upload, result },
   });
   res.json(result);
 });
@@ -865,6 +951,8 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
     file.mimetype
   );
   const relativePath = stored.filePath;
+  const fileSha256 = createHash('sha256').update(file.buffer).digest('hex');
+  const uploadedBy = String((req as any).user?.email || '') || null;
 
   // OFX/QFX is stored for manual review right now.
   if (fileType === 'ofx') {
@@ -874,6 +962,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       fileType: fileType as 'ofx',
       status: 'pending_review',
       filePath: relativePath,
+      fileSha256,
+      uploadedBy,
+    });
+    const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+    writeAuditLog({
+      db,
+      req,
+      action: 'upload_statement_file',
+      tableName: 'bank_uploads',
+      recordId: result.upload_id as any,
+      before: null,
+      after: { upload, result },
     });
 
     res.json({
@@ -906,6 +1006,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
         fileType: 'pdf',
         status: hasRows ? 'parsed' : 'pending_review',
         filePath: relativePath,
+        fileSha256,
+        uploadedBy,
+      });
+      const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+      writeAuditLog({
+        db,
+        req,
+        action: 'import_statement_file',
+        tableName: 'bank_uploads',
+        recordId: result.upload_id as any,
+        before: null,
+        after: { upload, result, inferred_rows: rows.length },
       });
 
       res.json({
@@ -936,6 +1048,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       fileType: fileType as 'csv' | 'xls' | 'xlsx',
       status,
       filePath: relativePath,
+      fileSha256,
+      uploadedBy,
+    });
+    const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+    writeAuditLog({
+      db,
+      req,
+      action: 'import_statement_file',
+      tableName: 'bank_uploads',
+      recordId: result.upload_id as any,
+      before: null,
+      after: { upload, result, inferred_rows: rows.length },
     });
 
     res.json({
@@ -982,8 +1106,9 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
       file.mimetype
     );
     const relativePath = stored.filePath;
-    const tx = db.transaction(() => {
-    const docResult = db.prepare(`
+    try {
+      const tx = db.transaction(() => {
+        const docResult = db.prepare(`
       INSERT INTO documents (parent_id, parent_type, name, category, file_path, file_type, requires_signature, uploaded_by)
       VALUES (?, 'unit', ?, 'financial', ?, ?, 0, ?)
     `).run(
@@ -993,53 +1118,79 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
       file.mimetype,
       (req as any).user?.email || 'unknown',
     );
-    const documentId = Number(docResult.lastInsertRowid);
+        const documentId = Number(docResult.lastInsertRowid);
 
-    const existingTransactionId = req.body.transactionId ? Number(req.body.transactionId) : null;
-    const createExpense = String(req.body.createExpense || '').toLowerCase() === 'true';
+        const existingTransactionId = req.body.transactionId ? Number(req.body.transactionId) : null;
+        const createExpense = String(req.body.createExpense || '').toLowerCase() === 'true';
 
-    let transactionId: number | null = null;
+        let transactionId: number | null = null;
 
-    if (existingTransactionId) {
-      const existing = db.prepare('SELECT id, portfolio_unit_id FROM cash_flow_actuals WHERE id = ?').get(existingTransactionId) as any;
-      if (!existing) {
-        throw new Error('Transaction not found');
-      }
-      db.prepare(`
+        if (existingTransactionId) {
+          const before = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(existingTransactionId) as any;
+          if (!before) {
+            throw new Error('Transaction not found');
+          }
+          assertPeriodOpen(db, String(before.date));
+          db.prepare(`
         UPDATE cash_flow_actuals
         SET portfolio_unit_id = COALESCE(portfolio_unit_id, ?),
             source_file = ?,
             receipt_document_id = ?
         WHERE id = ?
       `).run(portfolioUnitId, relativePath, documentId, existingTransactionId);
-      transactionId = existingTransactionId;
-    } else if (createExpense) {
-      const date = parseDateValue(req.body.date);
-      const amount = parseAmount(req.body.amount);
-      const category = String(req.body.category || 'other').toLowerCase();
-      const description = String(req.body.description || '').trim() || 'Receipt expense';
-      if (!date || amount === null) {
-        throw new Error('Valid date and amount are required to create expense');
-      }
-      const allowedCats = new Set(['hoa', 'insurance', 'tax', 'repair', 'management_fee', 'fund_expense', 'other']);
-      const safeCategory = allowedCats.has(category) ? category : 'other';
-      const insertResult = db.prepare(`
+          transactionId = existingTransactionId;
+          const after = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(existingTransactionId) as any;
+          writeAuditLog({
+            db,
+            req,
+            action: 'attach_receipt',
+            tableName: 'cash_flow_actuals',
+            recordId: existingTransactionId,
+            before,
+            after,
+          });
+        } else if (createExpense) {
+          const date = parseDateValue(req.body.date);
+          const amount = parseAmount(req.body.amount);
+          const category = String(req.body.category || 'other').toLowerCase();
+          const description = String(req.body.description || '').trim() || 'Receipt expense';
+          if (!date || amount === null) {
+            throw new Error('Valid date and amount are required to create expense');
+          }
+          assertPeriodOpen(db, date);
+          const allowedCats = new Set(['hoa', 'insurance', 'tax', 'repair', 'management_fee', 'fund_expense', 'other']);
+          const safeCategory = allowedCats.has(category) ? category : 'other';
+          const insertResult = db.prepare(`
         INSERT INTO cash_flow_actuals (
           portfolio_unit_id, date, amount, category, description, source_file, receipt_document_id, reconciled
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
       `).run(portfolioUnitId, date, amount, safeCategory, description, relativePath, documentId);
-      transactionId = Number(insertResult.lastInsertRowid);
-    }
+          transactionId = Number(insertResult.lastInsertRowid);
+          const created = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(transactionId) as any;
+          writeAuditLog({
+            db,
+            req,
+            action: 'create_from_receipt',
+            tableName: 'cash_flow_actuals',
+            recordId: transactionId,
+            before: null,
+            after: created,
+          });
+        }
 
-    return { documentId, transactionId, filePath: relativePath };
-    });
-    const result = tx();
-    res.status(201).json({
-      success: true,
-      document_id: result.documentId,
-      transaction_id: result.transactionId,
-      file_path: result.filePath,
-    });
+        return { documentId, transactionId, filePath: relativePath };
+      });
+      const result = tx();
+      res.status(201).json({
+        success: true,
+        document_id: result.documentId,
+        transaction_id: result.transactionId,
+        file_path: result.filePath,
+      });
+    } catch (error: any) {
+      await deleteStoredFile(relativePath);
+      throw error;
+    }
   })().catch((error: any) => {
     res.status(400).json({ error: error?.message || 'Failed to save receipt' });
   });
@@ -1049,10 +1200,25 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
 router.put('/transactions/:id', (req: Request, res: Response) => {
   const db = getDb();
   const { id } = req.params;
-  const { category, portfolio_unit_id, lp_account_id, capital_call_item_id, reconciled, description, statement_ref } = req.body;
+  const {
+    category,
+    portfolio_unit_id,
+    entity_id,
+    unit_renovation_id,
+    lp_account_id,
+    capital_call_item_id,
+    reconciled,
+    description,
+    statement_ref
+  } = req.body;
   const before = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(id)) as any;
   if (!before) {
     return res.status(404).json({ error: 'Transaction not found' });
+  }
+  try {
+    assertPeriodOpen(db, String(before.date));
+  } catch (error: any) {
+    return res.status(error?.statusCode || 409).json({ error: error?.message || 'Accounting period is closed' });
   }
 
   const updates: string[] = [];
@@ -1065,6 +1231,14 @@ router.put('/transactions/:id', (req: Request, res: Response) => {
   if (portfolio_unit_id !== undefined) {
     updates.push('portfolio_unit_id = ?');
     params.push(portfolio_unit_id);
+  }
+  if (entity_id !== undefined) {
+    updates.push('entity_id = ?');
+    params.push(entity_id || null);
+  }
+  if (unit_renovation_id !== undefined) {
+    updates.push('unit_renovation_id = ?');
+    params.push(unit_renovation_id || null);
   }
   if (lp_account_id !== undefined) {
     updates.push('lp_account_id = ?');
@@ -1085,10 +1259,6 @@ router.put('/transactions/:id', (req: Request, res: Response) => {
   if (statement_ref !== undefined) {
     updates.push('statement_ref = ?');
     params.push(statement_ref || null);
-    if (statement_ref) {
-      updates.push('reconciled = ?');
-      params.push(1);
-    }
   }
 
   if (updates.length === 0) {
@@ -1099,6 +1269,22 @@ router.put('/transactions/:id', (req: Request, res: Response) => {
   const nextLpAccountId = lp_account_id !== undefined ? (lp_account_id || null) : (before.lp_account_id || null);
   const nextCallItemId = capital_call_item_id !== undefined ? (capital_call_item_id || null) : (before.capital_call_item_id || null);
   const nextPortfolioUnitId = portfolio_unit_id !== undefined ? (portfolio_unit_id || null) : (before.portfolio_unit_id || null);
+  const nextEntityId = entity_id !== undefined ? (entity_id || null) : (before.entity_id || null);
+  const nextRenoId = unit_renovation_id !== undefined ? (unit_renovation_id || null) : (before.unit_renovation_id || null);
+
+  if (nextPortfolioUnitId && nextEntityId) {
+    return res.status(400).json({ error: 'Pick either a Unit or an Entity (not both).' });
+  }
+  if (nextRenoId && !nextPortfolioUnitId) {
+    return res.status(400).json({ error: 'Renovation assignment requires a Unit.' });
+  }
+  if (nextRenoId && nextPortfolioUnitId) {
+    const reno = db.prepare(`SELECT id, portfolio_unit_id FROM unit_renovations WHERE id = ?`).get(Number(nextRenoId)) as any;
+    if (!reno) return res.status(400).json({ error: 'Renovation not found.' });
+    if (Number(reno.portfolio_unit_id) !== Number(nextPortfolioUnitId)) {
+      return res.status(400).json({ error: 'Renovation does not belong to selected Unit.' });
+    }
+  }
   if (nextCategory === 'capital_call' && (!nextLpAccountId || !nextCallItemId)) {
     return res.status(400).json({ error: 'capital_call transactions must be assigned to an LP account and capital call item' });
   }
@@ -1120,6 +1306,24 @@ router.put('/transactions/:id', (req: Request, res: Response) => {
         params[idx] = null;
       } else {
         updates.push('portfolio_unit_id = ?');
+        params.push(null);
+      }
+    }
+    if (nextEntityId) {
+      if (updates.includes('entity_id = ?')) {
+        const idx = updates.indexOf('entity_id = ?');
+        params[idx] = null;
+      } else {
+        updates.push('entity_id = ?');
+        params.push(null);
+      }
+    }
+    if (nextRenoId) {
+      if (updates.includes('unit_renovation_id = ?')) {
+        const idx = updates.indexOf('unit_renovation_id = ?');
+        params[idx] = null;
+      } else {
+        updates.push('unit_renovation_id = ?');
         params.push(null);
       }
     }
@@ -1151,8 +1355,387 @@ router.put('/transactions/:id', (req: Request, res: Response) => {
   if (row) {
     syncUnitExpenseFromActual(db, row);
     syncCapitalCallFromActual(db, row, before.lp_account_id || null, before.capital_call_item_id || null);
+    writeAuditLog({
+      db,
+      req,
+      action: 'update',
+      tableName: 'cash_flow_actuals',
+      recordId: row.id,
+      before,
+      after: row,
+    });
   }
 
+  res.json({ success: true });
+});
+
+// GET /api/actuals/renovations-options - lightweight list for Actuals allocation dropdowns
+router.get('/renovations-options', (req: Request, res: Response) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT
+      ur.id,
+      ur.portfolio_unit_id,
+      ur.description,
+      ur.status,
+      bu.unit_number
+    FROM unit_renovations ur
+    JOIN portfolio_units pu ON ur.portfolio_unit_id = pu.id
+    JOIN building_units bu ON pu.building_unit_id = bu.id
+    ORDER BY ur.portfolio_unit_id, ur.id DESC
+  `).all();
+  res.json(rows);
+});
+
+// POST /api/actuals/transactions/:id/split - split one allocation into two
+router.post('/transactions/:id/split', (req: Request, res: Response) => {
+  const db = getDb();
+  const { id } = req.params;
+  const { amount, category, portfolio_unit_id, entity_id, unit_renovation_id, description } = req.body as any;
+
+  const base = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(id)) as any;
+  if (!base) return res.status(404).json({ error: 'Transaction not found' });
+  try {
+    assertPeriodOpen(db, String(base.date));
+  } catch (error: any) {
+    return res.status(error?.statusCode || 409).json({ error: error?.message || 'Accounting period is closed' });
+  }
+  if (!base.bank_transaction_id) return res.status(400).json({ error: 'This transaction cannot be split (missing bank_transaction_id).' });
+
+  const splitAmount = Number(amount);
+  if (!Number.isFinite(splitAmount) || Math.abs(splitAmount) < 0.0001) {
+    return res.status(400).json({ error: 'Split amount is required.' });
+  }
+  if (splitAmount === 0) return res.status(400).json({ error: 'Split amount cannot be 0.' });
+  if ((splitAmount > 0) !== (Number(base.amount) > 0)) {
+    return res.status(400).json({ error: 'Split amount must have the same sign as the original amount.' });
+  }
+  if (Math.abs(splitAmount) >= Math.abs(Number(base.amount))) {
+    return res.status(400).json({ error: 'Split amount must be smaller than the original amount.' });
+  }
+
+  const nextBaseAmount = Number(base.amount) - splitAmount;
+
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE cash_flow_actuals SET amount = ?, reconciled = 0 WHERE id = ?')
+      .run(nextBaseAmount, Number(id));
+
+    const result = db.prepare(`
+      INSERT INTO cash_flow_actuals (
+        bank_transaction_id,
+        portfolio_unit_id, entity_id, unit_renovation_id,
+        lp_account_id, capital_call_item_id,
+        date, amount, category, description, source_file, statement_ref, receipt_document_id, reconciled
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
+      )
+    `).run(
+      Number(base.bank_transaction_id),
+      portfolio_unit_id ?? null,
+      entity_id ?? null,
+      unit_renovation_id ?? null,
+      null,
+      null,
+      String(base.date),
+      splitAmount,
+      String(category || base.category),
+      String(description || base.description || '').trim() || null,
+      String(base.source_file || ''),
+      String(base.statement_ref || ''),
+      null,
+    );
+
+    return Number(result.lastInsertRowid);
+  });
+
+  const newId = tx();
+  const created = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(newId);
+  writeAuditLog({
+    db,
+    req,
+    action: 'split',
+    tableName: 'cash_flow_actuals',
+    recordId: String(id),
+    before: { base },
+    after: { createdId: newId, created },
+  });
+  res.status(201).json({ success: true, id: newId, row: created });
+});
+
+// DELETE /api/actuals/transactions/:id - delete one allocation row
+router.delete('/transactions/:id', (req: Request, res: Response) => {
+  const db = getDb();
+  const id = Number(req.params.id);
+  const before = db.prepare('SELECT id, date FROM cash_flow_actuals WHERE id = ?').get(id) as any;
+  if (!before) return res.status(404).json({ error: 'Transaction not found' });
+  try {
+    assertPeriodOpen(db, String(before.date));
+  } catch (error: any) {
+    return res.status(error?.statusCode || 409).json({ error: error?.message || 'Accounting period is closed' });
+  }
+  const fullBefore = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(id) as any;
+  db.prepare('DELETE FROM cash_flow_actuals WHERE id = ?').run(id);
+  writeAuditLog({
+    db,
+    req,
+    action: 'delete',
+    tableName: 'cash_flow_actuals',
+    recordId: id,
+    before: fullBefore,
+    after: null,
+  });
+  res.json({ success: true });
+});
+
+// GET /api/actuals/bank-lines - bank transactions with allocations and delta
+router.get('/bank-lines', (req: Request, res: Response) => {
+  const db = getDb();
+  const { upload_id, month, limit = 200, offset = 0 } = req.query as any;
+
+  let where = 'WHERE 1=1';
+  const params: any[] = [];
+  if (upload_id) {
+    where += ' AND bt.bank_upload_id = ?';
+    params.push(Number(upload_id));
+  }
+  if (month) {
+    const m = String(month);
+    where += ` AND bt.date >= ? AND bt.date <= ?`;
+    params.push(`${m}-01`, `${m}-31`);
+  }
+
+  const bankRows = db.prepare(`
+    SELECT
+      bt.*,
+      COALESCE(SUM(cfa.amount), 0) as allocated_total,
+      (bt.amount - COALESCE(SUM(cfa.amount), 0)) as delta,
+      COALESCE(SUM(CASE WHEN cfa.reconciled = 1 THEN 1 ELSE 0 END), 0) as reconciled_alloc_count,
+      COALESCE(COUNT(cfa.id), 0) as alloc_count
+    FROM bank_transactions bt
+    LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+    ${where}
+    GROUP BY bt.id
+    ORDER BY bt.date DESC, bt.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, Number(limit), Number(offset)) as any[];
+
+  const ids = bankRows.map((r) => r.id);
+  if (ids.length === 0) return res.json([]);
+  const ph = ids.map(() => '?').join(', ');
+  const allocations = db.prepare(`
+    SELECT
+      cfa.*,
+      bu.unit_number,
+      e.name as entity_name,
+      ur.description as renovation_description
+    FROM cash_flow_actuals cfa
+    LEFT JOIN portfolio_units pu ON cfa.portfolio_unit_id = pu.id
+    LEFT JOIN building_units bu ON pu.building_unit_id = bu.id
+    LEFT JOIN entities e ON cfa.entity_id = e.id
+    LEFT JOIN unit_renovations ur ON cfa.unit_renovation_id = ur.id
+    WHERE cfa.bank_transaction_id IN (${ph})
+    ORDER BY cfa.bank_transaction_id, cfa.id
+  `).all(...ids) as any[];
+
+  const byBank = new Map<number, any[]>();
+  for (const a of allocations) {
+    const k = Number(a.bank_transaction_id);
+    byBank.set(k, [...(byBank.get(k) || []), a]);
+  }
+
+  res.json(bankRows.map((b) => ({
+    ...b,
+    allocations: byBank.get(Number(b.id)) || [],
+  })));
+});
+
+// POST /api/actuals/bank-lines/:id/allocations - add a new allocation row under one bank line
+router.post('/bank-lines/:id/allocations', (req: Request, res: Response) => {
+  const db = getDb();
+  const bankId = Number(req.params.id);
+  if (!bankId) return res.status(400).json({ error: 'Invalid bank transaction id' });
+
+  const bank = db.prepare(`SELECT * FROM bank_transactions WHERE id = ?`).get(bankId) as any;
+  if (!bank) return res.status(404).json({ error: 'Bank transaction not found' });
+
+  try {
+    assertPeriodOpen(db, String(bank.date));
+  } catch (error: any) {
+    return res.status(error?.statusCode || 409).json({ error: error?.message || 'Accounting period is closed' });
+  }
+
+  const {
+    amount,
+    category,
+    portfolio_unit_id,
+    entity_id,
+    unit_renovation_id,
+    lp_account_id,
+    capital_call_item_id,
+    description,
+  } = req.body as any;
+
+  const allocAmount = Number(amount);
+  if (!Number.isFinite(allocAmount) || allocAmount === 0) {
+    return res.status(400).json({ error: 'amount is required' });
+  }
+  const bankAmt = Number(bank.amount || 0);
+  if ((allocAmount > 0) !== (bankAmt > 0)) {
+    return res.status(400).json({ error: 'Allocation amount must have the same sign as the bank line amount.' });
+  }
+
+  const cat = String(category || '').trim();
+  const allowedCats = new Set([
+    'rent',
+    'hoa',
+    'insurance',
+    'tax',
+    'repair',
+    'capital_call',
+    'distribution',
+    'management_fee',
+    'fund_expense',
+    'other',
+  ]);
+  if (!allowedCats.has(cat)) {
+    return res.status(400).json({ error: 'Invalid category' });
+  }
+
+  const unitId = portfolio_unit_id ? Number(portfolio_unit_id) : null;
+  const entityId = entity_id ? Number(entity_id) : null;
+  const renoId = unit_renovation_id ? Number(unit_renovation_id) : null;
+
+  if (unitId && entityId) {
+    return res.status(400).json({ error: 'Pick either a Unit or an Entity (not both).' });
+  }
+  if (renoId && !unitId) {
+    return res.status(400).json({ error: 'Renovation assignment requires a Unit.' });
+  }
+  if (renoId && unitId) {
+    const reno = db.prepare(`SELECT id, portfolio_unit_id FROM unit_renovations WHERE id = ?`).get(renoId) as any;
+    if (!reno) return res.status(400).json({ error: 'Renovation not found.' });
+    if (Number(reno.portfolio_unit_id) !== Number(unitId)) {
+      return res.status(400).json({ error: 'Renovation does not belong to selected Unit.' });
+    }
+  }
+
+  // Capital call allocations must be tied to LP + call item
+  let lpId = lp_account_id ? Number(lp_account_id) : null;
+  let callItemId = capital_call_item_id ? Number(capital_call_item_id) : null;
+  if (cat === 'capital_call') {
+    if (!lpId || !callItemId) {
+      return res.status(400).json({ error: 'capital_call allocations must include lp_account_id and capital_call_item_id' });
+    }
+    // Verify call item belongs to LP
+    const item = db.prepare(`SELECT id, lp_account_id FROM capital_call_items WHERE id = ?`).get(callItemId) as any;
+    if (!item || Number(item.lp_account_id) !== Number(lpId)) {
+      return res.status(400).json({ error: 'Selected capital call item does not belong to selected LP.' });
+    }
+  } else {
+    lpId = null;
+    callItemId = null;
+  }
+
+  const rowDesc = String(description || bank.description || '').trim() || null;
+  const result = db.prepare(`
+    INSERT INTO cash_flow_actuals (
+      bank_transaction_id,
+      portfolio_unit_id, entity_id, unit_renovation_id,
+      lp_account_id, capital_call_item_id,
+      date, amount, category, description, source_file, statement_ref, reconciled
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+  `).run(
+    bankId,
+    unitId,
+    entityId,
+    renoId,
+    lpId,
+    callItemId,
+    String(bank.date),
+    allocAmount,
+    cat,
+    rowDesc,
+    String(bank.source_file || ''),
+    String(bank.statement_ref || ''),
+  );
+
+  const created = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(result.lastInsertRowid));
+  writeAuditLog({
+    db,
+    req,
+    action: 'create',
+    tableName: 'cash_flow_actuals',
+    recordId: result.lastInsertRowid as any,
+    before: null,
+    after: created,
+  });
+  res.status(201).json({ success: true, id: result.lastInsertRowid, row: created });
+});
+
+// GET /api/actuals/periods - list closed periods
+router.get('/periods', (req: Request, res: Response) => {
+  const db = getDb();
+  const rows = db.prepare(`SELECT * FROM accounting_periods ORDER BY month DESC`).all();
+  res.json(rows);
+});
+
+// POST /api/actuals/periods/:month/close - close a month (all bank lines must be allocated/balanced/reconciled)
+router.post('/periods/:month/close', (req: Request, res: Response) => {
+  const db = getDb();
+  const m = String(req.params.month || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(m)) return res.status(400).json({ error: 'Month must be YYYY-MM' });
+  const from = `${m}-01`;
+  const to = `${m}-31`;
+
+  const check = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM bank_transactions bt WHERE bt.date >= ? AND bt.date <= ?) as bank_rows,
+      (SELECT COUNT(*) FROM bank_transactions bt
+        LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+        WHERE bt.date >= ? AND bt.date <= ?
+        GROUP BY bt.id
+        HAVING COALESCE(SUM(cfa.amount), 0) = 0
+      ) as unallocated_lines,
+      (SELECT COUNT(*) FROM bank_transactions bt
+        LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+        WHERE bt.date >= ? AND bt.date <= ?
+        GROUP BY bt.id, bt.amount
+        HAVING ABS(bt.amount - COALESCE(SUM(cfa.amount), 0)) > 0.005
+      ) as out_of_balance_lines,
+      (SELECT COUNT(*) FROM cash_flow_actuals cfa
+        JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+        WHERE bt.date >= ? AND bt.date <= ? AND cfa.reconciled = 0
+      ) as unreconciled_allocs
+  `).get(from, to, from, to, from, to, from, to) as any;
+
+  const bankRows = Number(check?.bank_rows || 0);
+  const unallocated = Number(check?.unallocated_lines || 0);
+  const outOfBalance = Number(check?.out_of_balance_lines || 0);
+  const unreconciledAllocs = Number(check?.unreconciled_allocs || 0);
+
+  if (bankRows > 0 && (unallocated > 0 || outOfBalance > 0 || unreconciledAllocs > 0)) {
+    return res.status(400).json({
+      error: 'Month is not fully reconciled.',
+      details: { month: m, bankRows, unallocated, outOfBalance, unreconciledAllocs },
+    });
+  }
+
+  const userEmail = String((req as any).user?.email || '');
+  db.prepare(`
+    INSERT INTO accounting_periods (month, status, closed_at, closed_by)
+    VALUES (?, 'closed', datetime('now'), ?)
+    ON CONFLICT(month) DO UPDATE SET status='closed', closed_at=datetime('now'), closed_by=excluded.closed_by
+  `).run(m, userEmail || null);
+
+  writeAuditLog({
+    db,
+    req,
+    action: 'close_month',
+    tableName: 'accounting_periods',
+    recordId: m,
+    before: null,
+    after: { month: m, status: 'closed' },
+  });
   res.json({ success: true });
 });
 
@@ -1160,29 +1743,39 @@ router.put('/transactions/:id', (req: Request, res: Response) => {
 router.get('/variance', (req: Request, res: Response) => {
   const db = getDb();
 
-  // Get actuals grouped by category
+  // Compare a *real* calendar month (no smoothing of annual items).
+  // Default: current month in server time.
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = now.getFullYear();
+  const from = `${year}-${String(month).padStart(2, '0')}-01`;
+  const to = `${year}-${String(month).padStart(2, '0')}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`;
+
+  // Get reconciled actuals grouped by category for this month
   const actuals = db.prepare(`
     SELECT category, SUM(amount) as total, COUNT(*) as count
     FROM cash_flow_actuals
+    WHERE reconciled = 1
+      AND date >= ? AND date <= ?
     GROUP BY category
     ORDER BY total DESC
-  `).all() as any[];
+  `).all(from, to) as any[];
 
-  // Get forecast from portfolio units (monthly projections)
+  // Get forecast from portfolio units (month-specific; insurance/tax are annual lumps in their payment month)
   const portfolio = db.prepare(`
     SELECT
-      SUM(monthly_rent) as forecast_rent,
-      SUM(monthly_hoa) as forecast_hoa,
-      SUM(monthly_insurance) as forecast_insurance,
-      SUM(monthly_tax) as forecast_tax
+      SUM(COALESCE(monthly_rent, 0)) as forecast_rent,
+      SUM(COALESCE(monthly_hoa, 0)) as forecast_hoa,
+      SUM(CASE WHEN COALESCE(insurance_payment_month, 1) = ? THEN COALESCE(monthly_insurance, 0) ELSE 0 END) as forecast_insurance_lump,
+      SUM(CASE WHEN COALESCE(tax_payment_month, 1) = ? THEN COALESCE(monthly_tax, 0) ELSE 0 END) as forecast_tax_lump
     FROM portfolio_units
-  `).get() as any;
+  `).get(month, month) as any;
 
   const monthlyForecast = {
     rent: portfolio?.forecast_rent || 0,
     hoa: -(portfolio?.forecast_hoa || 0),
-    insurance: -((portfolio?.forecast_insurance || 0) / 12),
-    tax: -((portfolio?.forecast_tax || 0) / 12),
+    insurance: -(portfolio?.forecast_insurance_lump || 0),
+    tax: -(portfolio?.forecast_tax_lump || 0),
     fund_expense: -(75_000 / 12),
   };
 
@@ -1202,14 +1795,273 @@ router.get('/variance', (req: Request, res: Response) => {
     variance,
     actuals_by_category: actuals,
     monthly_forecast: monthlyForecast,
+    period: { from, to },
   });
 });
 
 // GET /api/actuals/uploads - List upload history
 router.get('/uploads', (req: Request, res: Response) => {
   const db = getDb();
-  const uploads = db.prepare('SELECT * FROM bank_uploads ORDER BY upload_date DESC').all();
+  const uploads = db.prepare(`
+    SELECT
+      u.*,
+      COALESCE((
+        SELECT COUNT(*) FROM bank_transactions bt
+        WHERE bt.bank_upload_id = u.id
+      ), 0) as bank_row_count,
+      COALESCE((
+        SELECT SUM(bt.amount) FROM bank_transactions bt
+        WHERE bt.bank_upload_id = u.id
+      ), 0) as bank_total_amount,
+      COALESCE((
+        SELECT COUNT(*) FROM cash_flow_actuals cfa
+        JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+        WHERE bt.bank_upload_id = u.id
+      ), 0) as alloc_row_count,
+      COALESCE((
+        SELECT SUM(cfa.amount) FROM cash_flow_actuals cfa
+        JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+        WHERE bt.bank_upload_id = u.id
+      ), 0) as alloc_total_amount,
+      COALESCE((
+        SELECT COUNT(*) FROM cash_flow_actuals cfa
+        JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+        WHERE bt.bank_upload_id = u.id AND cfa.reconciled = 1
+      ), 0) as reconciled_alloc_count,
+      COALESCE((
+        SELECT SUM(cfa.amount) FROM cash_flow_actuals cfa
+        JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+        WHERE bt.bank_upload_id = u.id AND cfa.reconciled = 1
+      ), 0) as reconciled_alloc_total_amount,
+      COALESCE((
+        SELECT COUNT(*) FROM bank_transactions bt
+        LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+        WHERE bt.bank_upload_id = u.id
+        GROUP BY bt.id
+        HAVING COALESCE(SUM(cfa.amount), 0) = 0
+      ), 0) as unallocated_bank_lines,
+      COALESCE((
+        SELECT COUNT(*) FROM bank_transactions bt
+        LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+        WHERE bt.bank_upload_id = u.id
+        GROUP BY bt.id, bt.amount
+        HAVING ABS(bt.amount - COALESCE(SUM(cfa.amount), 0)) > 0.005
+      ), 0) as out_of_balance_bank_lines
+    FROM bank_uploads u
+    ORDER BY u.upload_date DESC
+  `).all();
   res.json(uploads);
+});
+
+// POST /api/actuals/uploads/:id/close - mark a statement upload reconciled
+router.post('/uploads/:id/close', (req: Request, res: Response) => {
+  const db = getDb();
+  const uploadId = Number(req.params.id);
+  if (!uploadId) return res.status(400).json({ error: 'Invalid upload id' });
+
+  const row = db.prepare(`SELECT id, status FROM bank_uploads WHERE id = ?`).get(uploadId) as any;
+  if (!row) return res.status(404).json({ error: 'Upload not found' });
+
+  const check = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM bank_transactions bt WHERE bt.bank_upload_id = ?) as bank_rows,
+      (SELECT COUNT(*) FROM cash_flow_actuals cfa JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id WHERE bt.bank_upload_id = ? AND cfa.reconciled = 0) as unreconciled_allocs,
+      (SELECT COUNT(*) FROM bank_transactions bt
+        LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+        WHERE bt.bank_upload_id = ?
+        GROUP BY bt.id
+        HAVING COALESCE(SUM(cfa.amount), 0) = 0
+      ) as unallocated_lines,
+      (SELECT COUNT(*) FROM bank_transactions bt
+        LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+        WHERE bt.bank_upload_id = ?
+        GROUP BY bt.id, bt.amount
+        HAVING ABS(bt.amount - COALESCE(SUM(cfa.amount), 0)) > 0.005
+      ) as out_of_balance_lines
+  `).get(uploadId, uploadId, uploadId, uploadId) as any;
+
+  const bankRows = Number(check?.bank_rows || 0);
+  const unreconciledAllocs = Number(check?.unreconciled_allocs || 0);
+  const unallocated = Number(check?.unallocated_lines || 0);
+  const outOfBalance = Number(check?.out_of_balance_lines || 0);
+
+  if (bankRows === 0) {
+    return res.status(400).json({ error: 'This upload has no bank transactions.' });
+  }
+  if (unallocated > 0 || outOfBalance > 0 || unreconciledAllocs > 0) {
+    return res.status(400).json({
+      error: 'Upload is not fully reconciled.',
+      details: { bankRows, unallocated, outOfBalance, unreconciledAllocs },
+    });
+  }
+
+  const before = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(uploadId) as any;
+  db.prepare(`UPDATE bank_uploads SET status = 'reconciled' WHERE id = ?`).run(uploadId);
+  const after = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(uploadId) as any;
+  writeAuditLog({
+    db,
+    req,
+    action: 'close_upload',
+    tableName: 'bank_uploads',
+    recordId: uploadId,
+    before,
+    after,
+  });
+  res.json({ success: true });
+});
+
+function csvEscape(v: any): string {
+  const s = v === null || v === undefined ? '' : String(v);
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function asMonthRange(month: string): { from: string; toExclusive: string } | null {
+  if (!/^\d{4}-\d{2}$/.test(month)) return null;
+  const [yStr, mStr] = month.split('-');
+  const year = Number(yStr);
+  const m0 = Number(mStr) - 1;
+  if (!Number.isFinite(year) || !Number.isFinite(m0) || m0 < 0 || m0 > 11) return null;
+  const from = `${yStr}-${mStr}-01`;
+  const next = new Date(year, m0 + 1, 1);
+  const toExclusive = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-01`;
+  return { from, toExclusive };
+}
+
+// GET /api/actuals/exports/month/:month?type=allocations|bank_lines|quickbooks_bank|quickbooks_details
+router.get('/exports/month/:month', (req: Request, res: Response) => {
+  const db = getDb();
+  const month = String(req.params.month || '');
+  const type = String(req.query.type || 'allocations');
+  const range = asMonthRange(month);
+  if (!range) return res.status(400).json({ error: 'Invalid month. Expected YYYY-MM.' });
+
+  const { from, toExclusive } = range;
+
+  if (type === 'bank_lines' || type === 'quickbooks_bank') {
+    const rows = db.prepare(`
+      SELECT
+        bt.id as bank_transaction_id,
+        bt.date,
+        bt.amount,
+        bt.description,
+        bt.statement_ref,
+        bu.filename as upload_filename
+      FROM bank_transactions bt
+      LEFT JOIN bank_uploads bu ON bu.id = bt.bank_upload_id
+      WHERE bt.date >= ? AND bt.date < ?
+      ORDER BY bt.date ASC, bt.id ASC
+    `).all(from, toExclusive) as any[];
+
+    const header = type === 'quickbooks_bank'
+      ? ['Date', 'Description', 'Amount']
+      : ['BankTransactionId', 'Date', 'Description', 'Amount', 'StatementRef', 'UploadFilename'];
+
+    const lines = [header.join(',')];
+    for (const r of rows) {
+      if (type === 'quickbooks_bank') {
+        lines.push([r.date, r.description || '', r.amount].map(csvEscape).join(','));
+      } else {
+        lines.push([r.bank_transaction_id, r.date, r.description || '', r.amount, r.statement_ref || '', r.upload_filename || '']
+          .map(csvEscape)
+          .join(','));
+      }
+    }
+
+    const filename = type === 'quickbooks_bank'
+      ? `quickbooks-bank-upload-${month}.csv`
+      : `bank-lines-${month}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(lines.join('\n'));
+    return;
+  }
+
+  // allocations / quickbooks_details (both are allocation-level exports, with different columns)
+  const allocations = db.prepare(`
+    SELECT
+      cfa.*,
+      bt.amount as bank_amount,
+      bt.description as bank_description,
+      bt.statement_ref,
+      bu.filename as upload_filename,
+      e.name as entity_name,
+      ur.description as renovation_description,
+      bu2.unit_number
+    FROM cash_flow_actuals cfa
+    LEFT JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+    LEFT JOIN bank_uploads bu ON bu.id = bt.bank_upload_id
+    LEFT JOIN portfolio_units pu ON pu.id = cfa.portfolio_unit_id
+    LEFT JOIN building_units bu2 ON bu2.id = pu.building_unit_id
+    LEFT JOIN entities e ON e.id = cfa.entity_id
+    LEFT JOIN unit_renovations ur ON ur.id = cfa.unit_renovation_id
+    WHERE cfa.date >= ? AND cfa.date < ?
+    ORDER BY cfa.date ASC, cfa.id ASC
+  `).all(from, toExclusive) as any[];
+
+  const header = type === 'quickbooks_details'
+    ? [
+        'Date',
+        'Description',
+        'Amount',
+        'Category',
+        'Unit',
+        'Entity',
+        'Renovation',
+        'StatementRef',
+      ]
+    : [
+        'AllocationId',
+        'BankTransactionId',
+        'Date',
+        'Amount',
+        'Category',
+        'Description',
+        'Unit',
+        'Entity',
+        'Renovation',
+        'UploadFilename',
+        'StatementRef',
+        'Reconciled',
+      ];
+
+  const lines = [header.join(',')];
+  for (const a of allocations) {
+    if (type === 'quickbooks_details') {
+      lines.push([
+        a.date,
+        a.description || a.bank_description || '',
+        a.amount,
+        a.category,
+        a.unit_number || '',
+        a.entity_name || '',
+        a.renovation_description || '',
+        a.statement_ref || '',
+      ].map(csvEscape).join(','));
+    } else {
+      lines.push([
+        a.id,
+        a.bank_transaction_id || '',
+        a.date,
+        a.amount,
+        a.category,
+        a.description || '',
+        a.unit_number || '',
+        a.entity_name || '',
+        a.renovation_description || '',
+        a.upload_filename || '',
+        a.statement_ref || '',
+        a.reconciled ? 1 : 0,
+      ].map(csvEscape).join(','));
+    }
+  }
+
+  const filename = type === 'quickbooks_details'
+    ? `quickbooks-details-${month}.csv`
+    : `allocations-${month}.csv`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(lines.join('\n'));
 });
 
 /* ── Learned Mappings CRUD ───────────────────────────────────── */
@@ -1241,16 +2093,37 @@ router.post('/mappings', (req: Request, res: Response) => {
     `SELECT id FROM learned_mappings WHERE description_pattern = ?`
   ).get(pattern);
   if (existing) {
+    const before = db.prepare(`SELECT * FROM learned_mappings WHERE id = ?`).get((existing as any).id);
     // Update existing mapping
     db.prepare(
       `UPDATE learned_mappings SET portfolio_unit_id = ?, category = ? WHERE description_pattern = ?`
     ).run(portfolioUnitId, category || null, pattern);
+    const after = db.prepare(`SELECT * FROM learned_mappings WHERE id = ?`).get((existing as any).id);
+    writeAuditLog({
+      db,
+      req,
+      action: 'upsert',
+      tableName: 'learned_mappings',
+      recordId: (existing as any).id,
+      before,
+      after,
+    });
     return res.json({ success: true, updated: true });
   }
 
   const result = db.prepare(
     `INSERT INTO learned_mappings (description_pattern, portfolio_unit_id, category) VALUES (?, ?, ?)`
   ).run(pattern, portfolioUnitId, category || null);
+  const created = db.prepare(`SELECT * FROM learned_mappings WHERE id = ?`).get(Number(result.lastInsertRowid));
+  writeAuditLog({
+    db,
+    req,
+    action: 'create',
+    tableName: 'learned_mappings',
+    recordId: result.lastInsertRowid as any,
+    before: null,
+    after: created,
+  });
 
   res.json({
     id: result.lastInsertRowid,
@@ -1263,11 +2136,21 @@ router.delete('/mappings/:id', (req: Request, res: Response) => {
   const db = getDb();
   const { id } = req.params;
 
+  const before = db.prepare(`SELECT * FROM learned_mappings WHERE id = ?`).get(Number(id));
   const result = db.prepare(`DELETE FROM learned_mappings WHERE id = ?`).run(Number(id));
 
   if (result.changes === 0) {
     return res.status(404).json({ error: 'Mapping not found' });
   }
+  writeAuditLog({
+    db,
+    req,
+    action: 'delete',
+    tableName: 'learned_mappings',
+    recordId: String(id),
+    before,
+    after: null,
+  });
 
   res.json({ success: true });
 });

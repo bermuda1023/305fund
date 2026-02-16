@@ -578,6 +578,66 @@ router.get('/units/:id/documents', (req: Request, res: Response) => {
   res.json(docs);
 });
 
+// GET /api/portfolio/units/:id/costs - rollup of reconciled actuals + basis
+router.get('/units/:id/costs', (req: Request, res: Response) => {
+  const db = getDb();
+  const unitId = Number(req.params.id);
+  if (!unitId) return res.status(400).json({ error: 'Invalid unit id' });
+
+  const base = db.prepare(`
+    SELECT
+      pu.id,
+      pu.total_acquisition_cost,
+      bu.unit_number
+    FROM portfolio_units pu
+    JOIN building_units bu ON pu.building_unit_id = bu.id
+    WHERE pu.id = ?
+  `).get(unitId) as any;
+  if (!base) return res.status(404).json({ error: 'Unit not found' });
+
+  const byCat = db.prepare(`
+    SELECT category, SUM(amount) as total
+    FROM cash_flow_actuals
+    WHERE portfolio_unit_id = ?
+      AND reconciled = 1
+    GROUP BY category
+  `).all(unitId) as any[];
+  const totals: Record<string, number> = {};
+  for (const r of byCat) totals[String(r.category)] = Number(r.total || 0);
+
+  const renoLinked = db.prepare(`
+    SELECT COALESCE(SUM(-amount), 0) as total
+    FROM cash_flow_actuals
+    WHERE portfolio_unit_id = ?
+      AND reconciled = 1
+      AND unit_renovation_id IS NOT NULL
+      AND category = 'repair'
+  `).get(unitId) as any;
+
+  const repairUnlinked = db.prepare(`
+    SELECT COALESCE(SUM(-amount), 0) as total
+    FROM cash_flow_actuals
+    WHERE portfolio_unit_id = ?
+      AND reconciled = 1
+      AND unit_renovation_id IS NULL
+      AND category = 'repair'
+  `).get(unitId) as any;
+
+  const acquisition = Number(base.total_acquisition_cost || 0);
+  const renoSpend = Number(renoLinked?.total || 0);
+  const totalBasis = acquisition + renoSpend;
+
+  res.json({
+    unitId,
+    unitNumber: String(base.unit_number),
+    acquisitionCost: acquisition,
+    renovationSpend: renoSpend,
+    repairSpendUnlinked: Number(repairUnlinked?.total || 0),
+    totalBasis,
+    totalsByCategory: totals,
+  });
+});
+
 // --- Tenant Communications ---
 
 // GET /api/portfolio/tenants/:tenantId/communications

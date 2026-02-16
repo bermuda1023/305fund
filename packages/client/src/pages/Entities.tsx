@@ -730,12 +730,18 @@ function EntityAccountingTab({ entityId, entityName }: { entityId: number; entit
       if (unitIds.length === 0) return [];
       const results: ActualTransaction[] = [];
       for (const uid of unitIds) {
-        const res = await api.get(`/actuals/transactions?unit_id=${uid}&limit=200`);
+        const res = await api.get(`/actuals/transactions?unit_id=${uid}&reconciled=true&limit=500`);
         results.push(...res.data);
       }
       return results;
     },
     enabled: unitIds.length > 0,
+  });
+
+  // Fetch entity-level allocations (not tied to a unit) for this entity
+  const { data: entityActuals = [] } = useQuery<ActualTransaction[]>({
+    queryKey: ['entity-actuals-direct', entityId],
+    queryFn: () => api.get(`/actuals/transactions?entity_id=${entityId}&reconciled=true&limit=2000`).then((r) => r.data),
   });
 
   /* ---------- Computed metrics ---------- */
@@ -771,7 +777,7 @@ function EntityAccountingTab({ entityId, entityName }: { entityId: number; entit
 
   const actualsByMonth = useMemo(() => {
     const map = new Map<string, { income: number; expense: number }>();
-    for (const a of allActuals) {
+    for (const a of [...allActuals, ...entityActuals]) {
       const d = new Date(a.date);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       const entry = map.get(key) || { income: 0, expense: 0 };
@@ -783,7 +789,7 @@ function EntityAccountingTab({ entityId, entityName }: { entityId: number; entit
       map.set(key, entry);
     }
     return map;
-  }, [allActuals]);
+  }, [allActuals, entityActuals]);
 
   if (unitsLoading) {
     return <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading accounting data...</p>;

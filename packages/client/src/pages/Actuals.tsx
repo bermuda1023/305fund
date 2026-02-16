@@ -2,13 +2,20 @@ import { useState, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
 import { fmtCurrency, fmtNumber } from '../lib/format';
-import { formatNumberInput } from '../lib/numberInput';
+import { formatNumberInput, parseNumberInput } from '../lib/numberInput';
+import { openStoredFile } from '../lib/files';
 
 /* ── Interfaces ──────────────────────────────────────────────── */
 
 interface Transaction {
   id: number;
+  bank_transaction_id?: number | null;
+  bank_amount?: number | null;
   portfolio_unit_id: number | null;
+  entity_id?: number | null;
+  entity_name?: string | null;
+  unit_renovation_id?: number | null;
+  renovation_description?: string | null;
   lp_account_id?: number | null;
   lp_name?: string | null;
   capital_call_item_id?: number | null;
@@ -31,6 +38,14 @@ interface Upload {
   file_type: string;
   row_count: number;
   status: string;
+  bank_row_count?: number;
+  bank_total_amount?: number;
+  alloc_row_count?: number;
+  alloc_total_amount?: number;
+  reconciled_alloc_count?: number;
+  reconciled_alloc_total_amount?: number;
+  unallocated_bank_lines?: number;
+  out_of_balance_bank_lines?: number;
 }
 
 interface VarianceRow {
@@ -44,10 +59,24 @@ interface VarianceResponse {
   variance: VarianceRow[];
   actuals_by_category: { category: string; total: number; count: number }[];
   monthly_forecast: Record<string, number>;
+  period?: { from: string; to: string };
 }
 
 interface PortfolioUnit {
   id: number;
+  unit_number: string;
+}
+
+interface EntityOption {
+  id: number;
+  name: string;
+}
+
+interface RenovationOption {
+  id: number;
+  portfolio_unit_id: number;
+  description: string;
+  status: string;
   unit_number: string;
 }
 
@@ -199,9 +228,14 @@ export default function Actuals() {
   const [filterCategory, setFilterCategory] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterUploadId, setFilterUploadId] = useState('');
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
+  const [viewMode, setViewMode] = useState<'allocations' | 'bank_lines'>('allocations');
+  const [closeMonth, setCloseMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [exportMonth, setExportMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [newAllocByBankId, setNewAllocByBankId] = useState<Record<string, { amount: string; category: string; unitId: string; entityId: string; renoId: string }>>({});
 
   // "Learn this mapping" prompt state
   const [learnPrompt, setLearnPrompt] = useState<{ transactionId: number; description: string; unitId: number } | null>(null);
@@ -211,16 +245,125 @@ export default function Actuals() {
   const [newMappingUnitId, setNewMappingUnitId] = useState('');
   const [newMappingCategory, setNewMappingCategory] = useState('');
 
+  const downloadExport = async (type: string) => {
+    if (!exportMonth) return;
+    try {
+      setUploadFeedback(`Preparing export (${type})...`);
+      const resp = await api.get(`/actuals/exports/month/${exportMonth}`, {
+        params: { type },
+        responseType: 'blob',
+      });
+      const cd = String((resp as any).headers?.['content-disposition'] || '');
+      const match = cd.match(/filename="([^"]+)"/i);
+      const filename = match?.[1] || `export-${type}-${exportMonth}.csv`;
+      const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      setUploadFeedback(`Export downloaded: ${filename}`);
+      setTimeout(() => setUploadFeedback(null), 5000);
+    } catch (err: any) {
+      setUploadFeedback(`Export failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
+      setTimeout(() => setUploadFeedback(null), 8000);
+    }
+  };
+
   /* ── Queries ─────────────────────────────────────────────── */
 
   const { data: transactions = [] } = useQuery<Transaction[]>({
-    queryKey: ['actuals-transactions'],
-    queryFn: () => api.get('/actuals/transactions', { params: { limit: 5000 } }).then((r) => r.data),
+    queryKey: ['actuals-transactions', filterUploadId],
+    queryFn: () => api.get('/actuals/transactions', {
+      params: {
+        limit: 5000,
+        ...(filterUploadId ? { upload_id: Number(filterUploadId) } : {}),
+      },
+    }).then((r) => r.data),
   });
 
   const { data: uploads = [] } = useQuery<Upload[]>({
     queryKey: ['actuals-uploads'],
     queryFn: () => api.get('/actuals/uploads').then((r) => r.data),
+  });
+
+  const closeUpload = useMutation({
+    mutationFn: (uploadId: number) => api.post(`/actuals/uploads/${uploadId}/close`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['actuals-uploads'] });
+    },
+    onError: (err: any) => {
+      setUploadFeedback(`Close failed: ${err?.response?.data?.error || err?.message || 'Upload not ready to close'}`);
+      setTimeout(() => setUploadFeedback(null), 8000);
+    },
+  });
+
+  const { data: periods = [] } = useQuery<Array<{ month: string; status: string; closed_at?: string | null; closed_by?: string | null }>>({
+    queryKey: ['actuals-periods'],
+    queryFn: () => api.get('/actuals/periods').then((r) => r.data),
+  });
+
+  const closePeriod = useMutation({
+    mutationFn: (month: string) => api.post(`/actuals/periods/${month}/close`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['actuals-periods'] });
+      queryClient.invalidateQueries({ queryKey: ['actuals-uploads'] });
+      queryClient.invalidateQueries({ queryKey: ['actuals-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['actuals-bank-lines'] });
+      setUploadFeedback(`Closed accounting period ${closeMonth}.`);
+      setTimeout(() => setUploadFeedback(null), 6000);
+    },
+    onError: (err: any) => {
+      setUploadFeedback(`Month close failed: ${err?.response?.data?.error || err?.message || 'Not ready to close'}`);
+      setTimeout(() => setUploadFeedback(null), 8000);
+    },
+  });
+
+  const deleteAllocation = useMutation({
+    mutationFn: (id: number) => api.delete(`/actuals/transactions/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['actuals-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['actuals-uploads'] });
+    },
+    onError: (err: any) => {
+      setUploadFeedback(`Delete failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
+      setTimeout(() => setUploadFeedback(null), 8000);
+    },
+  });
+
+  const { data: bankLines = [] } = useQuery<any[]>({
+    queryKey: ['actuals-bank-lines', filterUploadId],
+    queryFn: () => api.get('/actuals/bank-lines', {
+      params: {
+        ...(filterUploadId ? { upload_id: Number(filterUploadId) } : {}),
+        limit: 500,
+      },
+    }).then((r) => r.data),
+    enabled: viewMode === 'bank_lines',
+  });
+
+  const createAllocation = useMutation({
+    mutationFn: (payload: { bankId: number; amount: number; category: string; portfolioUnitId?: number | null; entityId?: number | null; unitRenovationId?: number | null }) => {
+      return api.post(`/actuals/bank-lines/${payload.bankId}/allocations`, {
+        amount: payload.amount,
+        category: payload.category,
+        portfolio_unit_id: payload.portfolioUnitId ?? null,
+        entity_id: payload.entityId ?? null,
+        unit_renovation_id: payload.unitRenovationId ?? null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['actuals-bank-lines'] });
+      queryClient.invalidateQueries({ queryKey: ['actuals-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['actuals-uploads'] });
+    },
+    onError: (err: any) => {
+      setUploadFeedback(`Add allocation failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
+      setTimeout(() => setUploadFeedback(null), 8000);
+    },
   });
 
   const { data: variance = [] } = useQuery<VarianceRow[]>({
@@ -231,6 +374,16 @@ export default function Actuals() {
   const { data: portfolioUnits = [] } = useQuery<PortfolioUnit[]>({
     queryKey: ['portfolio'],
     queryFn: () => api.get('/portfolio').then((r) => r.data),
+  });
+
+  const { data: entities = [] } = useQuery<EntityOption[]>({
+    queryKey: ['entities'],
+    queryFn: () => api.get('/entities').then((r) => r.data),
+  });
+
+  const { data: renovationOptions = [] } = useQuery<RenovationOption[]>({
+    queryKey: ['actuals-renovations-options'],
+    queryFn: () => api.get('/actuals/renovations-options').then((r) => r.data),
   });
 
   const { data: learnedMappings = [] } = useQuery<LearnedMapping[]>({
@@ -376,10 +529,23 @@ export default function Actuals() {
   });
 
   const updateTransaction = useMutation({
-    mutationFn: ({ id, ...data }: { id: number; category?: string; portfolioUnitId?: number | null; lpAccountId?: number | null; capitalCallItemId?: number | null; reconciled?: number; description?: string; statementRef?: string }) => {
+    mutationFn: ({ id, ...data }: {
+      id: number;
+      category?: string;
+      portfolioUnitId?: number | null;
+      entityId?: number | null;
+      unitRenovationId?: number | null;
+      lpAccountId?: number | null;
+      capitalCallItemId?: number | null;
+      reconciled?: number;
+      description?: string;
+      statementRef?: string;
+    }) => {
       const payload: any = {};
       if (data.category !== undefined) payload.category = data.category;
       if (data.portfolioUnitId !== undefined) payload.portfolio_unit_id = data.portfolioUnitId;
+      if (data.entityId !== undefined) payload.entity_id = data.entityId;
+      if (data.unitRenovationId !== undefined) payload.unit_renovation_id = data.unitRenovationId;
       if (data.lpAccountId !== undefined) payload.lp_account_id = data.lpAccountId;
       if (data.capitalCallItemId !== undefined) payload.capital_call_item_id = data.capitalCallItemId;
       if (data.reconciled !== undefined) payload.reconciled = data.reconciled;
@@ -400,6 +566,24 @@ export default function Actuals() {
       queryClient.invalidateQueries({ queryKey: ['lp-account'] });
       queryClient.invalidateQueries({ queryKey: ['lp-capital-calls'] });
       queryClient.invalidateQueries({ queryKey: ['lp-performance'] });
+    },
+    onError: (err: any) => {
+      setUploadFeedback(`Update failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
+      setTimeout(() => setUploadFeedback(null), 8000);
+    },
+  });
+
+  const splitTransaction = useMutation({
+    mutationFn: ({ id, amount }: { id: number; amount: number }) =>
+      api.post(`/actuals/transactions/${id}/split`, { amount }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['actuals-transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['actuals-variance'] });
+      queryClient.invalidateQueries({ queryKey: ['actuals-uploads'] });
+    },
+    onError: (err: any) => {
+      setUploadFeedback(`Split failed: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
+      setTimeout(() => setUploadFeedback(null), 8000);
     },
   });
 
@@ -500,21 +684,39 @@ export default function Actuals() {
 
   function handleCategoryChange(id: number, category: string) {
     if (LP_ONLY_CATEGORIES.has(category)) {
-      updateTransaction.mutate({ id, category, portfolioUnitId: null });
+      updateTransaction.mutate({ id, category, portfolioUnitId: null, entityId: null, unitRenovationId: null });
       return;
     }
-    updateTransaction.mutate({ id, category, lpAccountId: null, capitalCallItemId: null });
+    updateTransaction.mutate({
+      id,
+      category,
+      lpAccountId: null,
+      capitalCallItemId: null,
+      unitRenovationId: category === 'repair' ? undefined : null,
+    });
   }
 
   function handleUnitChange(t: Transaction, unitIdStr: string) {
     if (LP_ONLY_CATEGORIES.has(t.category)) return;
     const newUnitId = unitIdStr ? Number(unitIdStr) : null;
-    updateTransaction.mutate({ id: t.id, portfolioUnitId: newUnitId });
+    updateTransaction.mutate({ id: t.id, portfolioUnitId: newUnitId, entityId: null, unitRenovationId: null });
 
     // Offer to learn this mapping if a unit was selected and there is a description
     if (newUnitId && t.description) {
       setLearnPrompt({ transactionId: t.id, description: t.description, unitId: newUnitId });
     }
+  }
+
+  function handleEntityChange(t: Transaction, entityIdStr: string) {
+    if (LP_ONLY_CATEGORIES.has(t.category)) return;
+    const newEntityId = entityIdStr ? Number(entityIdStr) : null;
+    updateTransaction.mutate({ id: t.id, entityId: newEntityId, portfolioUnitId: null, unitRenovationId: null });
+  }
+
+  function handleRenovationChange(t: Transaction, renoIdStr: string) {
+    if (LP_ONLY_CATEGORIES.has(t.category)) return;
+    const newRenoId = renoIdStr ? Number(renoIdStr) : null;
+    updateTransaction.mutate({ id: t.id, unitRenovationId: newRenoId });
   }
 
   function handleLpChange(t: Transaction, lpIdStr: string) {
@@ -556,6 +758,7 @@ export default function Actuals() {
     setFilterCategory('');
     setFilterDateFrom('');
     setFilterDateTo('');
+    setFilterUploadId('');
     setCurrentPage(1);
   }
 
@@ -643,6 +846,18 @@ export default function Actuals() {
           <p>Track paid cash movements from statements and reconcile unit expenses</p>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <button
+            className={viewMode === 'allocations' ? 'btn btn-primary' : 'btn btn-secondary'}
+            onClick={() => setViewMode('allocations')}
+          >
+            Allocations
+          </button>
+          <button
+            className={viewMode === 'bank_lines' ? 'btn btn-primary' : 'btn btn-secondary'}
+            onClick={() => setViewMode('bank_lines')}
+          >
+            Bank Lines
+          </button>
           <input
             ref={fileInputRef}
             type="file"
@@ -1050,7 +1265,23 @@ export default function Actuals() {
               style={{ padding: '0.35rem 0.4rem', fontSize: '0.8rem' }}
             />
           </div>
-          {(searchText || filterCategory || filterDateFrom || filterDateTo) && (
+          <div style={{ minWidth: 160 }}>
+            <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.2rem' }}>Upload</label>
+            <select
+              className="form-select"
+              value={filterUploadId}
+              onChange={(e) => { setFilterUploadId(e.target.value); setCurrentPage(1); }}
+              style={{ padding: '0.35rem 0.4rem', fontSize: '0.8rem' }}
+            >
+              <option value="">All</option>
+              {uploads.map((u) => (
+                <option key={u.id} value={String(u.id)}>
+                  {u.filename}
+                </option>
+              ))}
+            </select>
+          </div>
+          {(searchText || filterCategory || filterDateFrom || filterDateTo || filterUploadId) && (
             <button
               className="btn btn-secondary"
               onClick={handleClearFilters}
@@ -1061,6 +1292,7 @@ export default function Actuals() {
           )}
         </div>
 
+        {viewMode === 'allocations' && (
         <div style={{ overflowX: 'auto' }}>
           <table className="data-table">
             <thead>
@@ -1070,6 +1302,9 @@ export default function Actuals() {
                 <th>Amount</th>
                 <th>Category</th>
                 <th>Unit</th>
+                <th>Entity</th>
+                <th>Renovation</th>
+                <th>Split</th>
                 <th>LP</th>
                 <th>Call #</th>
                 <th>Source</th>
@@ -1114,7 +1349,7 @@ export default function Actuals() {
                       className="form-select"
                       value={t.portfolio_unit_id ?? ''}
                       onChange={(e) => handleUnitChange(t, e.target.value)}
-                      disabled={LP_ONLY_CATEGORIES.has(t.category)}
+                      disabled={LP_ONLY_CATEGORIES.has(t.category) || !!t.entity_id}
                       style={{
                         padding: '0.25rem 0.4rem',
                         fontSize: '0.75rem',
@@ -1131,6 +1366,73 @@ export default function Actuals() {
                         <option key={u.id} value={u.id}>{u.unit_number}</option>
                       ))}
                     </select>
+                  </td>
+                  <td>
+                    <select
+                      className="form-select"
+                      value={t.entity_id ?? ''}
+                      onChange={(e) => handleEntityChange(t, e.target.value)}
+                      disabled={LP_ONLY_CATEGORIES.has(t.category) || !!t.portfolio_unit_id}
+                      style={{
+                        padding: '0.25rem 0.4rem',
+                        fontSize: '0.75rem',
+                        background: 'var(--bg-tertiary)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius)',
+                        color: 'var(--text-secondary)',
+                        width: 'auto',
+                        minWidth: 120,
+                      }}
+                    >
+                      <option value="">{'\u2014'}</option>
+                      {entities.map((e) => (
+                        <option key={e.id} value={e.id}>{e.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      className="form-select"
+                      value={t.unit_renovation_id ?? ''}
+                      onChange={(e) => handleRenovationChange(t, e.target.value)}
+                      disabled={LP_ONLY_CATEGORIES.has(t.category) || t.category !== 'repair' || !t.portfolio_unit_id}
+                      style={{
+                        padding: '0.25rem 0.4rem',
+                        fontSize: '0.75rem',
+                        background: 'var(--bg-tertiary)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius)',
+                        color: 'var(--text-secondary)',
+                        width: 'auto',
+                        minWidth: 140,
+                      }}
+                    >
+                      <option value="">{t.category === 'repair' && t.portfolio_unit_id ? 'Select reno' : '\u2014'}</option>
+                      {renovationOptions
+                        .filter((r) => r.portfolio_unit_id === t.portfolio_unit_id)
+                        .map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.description || `Reno #${r.id}`}
+                          </option>
+                        ))}
+                    </select>
+                  </td>
+                  <td>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}
+                      disabled={splitTransaction.isPending || !t.bank_transaction_id}
+                      onClick={() => {
+                        const raw = window.prompt('Split amount (same sign as original):', '');
+                        if (!raw) return;
+                        const next = Number(String(raw).replace(/,/g, ''));
+                        if (!Number.isFinite(next) || next === 0) return;
+                        splitTransaction.mutate({ id: t.id, amount: next });
+                      }}
+                      title={t.bank_transaction_id ? 'Create a second allocation row' : 'Only statement-imported rows can be split'}
+                    >
+                      Split
+                    </button>
                   </td>
                   <td>
                     <select
@@ -1189,7 +1491,21 @@ export default function Actuals() {
                   <td style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>
                     {t.source_file ? (
                       t.source_file.startsWith('/uploads/')
-                        ? <a href={t.source_file} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--teal)' }}>{t.source_file.includes('/uploads/receipts/') ? 'Receipt file' : t.source_file}</a>
+                        ? (
+                          <a
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              void openStoredFile(t.source_file || '', 'receipt').catch((err) => {
+                                setUploadFeedback(`Failed to open file: ${err?.response?.data?.error || err?.message || 'Unknown error'}`);
+                                setTimeout(() => setUploadFeedback(null), 8000);
+                              });
+                            }}
+                            style={{ color: 'var(--teal)' }}
+                          >
+                            {t.source_file.includes('/uploads/receipts/') ? 'Receipt file' : t.source_file}
+                          </a>
+                        )
                         : t.source_file
                     ) : 'Manual'}
                   </td>
@@ -1253,7 +1569,7 @@ export default function Actuals() {
               ))}
               {paginatedTransactions.length === 0 && (
                 <tr>
-                  <td colSpan={11} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                  <td colSpan={14} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
                     {transactions.length === 0
                       ? 'No transactions yet. Upload a statement or add one manually.'
                       : 'No transactions match the current filters.'}
@@ -1263,6 +1579,250 @@ export default function Actuals() {
             </tbody>
           </table>
         </div>
+        )}
+
+        {viewMode === 'bank_lines' && (
+          <div style={{ padding: '0.75rem 1rem' }}>
+            {bankLines.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)' }}>
+                Select an Upload filter to view bank lines.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '0.75rem' }}>
+                {bankLines.map((b: any) => (
+                  <div key={b.id} className="card" style={{ margin: 0 }}>
+                    <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                      <span className="card-title" style={{ fontSize: '0.9rem' }}>
+                        {fmtDate(b.date)} • {String(b.description || '').slice(0, 80) || '\u2014'}
+                      </span>
+                      <span style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ color: Number(b.amount) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>
+                          Bank {fmt(Number(b.amount || 0))}
+                        </span>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          Alloc {fmt(Number(b.allocated_total || 0))}
+                        </span>
+                        <span style={{ color: Math.abs(Number(b.delta || 0)) > 0.005 ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>
+                          Δ {fmt(Number(b.delta || 0))}
+                        </span>
+                      </span>
+                    </div>
+                    <div style={{ padding: '0.5rem 1rem 0.9rem' }}>
+                      {(b.allocations || []).length === 0 ? (
+                        <div style={{ color: 'var(--gold)' }}>Unallocated</div>
+                      ) : (
+                        <table className="data-table" style={{ marginBottom: 0 }}>
+                          <thead>
+                            <tr>
+                              <th>Amount</th>
+                              <th>Category</th>
+                              <th>Unit</th>
+                              <th>Entity</th>
+                              <th>Reno</th>
+                              <th>Reconciled</th>
+                              <th>Delete</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {b.allocations.map((a: any) => (
+                              <tr key={a.id}>
+                                <td style={{ color: Number(a.amount) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
+                                  {fmt(Number(a.amount || 0))}
+                                </td>
+                                <td>
+                                  <select
+                                    className="form-select"
+                                    value={a.category}
+                                    onChange={(e) => updateTransaction.mutate({ id: Number(a.id), category: e.target.value })}
+                                    style={{ padding: '0.2rem 0.35rem', fontSize: '0.72rem', minWidth: 110 }}
+                                  >
+                                    {CATEGORIES.map((c) => (
+                                      <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td>
+                                  <select
+                                    className="form-select"
+                                    value={a.portfolio_unit_id ?? ''}
+                                    onChange={(e) => updateTransaction.mutate({ id: Number(a.id), portfolioUnitId: e.target.value ? Number(e.target.value) : null, entityId: null, unitRenovationId: null })}
+                                    disabled={!!a.entity_id || LP_ONLY_CATEGORIES.has(a.category)}
+                                    style={{ padding: '0.2rem 0.35rem', fontSize: '0.72rem', minWidth: 80 }}
+                                  >
+                                    <option value="">{'\u2014'}</option>
+                                    {portfolioUnits.map((u) => (
+                                      <option key={u.id} value={u.id}>{u.unit_number}</option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td>
+                                  <select
+                                    className="form-select"
+                                    value={a.entity_id ?? ''}
+                                    onChange={(e) => updateTransaction.mutate({ id: Number(a.id), entityId: e.target.value ? Number(e.target.value) : null, portfolioUnitId: null, unitRenovationId: null })}
+                                    disabled={!!a.portfolio_unit_id || LP_ONLY_CATEGORIES.has(a.category)}
+                                    style={{ padding: '0.2rem 0.35rem', fontSize: '0.72rem', minWidth: 120 }}
+                                  >
+                                    <option value="">{'\u2014'}</option>
+                                    {entities.map((en) => (
+                                      <option key={en.id} value={en.id}>{en.name}</option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td>
+                                  <select
+                                    className="form-select"
+                                    value={a.unit_renovation_id ?? ''}
+                                    onChange={(e) => updateTransaction.mutate({ id: Number(a.id), unitRenovationId: e.target.value ? Number(e.target.value) : null })}
+                                    disabled={a.category !== 'repair' || !a.portfolio_unit_id || LP_ONLY_CATEGORIES.has(a.category)}
+                                    style={{ padding: '0.2rem 0.35rem', fontSize: '0.72rem', minWidth: 140 }}
+                                  >
+                                    <option value="">{a.category === 'repair' && a.portfolio_unit_id ? 'Select reno' : '\u2014'}</option>
+                                    {renovationOptions
+                                      .filter((r) => Number(r.portfolio_unit_id) === Number(a.portfolio_unit_id))
+                                      .map((r) => (
+                                        <option key={r.id} value={r.id}>{r.description || `Reno #${r.id}`}</option>
+                                      ))}
+                                  </select>
+                                </td>
+                                <td style={{ textAlign: 'center' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!a.reconciled}
+                                    onChange={() => handleReconciledToggle(Number(a.id), Number(a.reconciled || 0))}
+                                  />
+                                </td>
+                                <td>
+                                  <button
+                                    className="btn btn-secondary"
+                                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}
+                                    onClick={() => {
+                                      if (!window.confirm('Delete this allocation row?')) return;
+                                      deleteAllocation.mutate(Number(a.id));
+                                    }}
+                                    disabled={deleteAllocation.isPending}
+                                  >
+                                    Delete
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+
+                      {/* Add allocation row */}
+                      <div style={{ marginTop: '0.6rem', paddingTop: '0.6rem', borderTop: '1px solid var(--border)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                        <div style={{ minWidth: 120 }}>
+                          <label className="form-label" style={{ fontSize: '0.65rem' }}>Amount</label>
+                          <input
+                            className="form-input"
+                            value={newAllocByBankId[String(b.id)]?.amount ?? ''}
+                            onChange={(e) => setNewAllocByBankId((prev) => ({ ...prev, [String(b.id)]: { amount: e.target.value, category: prev[String(b.id)]?.category ?? 'other', unitId: prev[String(b.id)]?.unitId ?? '', entityId: prev[String(b.id)]?.entityId ?? '', renoId: prev[String(b.id)]?.renoId ?? '' } }))}
+                            placeholder={Number(b.amount) < 0 ? '-250.00' : '250.00'}
+                            style={{ padding: '0.25rem 0.4rem', fontSize: '0.78rem' }}
+                          />
+                        </div>
+                        <div style={{ minWidth: 130 }}>
+                          <label className="form-label" style={{ fontSize: '0.65rem' }}>Category</label>
+                          <select
+                            className="form-select"
+                            value={newAllocByBankId[String(b.id)]?.category ?? 'other'}
+                            onChange={(e) => setNewAllocByBankId((prev) => ({ ...prev, [String(b.id)]: { amount: prev[String(b.id)]?.amount ?? '', category: e.target.value, unitId: prev[String(b.id)]?.unitId ?? '', entityId: prev[String(b.id)]?.entityId ?? '', renoId: prev[String(b.id)]?.renoId ?? '' } }))}
+                            style={{ padding: '0.25rem 0.4rem', fontSize: '0.78rem' }}
+                          >
+                            {CATEGORIES.map((c) => (
+                              <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ minWidth: 90 }}>
+                          <label className="form-label" style={{ fontSize: '0.65rem' }}>Unit</label>
+                          <select
+                            className="form-select"
+                            value={newAllocByBankId[String(b.id)]?.unitId ?? ''}
+                            onChange={(e) => setNewAllocByBankId((prev) => ({ ...prev, [String(b.id)]: { amount: prev[String(b.id)]?.amount ?? '', category: prev[String(b.id)]?.category ?? 'other', unitId: e.target.value, entityId: '', renoId: '' } }))}
+                            style={{ padding: '0.25rem 0.4rem', fontSize: '0.78rem' }}
+                          >
+                            <option value="">{'\u2014'}</option>
+                            {portfolioUnits.map((u) => (
+                              <option key={u.id} value={String(u.id)}>{u.unit_number}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ minWidth: 120 }}>
+                          <label className="form-label" style={{ fontSize: '0.65rem' }}>Entity</label>
+                          <select
+                            className="form-select"
+                            value={newAllocByBankId[String(b.id)]?.entityId ?? ''}
+                            onChange={(e) => setNewAllocByBankId((prev) => ({ ...prev, [String(b.id)]: { amount: prev[String(b.id)]?.amount ?? '', category: prev[String(b.id)]?.category ?? 'other', unitId: '', entityId: e.target.value, renoId: '' } }))}
+                            disabled={!!(newAllocByBankId[String(b.id)]?.unitId)}
+                            style={{ padding: '0.25rem 0.4rem', fontSize: '0.78rem' }}
+                          >
+                            <option value="">{'\u2014'}</option>
+                            {entities.map((en) => (
+                              <option key={en.id} value={String(en.id)}>{en.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div style={{ minWidth: 160 }}>
+                          <label className="form-label" style={{ fontSize: '0.65rem' }}>Renovation</label>
+                          <select
+                            className="form-select"
+                            value={newAllocByBankId[String(b.id)]?.renoId ?? ''}
+                            onChange={(e) => setNewAllocByBankId((prev) => ({ ...prev, [String(b.id)]: { amount: prev[String(b.id)]?.amount ?? '', category: prev[String(b.id)]?.category ?? 'other', unitId: prev[String(b.id)]?.unitId ?? '', entityId: prev[String(b.id)]?.entityId ?? '', renoId: e.target.value } }))}
+                            disabled={(newAllocByBankId[String(b.id)]?.category ?? 'other') !== 'repair' || !(newAllocByBankId[String(b.id)]?.unitId)}
+                            style={{ padding: '0.25rem 0.4rem', fontSize: '0.78rem' }}
+                          >
+                            <option value="">{(newAllocByBankId[String(b.id)]?.category ?? 'other') === 'repair' && newAllocByBankId[String(b.id)]?.unitId ? 'Select reno' : '\u2014'}</option>
+                            {renovationOptions
+                              .filter((r) => String(r.portfolio_unit_id) === String(newAllocByBankId[String(b.id)]?.unitId || ''))
+                              .map((r) => (
+                                <option key={r.id} value={String(r.id)}>{r.description || `Reno #${r.id}`}</option>
+                              ))}
+                          </select>
+                        </div>
+                        <button
+                          className="btn btn-primary"
+                          disabled={createAllocation.isPending}
+                          onClick={() => {
+                            const form = newAllocByBankId[String(b.id)] || { amount: '', category: 'other', unitId: '', entityId: '', renoId: '' };
+                            const amt = parseNumberInput(form.amount);
+                            if (!Number.isFinite(amt) || amt === 0) return;
+                            createAllocation.mutate({
+                              bankId: Number(b.id),
+                              amount: amt,
+                              category: form.category || 'other',
+                              portfolioUnitId: form.unitId ? Number(form.unitId) : null,
+                              entityId: form.entityId ? Number(form.entityId) : null,
+                              unitRenovationId: form.renoId ? Number(form.renoId) : null,
+                            });
+                            setNewAllocByBankId((prev) => ({ ...prev, [String(b.id)]: { amount: '', category: 'other', unitId: '', entityId: '', renoId: '' } }));
+                          }}
+                        >
+                          Add allocation
+                        </button>
+                        <button
+                          className="btn btn-secondary"
+                          onClick={() => {
+                            const delta = Number(b.delta || 0);
+                            if (!Number.isFinite(delta) || Math.abs(delta) < 0.0001) return;
+                            setNewAllocByBankId((prev) => {
+                              const existing = prev[String(b.id)] || { amount: '', category: 'other', unitId: '', entityId: '', renoId: '' };
+                              return { ...prev, [String(b.id)]: { ...existing, amount: String(delta) } };
+                            });
+                          }}
+                        >
+                          Use Δ
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Pagination Controls */}
         {totalPages > 1 && (
@@ -1321,8 +1881,12 @@ export default function Actuals() {
                 <th>Filename</th>
                 <th>Date</th>
                 <th>Type</th>
-                <th>Rows</th>
+                <th>Bank</th>
+                <th>Allocated</th>
+                <th>Unallocated</th>
+                <th>OOB</th>
                 <th>Status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -1337,7 +1901,18 @@ export default function Actuals() {
                       {u.file_type}
                     </span>
                   </td>
-                  <td>{num(u.row_count)}</td>
+                  <td style={{ fontSize: '0.78rem' }}>
+                    {num(Number(u.bank_row_count || u.row_count || 0))} / {fmt(Number(u.bank_total_amount || 0))}
+                  </td>
+                  <td style={{ fontSize: '0.78rem' }}>
+                    {num(Number(u.reconciled_alloc_count || 0))}/{num(Number(u.alloc_row_count || 0))} / {fmt(Number(u.alloc_total_amount || 0))}
+                  </td>
+                  <td style={{ color: Number(u.unallocated_bank_lines || 0) > 0 ? 'var(--gold)' : 'var(--text-muted)' }}>
+                    {num(Number(u.unallocated_bank_lines || 0))}
+                  </td>
+                  <td style={{ color: Number(u.out_of_balance_bank_lines || 0) > 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+                    {num(Number(u.out_of_balance_bank_lines || 0))}
+                  </td>
                   <td>
                     <span
                       className={`badge ${
@@ -1353,11 +1928,25 @@ export default function Actuals() {
                       {u.status === 'pending_review' ? 'Pending Review' : u.status}
                     </span>
                   </td>
+                  <td>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}
+                      disabled={closeUpload.isPending || u.status === 'reconciled'
+                        || Number(u.unallocated_bank_lines || 0) > 0
+                        || Number(u.out_of_balance_bank_lines || 0) > 0
+                        || Number(u.alloc_row_count || 0) !== Number(u.reconciled_alloc_count || 0)}
+                      onClick={() => closeUpload.mutate(u.id)}
+                      title="Mark this upload reconciled (requires all lines allocated, balanced, and reconciled)"
+                    >
+                      {u.status === 'reconciled' ? 'Closed' : 'Close'}
+                    </button>
+                  </td>
                 </tr>
               ))}
               {uploads.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
                     No uploads yet.
                   </td>
                 </tr>
@@ -1401,6 +1990,96 @@ export default function Actuals() {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Month Close */}
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <div className="card-header">
+          <span className="card-title">Month Close</span>
+          <span className="badge badge-gray">{num(periods.filter((p) => p.status === 'closed').length)} closed</span>
+        </div>
+        <div style={{ padding: '0.75rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div>
+            <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.2rem' }}>Month</label>
+            <input
+              className="form-input"
+              type="month"
+              value={closeMonth}
+              onChange={(e) => setCloseMonth(e.target.value)}
+              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+            />
+          </div>
+          <button
+            className="btn btn-primary"
+            onClick={() => closePeriod.mutate(closeMonth)}
+            disabled={closePeriod.isPending}
+            title="Closes the month (requires all bank lines allocated, balanced, and reconciled)"
+          >
+            {closePeriod.isPending ? 'Closing...' : 'Close Month'}
+          </button>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+            Closing a month locks edits/splits/deletes/imports for that month.
+          </div>
+        </div>
+        {periods.length > 0 && (
+          <div style={{ padding: '0 1rem 1rem' }}>
+            <table className="data-table" style={{ marginBottom: 0 }}>
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th>Status</th>
+                  <th>Closed By</th>
+                  <th>Closed At</th>
+                </tr>
+              </thead>
+              <tbody>
+                {periods.slice(0, 24).map((p) => (
+                  <tr key={p.month}>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>{p.month}</td>
+                    <td>{p.status}</td>
+                    <td>{p.closed_by || '\u2014'}</td>
+                    <td>{p.closed_at ? fmtDate(p.closed_at) : '\u2014'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Exports */}
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <div className="card-header">
+          <span className="card-title">Exports</span>
+          <span className="badge badge-gray">CSV</span>
+        </div>
+        <div style={{ padding: '0.75rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div>
+            <label className="form-label" style={{ fontSize: '0.7rem', marginBottom: '0.2rem' }}>Month</label>
+            <input
+              className="form-input"
+              type="month"
+              value={exportMonth}
+              onChange={(e) => setExportMonth(e.target.value)}
+              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem' }}
+            />
+          </div>
+          <button className="btn btn-secondary" onClick={() => downloadExport('allocations')}>
+            Allocations CSV
+          </button>
+          <button className="btn btn-secondary" onClick={() => downloadExport('bank_lines')}>
+            Bank Lines CSV
+          </button>
+          <button className="btn btn-secondary" onClick={() => downloadExport('quickbooks_bank')} title="Date, Description, Amount (QuickBooks bank upload template)">
+            QuickBooks Bank CSV
+          </button>
+          <button className="btn btn-secondary" onClick={() => downloadExport('quickbooks_details')} title="Detailed allocations export to help categorize in QuickBooks">
+            QuickBooks Details CSV
+          </button>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+            Use the QuickBooks Bank CSV for direct bank feed import; use Details to reconcile categories/units/entities.
+          </div>
         </div>
       </div>
 

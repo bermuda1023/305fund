@@ -192,10 +192,62 @@ CREATE TABLE IF NOT EXISTS documents (
   uploaded_by TEXT
 );
 
--- Cash Flow Actuals (from bank statements)
+-- Bank Uploads
+CREATE TABLE IF NOT EXISTS bank_uploads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  filename TEXT NOT NULL,
+  upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+  file_type TEXT NOT NULL CHECK (file_type IN ('csv', 'ofx', 'pdf', 'manual', 'xls', 'xlsx')),
+  row_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'parsed'
+    CHECK (status IN ('parsed', 'reconciled', 'error', 'pending_review')),
+  file_path TEXT,
+  file_sha256 TEXT,
+  uploaded_by TEXT
+);
+
+-- Bank Transactions (immutable raw statement rows)
+CREATE TABLE IF NOT EXISTS bank_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bank_upload_id INTEGER REFERENCES bank_uploads(id),
+  date DATE NOT NULL,
+  amount REAL NOT NULL,
+  description TEXT,
+  source_file TEXT,
+  statement_ref TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Accounting periods (month close controls)
+CREATE TABLE IF NOT EXISTS accounting_periods (
+  month TEXT PRIMARY KEY, -- 'YYYY-MM'
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  closed_at DATETIME,
+  closed_by TEXT
+);
+
+-- Audit log (append-only)
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  actor_email TEXT,
+  actor_user_id INTEGER,
+  action TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  record_id TEXT,
+  request_id TEXT,
+  ip TEXT,
+  before_json TEXT,
+  after_json TEXT
+);
+
+-- Cash Flow Actuals (allocations applied to bank transactions)
 CREATE TABLE IF NOT EXISTS cash_flow_actuals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bank_transaction_id INTEGER REFERENCES bank_transactions(id),
   portfolio_unit_id INTEGER REFERENCES portfolio_units(id),
+  entity_id INTEGER REFERENCES entities(id),
+  unit_renovation_id INTEGER REFERENCES unit_renovations(id),
   lp_account_id INTEGER REFERENCES lp_accounts(id),
   capital_call_item_id INTEGER REFERENCES capital_call_items(id),
   date DATE NOT NULL,
@@ -207,18 +259,6 @@ CREATE TABLE IF NOT EXISTS cash_flow_actuals (
   statement_ref TEXT,
   receipt_document_id INTEGER REFERENCES documents(id),
   reconciled INTEGER NOT NULL DEFAULT 0
-);
-
--- Bank Uploads
-CREATE TABLE IF NOT EXISTS bank_uploads (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  filename TEXT NOT NULL,
-  upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-  file_type TEXT NOT NULL CHECK (file_type IN ('csv', 'ofx', 'pdf', 'manual', 'xls', 'xlsx')),
-  row_count INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'parsed'
-    CHECK (status IN ('parsed', 'reconciled', 'error', 'pending_review')),
-  file_path TEXT
 );
 
 -- Learned Mappings (description pattern → unit auto-assignment)
@@ -356,9 +396,15 @@ CREATE INDEX IF NOT EXISTS idx_building_units_floor ON building_units(floor);
 CREATE INDEX IF NOT EXISTS idx_building_units_fund_owned ON building_units(is_fund_owned);
 CREATE INDEX IF NOT EXISTS idx_portfolio_units_building ON portfolio_units(building_unit_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_unit ON cash_flow_actuals(portfolio_unit_id);
+CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_entity ON cash_flow_actuals(entity_id);
+CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_reno ON cash_flow_actuals(unit_renovation_id);
+CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_bank_txn ON cash_flow_actuals(bank_transaction_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_lp ON cash_flow_actuals(lp_account_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_call_item ON cash_flow_actuals(capital_call_item_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_date ON cash_flow_actuals(date);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_upload ON bank_transactions(bank_upload_id);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(date);
+CREATE INDEX IF NOT EXISTS idx_accounting_periods_status ON accounting_periods(status);
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
 CREATE INDEX IF NOT EXISTS idx_fred_data_series ON fred_data(series_id, date);
 CREATE INDEX IF NOT EXISTS idx_capital_call_items_call ON capital_call_items(capital_call_id);

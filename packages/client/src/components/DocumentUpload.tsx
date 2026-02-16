@@ -6,6 +6,7 @@
 import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
+import { openStoredFile } from '../lib/files';
 
 interface Document {
   id: number;
@@ -231,9 +232,13 @@ export default function DocumentUpload({ parentType, parentId }: DocumentUploadP
               <span style={{ fontSize: '1.2rem' }}>{getFileIcon(doc.file_type)}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <a
-                  href={doc.file_path}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void openStoredFile(doc.file_path, doc.name).catch((err) => {
+                      window.alert(err?.response?.data?.error || err?.message || 'Failed to open file');
+                    });
+                  }}
                   style={{
                     color: 'var(--teal)',
                     fontSize: '0.85rem',
