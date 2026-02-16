@@ -482,6 +482,17 @@ type ModelEvalResult = {
   renovationEvents: any[];
   acquisitionEvents: any[];
   capitalCallEvents: any[];
+  portfolioUnits?: Array<{
+    portfolioUnitId: number;
+    unitNumber: string;
+    purchaseDate: string;
+    monthlyHOA: number;
+    proformaMonthlyRent: number;
+    tenantMonthlyRent: number | null;
+    leaseStart: string | null;
+    leaseEnd: string | null;
+    tenantStatus: string | null;
+  }>;
   annualExpenseEvents: Array<{ paidDate: string; category: 'insurance' | 'tax'; amount: number }>;
   liquidityLedger: any[];
   dataSource: {
@@ -507,6 +518,40 @@ type ModelEvalResult = {
   gpEconomics: any;
 };
 
+function getPortfolioUnitsForModel(db: ReturnType<typeof getDb>) {
+  const rows = db.prepare(`
+    SELECT
+      pu.id as portfolio_unit_id,
+      bu.unit_number,
+      pu.purchase_date,
+      COALESCE(pu.monthly_hoa, 0) as monthly_hoa,
+      COALESCE(pu.monthly_rent, 0) as proforma_monthly_rent,
+      t.monthly_rent as tenant_monthly_rent,
+      t.lease_start,
+      t.lease_end,
+      t.status as tenant_status
+    FROM portfolio_units pu
+    JOIN building_units bu ON bu.id = pu.building_unit_id
+    LEFT JOIN tenants t
+      ON t.portfolio_unit_id = pu.id
+     AND t.status IN ('active', 'month_to_month')
+    WHERE pu.purchase_date IS NOT NULL
+    ORDER BY pu.purchase_date ASC
+  `).all() as any[];
+
+  return rows.map((r) => ({
+    portfolioUnitId: Number(r.portfolio_unit_id),
+    unitNumber: String(r.unit_number),
+    purchaseDate: String(r.purchase_date),
+    monthlyHOA: Number(r.monthly_hoa || 0),
+    proformaMonthlyRent: Number(r.proforma_monthly_rent || 0),
+    tenantMonthlyRent: r.tenant_monthly_rent != null ? Number(r.tenant_monthly_rent) : null,
+    leaseStart: r.lease_start ? String(r.lease_start) : null,
+    leaseEnd: r.lease_end ? String(r.lease_end) : null,
+    tenantStatus: r.tenant_status ? String(r.tenant_status) : null,
+  }));
+}
+
 function evaluateAssumptions(assumptions: FundAssumptions, db: ReturnType<typeof getDb>): ModelEvalResult {
   // Build inputs from real portfolio data (or defaults)
   const { input: cfInput, dataSource } = buildCashFlowInput(assumptions, db);
@@ -520,6 +565,7 @@ function evaluateAssumptions(assumptions: FundAssumptions, db: ReturnType<typeof
   const capitalCallEvents = getCapitalCallEvents(db);
   const liquidityLedger = buildLiquidityLedger(assumptions, capitalCallEvents, acquisitionEvents, db);
   const annualOps = getAnnualExpenseEvents(db, assumptions, assumptions.fundTermYears);
+  const portfolioUnits = getPortfolioUnitsForModel(db);
   const cashFlows = baseCashFlows.map((cf) => {
     const renovationCost = reno.byQuarter.get(cf.quarterIndex) || 0;
     const insuranceCost = annualOps.byQuarterInsurance.get(cf.quarterIndex) || 0;
@@ -669,6 +715,7 @@ function evaluateAssumptions(assumptions: FundAssumptions, db: ReturnType<typeof
     renovationEvents: reno.events,
     acquisitionEvents,
     capitalCallEvents,
+    portfolioUnits,
     annualExpenseEvents: annualOps.events,
     liquidityLedger,
     dataSource,

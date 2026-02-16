@@ -149,6 +149,18 @@ interface QuarterlyCashFlow {
 
 type AnnualExpenseEvent = { paidDate: string; category: 'insurance' | 'tax'; amount: number };
 
+type PortfolioUnitForModel = {
+  portfolioUnitId: number;
+  unitNumber: string;
+  purchaseDate: string;
+  monthlyHOA: number;
+  proformaMonthlyRent: number;
+  tenantMonthlyRent: number | null;
+  leaseStart: string | null;
+  leaseEnd: string | null;
+  tenantStatus: string | null;
+};
+
 interface WaterfallTier {
   name: string;
   lpAmount: number;
@@ -248,6 +260,7 @@ interface ModelRunResult {
     mmBalanceStart: number;
     mmBalanceEnd: number;
   }>;
+  portfolioUnits?: PortfolioUnitForModel[];
 }
 
 interface ActualTxn {
@@ -502,7 +515,9 @@ function toMonthly(cashFlows: QuarterlyCashFlow[]): ChartRow[] {
   for (const cf of cashFlows) {
     for (let m = 0; m < 3; m++) {
       const dateObj = new Date(cf.date);
-      const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() - 2 + m, 1);
+      // Engine quarter dates are the first month of the quarter (YYYY-MM-01).
+      // Expand into that quarter's 3 month-start points.
+      const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() + m, 1);
       const label = `${monthDate.toLocaleString('default', { month: 'short' })} ${monthDate.getFullYear()}`;
       const reno = (cf.renovationCost || 0) / 3;
       const fundOpex = Math.max(0, ((cf.operatingExpense || 0) - (cf.renovationCost || 0)) / 3);
@@ -551,6 +566,7 @@ function toMonthlyWithRenovationTiming(
   capitalCallEvents: Array<{ paidDate: string; amount: number }>,
   acquisitionEvents: Array<{ paidDate: string; amount: number }>,
   annualExpenseEvents: AnnualExpenseEvent[],
+  portfolioUnits?: PortfolioUnitForModel[],
 ): ChartRow[] {
   const renoByMonth = new Map<string, number>();
   const callByMonth = new Map<string, number>();
@@ -591,6 +607,71 @@ function toMonthlyWithRenovationTiming(
   const hasAnnualExpenseEvents = annualExpenseEvents.length > 0;
   const hasAcquisitionEvents = acquisitionEvents.length > 0;
   const rows: ChartRow[] = [];
+
+  function clampIsoDate(d: string | null | undefined): string | null {
+    if (!d) return null;
+    const iso = String(d).slice(0, 10);
+    const t = new Date(iso).getTime();
+    return Number.isFinite(t) ? iso : null;
+  }
+
+  function daysInMonth(y: number, m0: number) {
+    return new Date(y, m0 + 1, 0).getDate();
+  }
+
+  function monthBounds(monthStart: Date) {
+    const y = monthStart.getFullYear();
+    const m0 = monthStart.getMonth();
+    const dim = daysInMonth(y, m0);
+    const startIso = `${y}-${String(m0 + 1).padStart(2, '0')}-01`;
+    const endIso = `${y}-${String(m0 + 1).padStart(2, '0')}-${String(dim).padStart(2, '0')}`;
+    return { startIso, endIso, dim };
+  }
+
+  function overlapFrac(monthStartIso: string, monthEndIso: string, startIso: string, endIso: string, dim: number): number {
+    const s = Math.max(new Date(monthStartIso).getTime(), new Date(startIso).getTime());
+    const e = Math.min(new Date(monthEndIso).getTime(), new Date(endIso).getTime());
+    if (e < s) return 0;
+    const days = Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
+    return Math.max(0, Math.min(1, days / dim));
+  }
+
+  // If portfolioUnits are present, use them for month-accurate ops:
+  // - HOA accrues from purchase date (prorated in first month)
+  // - Rent starts on tenant lease start date (prorated in first/last month)
+  // - If no tenant, rent is treated as 0 (vacant) until a lease exists
+  function computeActualOps(monthStart: Date): { rent: number; hoa: number } | null {
+    if (!portfolioUnits || portfolioUnits.length === 0) return null;
+    const { startIso: mStart, endIso: mEnd, dim } = monthBounds(monthStart);
+    let rent = 0;
+    let hoa = 0;
+    for (const u of portfolioUnits) {
+      const purchase = clampIsoDate(u.purchaseDate);
+      if (!purchase) continue;
+      if (purchase > mEnd) continue;
+
+      const hoaFrac = overlapFrac(mStart, mEnd, purchase, mEnd, dim);
+      hoa += Number(u.monthlyHOA || 0) * hoaFrac;
+
+      const tenantRent = u.tenantMonthlyRent != null ? Number(u.tenantMonthlyRent) : null;
+      const leaseStart = clampIsoDate(u.leaseStart);
+      const leaseEnd = clampIsoDate(u.leaseEnd);
+      if (tenantRent != null && leaseStart && leaseEnd) {
+        if (leaseStart <= mEnd && leaseEnd >= mStart) {
+          const rentFrac = overlapFrac(mStart, mEnd, leaseStart, leaseEnd, dim);
+          rent += tenantRent * rentFrac;
+        }
+      } else {
+        // No tenant yet: fall back to unit-level proforma rent starting at acquisition date.
+        const proforma = Number(u.proformaMonthlyRent || 0);
+        if (proforma > 0) {
+          const rentFrac = overlapFrac(mStart, mEnd, purchase, mEnd, dim);
+          rent += proforma * rentFrac;
+        }
+      }
+    }
+    return { rent, hoa };
+  }
   for (const cf of cashFlows) {
     const quarterReno = cf.renovationCost || 0;
     const baseFundOpexMonthly = Math.max(0, ((cf.operatingExpense || 0) - quarterReno) / 3);
@@ -601,7 +682,7 @@ function toMonthlyWithRenovationTiming(
 
     for (let m = 0; m < 3; m++) {
       const dateObj = new Date(cf.date);
-      const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() - 2 + m, 1);
+      const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() + m, 1);
       const key = `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}`;
       const label = `${monthDate.toLocaleString('default', { month: 'short' })} ${monthDate.getFullYear()}`;
       const renoThisMonth = renoByMonth.get(key) || 0;
@@ -613,8 +694,9 @@ function toMonthlyWithRenovationTiming(
       const deploymentThisMonth = hasAcquisitionEvents
         ? (deployByMonth.get(key) || 0)
         : (m === 0 ? (cf.acquisitionCost || 0) : 0);
-      const rentIn = cf.netRent / 3;
-      const hoaOut = -(cf.hoaExpense / 3);
+      const actualOps = computeActualOps(monthDate);
+      const rentIn = actualOps ? actualOps.rent : (cf.netRent / 3);
+      const hoaOut = actualOps ? -actualOps.hoa : -(cf.hoaExpense / 3);
       // When we have dated events, post expenses exactly in that month.
       // Otherwise (defaults mode), keep it as an annual lump (no smoothing).
       const insuranceOut = hasAnnualExpenseEvents
@@ -773,7 +855,7 @@ function toTableMonthly(cashFlows: QuarterlyCashFlow[]): TableRow[] {
   for (const cf of cashFlows) {
     for (let m = 0; m < 3; m++) {
       const dateObj = new Date(cf.date);
-      const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() - 2 + m, 1);
+      const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() + m, 1);
       const label = `${monthDate.toLocaleString('default', { month: 'short' })} ${monthDate.getFullYear()}`;
       const dateStr = monthDate.toISOString().slice(0, 10);
       rows.push({
@@ -809,6 +891,7 @@ function toTableMonthlyWithRenovationTiming(
   capitalCallEvents: Array<{ paidDate: string; amount: number }>,
   acquisitionEvents: Array<{ paidDate: string; amount: number }>,
   annualExpenseEvents: AnnualExpenseEvent[],
+  portfolioUnits?: PortfolioUnitForModel[],
 ): TableRow[] {
   const renoByMonth = new Map<string, number>();
   const callByMonth = new Map<string, number>();
@@ -848,6 +931,59 @@ function toTableMonthlyWithRenovationTiming(
   const hasAcquisitionEvents = acquisitionEvents.length > 0;
 
   const rows: TableRow[] = [];
+
+  function clampIsoDate(d: string | null | undefined): string | null {
+    if (!d) return null;
+    const iso = String(d).slice(0, 10);
+    const t = new Date(iso).getTime();
+    return Number.isFinite(t) ? iso : null;
+  }
+  function daysInMonth(y: number, m0: number) {
+    return new Date(y, m0 + 1, 0).getDate();
+  }
+  function monthBounds(monthStart: Date) {
+    const y = monthStart.getFullYear();
+    const m0 = monthStart.getMonth();
+    const dim = daysInMonth(y, m0);
+    const startIso = `${y}-${String(m0 + 1).padStart(2, '0')}-01`;
+    const endIso = `${y}-${String(m0 + 1).padStart(2, '0')}-${String(dim).padStart(2, '0')}`;
+    return { startIso, endIso, dim };
+  }
+  function overlapFrac(monthStartIso: string, monthEndIso: string, startIso: string, endIso: string, dim: number): number {
+    const s = Math.max(new Date(monthStartIso).getTime(), new Date(startIso).getTime());
+    const e = Math.min(new Date(monthEndIso).getTime(), new Date(endIso).getTime());
+    if (e < s) return 0;
+    const days = Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
+    return Math.max(0, Math.min(1, days / dim));
+  }
+  function computeActualOps(monthStart: Date): { rent: number; hoa: number } | null {
+    if (!portfolioUnits || portfolioUnits.length === 0) return null;
+    const { startIso: mStart, endIso: mEnd, dim } = monthBounds(monthStart);
+    let rent = 0;
+    let hoa = 0;
+    for (const u of portfolioUnits) {
+      const purchase = clampIsoDate(u.purchaseDate);
+      if (!purchase) continue;
+      if (purchase > mEnd) continue;
+
+      hoa += Number(u.monthlyHOA || 0) * overlapFrac(mStart, mEnd, purchase, mEnd, dim);
+
+      const tenantRent = u.tenantMonthlyRent != null ? Number(u.tenantMonthlyRent) : null;
+      const leaseStart = clampIsoDate(u.leaseStart);
+      const leaseEnd = clampIsoDate(u.leaseEnd);
+      if (tenantRent != null && leaseStart && leaseEnd) {
+        if (leaseStart <= mEnd && leaseEnd >= mStart) {
+          rent += tenantRent * overlapFrac(mStart, mEnd, leaseStart, leaseEnd, dim);
+        }
+      } else {
+        const proforma = Number(u.proformaMonthlyRent || 0);
+        if (proforma > 0) {
+          rent += proforma * overlapFrac(mStart, mEnd, purchase, mEnd, dim);
+        }
+      }
+    }
+    return { rent, hoa };
+  }
   for (const cf of cashFlows) {
     const quarterReno = cf.renovationCost || 0;
     const baseFundOpexMonthly = Math.max(0, ((cf.operatingExpense || 0) - quarterReno) / 3);
@@ -856,7 +992,7 @@ function toTableMonthlyWithRenovationTiming(
 
     for (let m = 0; m < 3; m++) {
       const dateObj = new Date(cf.date);
-      const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() - 2 + m, 1);
+      const monthDate = new Date(dateObj.getFullYear(), dateObj.getMonth() + m, 1);
       const dateStr = monthDate.toISOString().slice(0, 10);
       const key = dateStr.slice(0, 7);
       const renoThisMonth = renoByMonth.get(key) || 0;
@@ -872,14 +1008,17 @@ function toTableMonthlyWithRenovationTiming(
       const taxThisMonth = hasAnnualExpenseEvents
         ? (taxByMonth.get(key) || 0)
         : (m === 0 ? (cf.taxExpense || 0) : 0);
-      const noi = (cf.netRent / 3)
-        - (cf.hoaExpense / 3)
+      const actualOps = computeActualOps(monthDate);
+      const rentIn = actualOps ? actualOps.rent : (cf.netRent / 3);
+      const hoa = actualOps ? actualOps.hoa : (cf.hoaExpense / 3);
+      const noi = rentIn
+        - hoa
         - insuranceThisMonth
         - taxThisMonth
         - baseFundOpexMonthly
         - renoThisMonth;
-      const operatingCashFlow = (cf.netRent / 3)
-        - (cf.hoaExpense / 3)
+      const operatingCashFlow = rentIn
+        - hoa
         - insuranceThisMonth
         - taxThisMonth
         - baseFundOpexMonthly
@@ -892,14 +1031,14 @@ function toTableMonthlyWithRenovationTiming(
         date: dateStr,
         capitalCalls: callThisMonth,
         deployments: deploymentThisMonth,
-        grossRent: cf.grossRent / 3,
-        hoaExpense: cf.hoaExpense / 3,
+        grossRent: rentIn,
+        hoaExpense: hoa,
         insuranceExpense: insuranceThisMonth,
         taxExpense: taxThisMonth,
         fundOpex: baseFundOpexMonthly,
         renovationCost: renoThisMonth,
         mgmtFee: baseMgmtMonthly,
-        netRent: cf.netRent / 3,
+        netRent: rentIn,
         noi,
         debtBalance: cf.debtBalance,
         mmBalance: cf.mmBalance,
@@ -1307,6 +1446,7 @@ export default function Model() {
   const capitalCallEvents = result?.capitalCallEvents ?? [];
   const annualExpenseEvents = result?.annualExpenseEvents ?? [];
   const liquidityLedger = result?.liquidityLedger ?? [];
+  const portfolioUnits = result?.portfolioUnits ?? [];
   const mmIncomeTotal = useMemo(
     () => (cashFlows ?? []).reduce((sum, cf) => sum + (cf.mmIncome || 0), 0),
     [cashFlows],
@@ -1316,11 +1456,11 @@ export default function Model() {
     if (!cashFlows || cashFlows.length === 0) return [];
     const renoEvents = renovationEvents;
     switch (period) {
-      case 'Monthly': return toMonthlyWithRenovationTiming(cashFlows, renoEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents);
+      case 'Monthly': return toMonthlyWithRenovationTiming(cashFlows, renoEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents, portfolioUnits);
       case 'Quarterly': return toQuarterly(cashFlows);
       case 'Yearly': return toYearly(cashFlows);
     }
-  }, [cashFlows, period, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents]);
+  }, [cashFlows, period, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents, portfolioUnits]);
 
   const chartData = useMemo(() => {
     let cumulative = 0;
@@ -1362,11 +1502,11 @@ export default function Model() {
   const tableData = useMemo(() => {
     if (!cashFlows || cashFlows.length === 0) return [];
     switch (period) {
-      case 'Monthly': return toTableMonthlyWithRenovationTiming(cashFlows, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents);
+      case 'Monthly': return toTableMonthlyWithRenovationTiming(cashFlows, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents, portfolioUnits);
       case 'Quarterly': return toTableQuarterly(cashFlows);
       case 'Yearly': return toTableYearly(cashFlows);
     }
-  }, [cashFlows, period, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents]);
+  }, [cashFlows, period, renovationEvents, capitalCallEvents, acquisitionEvents, annualExpenseEvents, portfolioUnits]);
 
   const waterfallData = useMemo(() => {
     if (!waterfall) return [];
