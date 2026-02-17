@@ -2,7 +2,7 @@
   "name": "brickell-fund",
   "version": "0.1.0",
   "private": true,
-  "description": "305 opportunites fund management platform",
+  "description": "305 Opportunities Fund management platform",
   "scripts": {
     "dev": "concurrently \"pnpm --filter @brickell/server dev\" \"pnpm --filter @brickell/client dev\"",
     "build": "pnpm -r build",

@@ -1,5 +1,5 @@
 /**
- * Centralized number formatting utilities for the 305 opportunites fund platform.
+ * Centralized number formatting utilities for the 305 Opportunities Fund platform.
  * All currency/percentage displays should use these functions.
  */
 

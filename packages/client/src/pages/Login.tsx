@@ -32,9 +32,9 @@ export default function Login() {
   return (
     <div className="login-page">
       <div className="login-box">
-        <h1>305 opportunites fund</h1>
+        <h1>305 Opportunities Fund</h1>
         <p>
-          The 305 opportunites fund is an opportunistic, control-equity platform targeting governance
+          The 305 Opportunities Fund is an opportunistic, control-equity platform targeting governance
           dislocations in fragmented condominium cap tables. We originate off-benchmark entry points, consolidate
           high-influence ownership blocs, and execute a catalyst-led control-to-liquidity transformation that reprices
           assets from retail condo basis to institutional land-value equivalency. Alpha is driven by complexity arbitrage,

@@ -649,7 +649,7 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
 
   let emailSent = false;
   if (normalizedEmail) {
-    const fundName = String(process.env.FUND_NAME || '305 opportunites fund');
+    const fundName = String(process.env.FUND_NAME || '305 Opportunities Fund');
     emailSent = await sendTransactionalEmail({
       to: normalizedEmail,
       subject: `Your ${fundName} investor portal account`,
@@ -874,7 +874,7 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
   const db = getDb();
   const { callId } = req.params;
   const bccMode = req.body?.bccMode !== undefined ? !!req.body.bccMode : true;
-  const fundName = String(req.body?.fundName || process.env.FUND_NAME || '305 opportunites fund');
+  const fundName = String(req.body?.fundName || process.env.FUND_NAME || '305 Opportunities Fund');
   const fromEmail = process.env.FROM_EMAIL || 'fund@brickell2451insights.com';
 
   const call = db.prepare(`

@@ -62,7 +62,7 @@ export default function Layout() {
         <div className="sidebar-logo">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
             <div className="sidebar-brand">
-              <h1>305 opportunites fund</h1>
+              <h1>305 Opportunities Fund</h1>
               <span>control equity platform</span>
             </div>
             <button

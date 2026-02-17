@@ -1,6 +1,6 @@
 /**
  * Express server entry point.
- * 305 opportunites fund management API.
+ * 305 Opportunities Fund management API.
  */
 
 import dotenv from 'dotenv';
@@ -287,7 +287,7 @@ async function start() {
   }
 
   app.listen(PORT, () => {
-    console.log(`\n🏗️  305 opportunites fund API running on http://localhost:${PORT}`);
+    console.log(`\n🏗️  305 Opportunities Fund API running on http://localhost:${PORT}`);
     console.log(`   Health: http://localhost:${PORT}/api/health`);
     console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
     if (isPostgresBridgeEnabled()) {
