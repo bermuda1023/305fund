@@ -39,7 +39,7 @@ export default function Login() {
           high-influence ownership blocs, and execute a catalyst-led control-to-liquidity transformation that reprices
           assets from retail condo basis to institutional land-value equivalency. Alpha is driven by complexity arbitrage,
           active value creation, and control-premium monetization, supported by institutional diligence protocols,
-          downside-protected underwriting, and tax-efficient exit architecture.
+          downside-protected underwriting, and tax-efficient exit architecture..... LOL
         </p>
 
         {error && <div className="login-error">{error}</div>}

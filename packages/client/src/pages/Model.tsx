@@ -215,7 +215,7 @@ interface FundReturns {
 }
 
 interface DataSource {
-  type: 'portfolio' | 'defaults';
+  type: 'portfolio' | 'defaults' | 'sample';
   unitCount: number;
   avgRent: number;
   avgHOA: number;
@@ -1328,6 +1328,7 @@ function FieldInput({ field, value, form, onChange }: {
 export default function Model() {
   const queryClient = useQueryClient();
   const [activeScenario, setActiveScenario] = useState<number | null>(null);
+  const [dataMode, setDataMode] = useState<'auto' | 'defaults' | 'sample'>('auto');
   const [period, setPeriod] = useState<Period>('Quarterly');
   const [zoomStartPct, setZoomStartPct] = useState(0);
   const [zoomEndPct, setZoomEndPct] = useState(100);
@@ -1351,8 +1352,8 @@ export default function Model() {
 
   /* Run model mutation */
   const runModel = useMutation({
-    mutationFn: (scenarioId: number) =>
-      api.post('/model/run', { scenarioId }).then((r) => r.data as ModelRunResult),
+    mutationFn: (payload: { scenarioId: number; dataMode?: 'auto' | 'defaults' | 'sample' }) =>
+      api.post('/model/run', payload).then((r) => r.data as ModelRunResult),
   });
 
   const { data: actualTxns = [] } = useQuery<ActualTxn[]>({
@@ -1385,11 +1386,12 @@ export default function Model() {
   const result = runModel.data as ModelRunResult | undefined;
 
   const handleRun = useCallback(
-    (id: number) => {
+    (id: number, mode: 'auto' | 'defaults' | 'sample' = dataMode) => {
       setActiveScenario(id);
-      runModel.mutate(id);
+      setDataMode(mode);
+      runModel.mutate({ scenarioId: id, dataMode: mode });
     },
-    [runModel],
+    [runModel, dataMode],
   );
 
   // When scenario is selected, load its assumptions into editor
@@ -1565,18 +1567,30 @@ export default function Model() {
             padding: '0.75rem 1rem',
             background: dataSource.type === 'portfolio'
               ? 'rgba(0, 184, 148, 0.08)'
-              : 'rgba(255, 159, 67, 0.08)',
-            borderColor: dataSource.type === 'portfolio' ? 'var(--teal)' : 'var(--gold)',
+              : dataSource.type === 'sample'
+                ? 'rgba(84, 160, 255, 0.08)'
+                : 'rgba(255, 159, 67, 0.08)',
+            borderColor: dataSource.type === 'portfolio'
+              ? 'var(--teal)'
+              : dataSource.type === 'sample'
+                ? 'rgba(84, 160, 255, 0.75)'
+                : 'var(--gold)',
           }}
         >
           <span style={{
             fontSize: '0.8rem',
-            color: dataSource.type === 'portfolio' ? 'var(--teal)' : 'var(--gold)',
+            color: dataSource.type === 'portfolio'
+              ? 'var(--teal)'
+              : dataSource.type === 'sample'
+                ? 'rgba(84, 160, 255, 1)'
+                : 'var(--gold)',
             fontWeight: 600,
           }}>
             {dataSource.type === 'portfolio'
               ? `Model based on ${num(dataSource.unitCount)} owned unit${dataSource.unitCount !== 1 ? 's' : ''} (avg rent $${num(dataSource.avgRent)}/mo, avg HOA $${num(dataSource.avgHOA)}/mo)`
-              : 'Using default assumptions (no units in portfolio yet)'}
+              : dataSource.type === 'sample'
+                ? `Sample scenario data (approx ${num(dataSource.unitCount)} units; avg rent $${num(dataSource.avgRent)}/mo, avg HOA $${num(dataSource.avgHOA)}/mo)`
+                : 'Using default assumptions (no units in portfolio yet)'}
           </span>
         </div>
       )}
@@ -1598,7 +1612,7 @@ export default function Model() {
             <button
               key={s.id}
               className={`btn ${activeScenario === s.id ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => handleRun(s.id!)}
+              onClick={() => handleRun(s.id!, 'auto')}
               disabled={runModel.isPending}
             >
               {s.name} {s.isActive ? '(Active)' : ''}
@@ -1611,10 +1625,25 @@ export default function Model() {
           )}
           <button
             className="btn btn-primary"
-            onClick={() => handleRun(scenarios[0]?.id || 0)}
+            onClick={() => {
+              const id = activeScenario || scenarios.find((s) => s.isActive)?.id || scenarios[0]?.id || 1;
+              if (id) handleRun(id, 'auto');
+            }}
             disabled={runModel.isPending}
           >
             {runModel.isPending ? 'Running...' : 'Run Model'}
+          </button>
+
+          <button
+            className="btn btn-secondary"
+            onClick={() => {
+              const id = activeScenario || scenarios.find((s) => s.isActive)?.id || scenarios[0]?.id || 1;
+              if (id) handleRun(id, 'sample');
+            }}
+            disabled={runModel.isPending}
+            title="Run using built-in sample acquisitions + yield assumptions"
+          >
+            Run Sample Data
           </button>
         </div>
       </div>

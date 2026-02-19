@@ -187,8 +187,89 @@ function calcAnnualFundOpex(assumptions: FundAssumptions, ownershipPct: number):
 /**
  * Build CashFlowInput using portfolio data or defaults.
  */
-function buildCashFlowInput(assumptions: FundAssumptions, db: ReturnType<typeof getDb>) {
-  const portfolio = getPortfolioData(db);
+type ModelDataMode = 'auto' | 'defaults' | 'sample';
+
+function buildSampleCashFlowInput(assumptions: FundAssumptions) {
+  // Sample / sandbox dataset:
+  // - ~6 years to deploy (~24 quarters)
+  // - unit prices range ~$450k-$800k
+  // - net yield target ~3.1% at purchase BEFORE management fees and fund overhead
+  //
+  // Important: the projection engine uses "average unit" operating assumptions, so yield is
+  // matched on average, while purchase prices can vary per quarter via costPerUnit.
+  const acquisitions = [
+    // Year 1 (4 units)
+    { quarter: 0, units: 1, costPerUnit: 460_000 },
+    { quarter: 1, units: 1, costPerUnit: 485_000 },
+    { quarter: 2, units: 1, costPerUnit: 510_000 },
+    { quarter: 3, units: 1, costPerUnit: 535_000 },
+
+    // Year 2 (5 units)
+    { quarter: 4, units: 1, costPerUnit: 550_000 },
+    { quarter: 5, units: 1, costPerUnit: 575_000 },
+    { quarter: 6, units: 2, costPerUnit: 600_000 },
+    { quarter: 7, units: 1, costPerUnit: 625_000 },
+
+    // Year 3 (5 units)
+    { quarter: 8, units: 1, costPerUnit: 640_000 },
+    { quarter: 9, units: 1, costPerUnit: 660_000 },
+    { quarter: 10, units: 2, costPerUnit: 680_000 },
+    { quarter: 11, units: 1, costPerUnit: 700_000 },
+
+    // Year 4 (5 units)
+    { quarter: 12, units: 1, costPerUnit: 710_000 },
+    { quarter: 13, units: 2, costPerUnit: 725_000 },
+    { quarter: 14, units: 1, costPerUnit: 740_000 },
+    { quarter: 15, units: 1, costPerUnit: 755_000 },
+
+    // Year 5 (5 units)
+    { quarter: 16, units: 1, costPerUnit: 770_000 },
+    { quarter: 17, units: 1, costPerUnit: 780_000 },
+    { quarter: 18, units: 2, costPerUnit: 790_000 },
+    { quarter: 19, units: 1, costPerUnit: 800_000 },
+
+    // Year 6 (4 units)
+    { quarter: 20, units: 1, costPerUnit: 800_000 },
+    { quarter: 21, units: 1, costPerUnit: 800_000 },
+    { quarter: 22, units: 1, costPerUnit: 800_000 },
+    { quarter: 23, units: 1, costPerUnit: 800_000 },
+  ];
+
+  // Yield target math (approx):
+  // With vacancy=5%, HOA=$1250/mo, insurance=$2500/yr, tax=$3500/yr,
+  // rent=$3700/mo gives NOI ~3.1% on ~$680k avg basis (before mgmt fee + fund opex).
+  const baseMonthlyRent = 3_700;
+  const baseMonthlyHOA = 1_250;
+  const baseAnnualInsurance = 2_500;
+  const baseAnnualTax = 3_500;
+
+  const unitCount = acquisitions.reduce((s, a) => s + Number(a.units || 0), 0);
+  return {
+    input: {
+      assumptions,
+      acquisitions,
+      baseMonthlyRent,
+      baseMonthlyHOA,
+      baseAnnualInsurance,
+      baseAnnualTax,
+      // Apply the scenario's fund overhead settings so users can stress it in the sample too.
+      annualFundOpex: calcAnnualFundOpex(assumptions, 0),
+    },
+    dataSource: {
+      type: 'sample' as const,
+      unitCount,
+      avgRent: baseMonthlyRent,
+      avgHOA: baseMonthlyHOA,
+    },
+  };
+}
+
+function buildCashFlowInput(assumptions: FundAssumptions, db: ReturnType<typeof getDb>, mode: ModelDataMode = 'auto') {
+  if (mode === 'sample') {
+    return buildSampleCashFlowInput(assumptions);
+  }
+
+  const portfolio = mode === 'defaults' ? null : getPortfolioData(db);
 
   if (portfolio) {
     return {
@@ -496,7 +577,7 @@ type ModelEvalResult = {
   annualExpenseEvents: Array<{ paidDate: string; category: 'insurance' | 'tax'; amount: number }>;
   liquidityLedger: any[];
   dataSource: {
-    type: 'portfolio' | 'defaults';
+    type: 'portfolio' | 'defaults' | 'sample';
     unitCount: number;
     avgRent: number;
     avgHOA: number;
@@ -552,9 +633,13 @@ function getPortfolioUnitsForModel(db: ReturnType<typeof getDb>) {
   }));
 }
 
-function evaluateAssumptions(assumptions: FundAssumptions, db: ReturnType<typeof getDb>): ModelEvalResult {
+function evaluateAssumptions(
+  assumptions: FundAssumptions,
+  db: ReturnType<typeof getDb>,
+  mode: ModelDataMode = 'auto'
+): ModelEvalResult {
   // Build inputs from real portfolio data (or defaults)
-  const { input: cfInput, dataSource } = buildCashFlowInput(assumptions, db);
+  const { input: cfInput, dataSource } = buildCashFlowInput(assumptions, db, mode);
 
   // Generate cash flows
   const baseCashFlows = projectCashFlows(cfInput);
@@ -935,14 +1020,15 @@ router.delete('/scenarios/:id', (req: Request, res: Response) => {
 // POST /api/model/run - Run full projection (uses real portfolio data when available)
 router.post('/run', (req: Request, res: Response) => {
   const db = getDb();
-  const { scenarioId } = req.body;
+  const { scenarioId, dataMode } = req.body as { scenarioId?: number; dataMode?: ModelDataMode };
 
   const assumptions = getScenarioAssumptions(db, scenarioId);
   if (!assumptions) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
   }
-  const result = evaluateAssumptions(assumptions, db);
+  const mode: ModelDataMode = (dataMode === 'defaults' || dataMode === 'sample') ? dataMode : 'auto';
+  const result = evaluateAssumptions(assumptions, db, mode);
   res.json(result);
 });
 
@@ -965,7 +1051,7 @@ router.post('/sensitivity', (req: Request, res: Response) => {
 
   const config = presetFn(assumptions);
   const result = generateSensitivityTable(assumptions, config, (a) => {
-    return evaluateAssumptions(a, db).returns.fundMOIC;
+    return evaluateAssumptions(a, db, 'auto').returns.fundMOIC;
   });
 
   res.json(result);
@@ -1001,7 +1087,7 @@ router.post('/sensitivity-stress', (req: Request, res: Response) => {
     ]);
     const hit = cache.get(key);
     if (hit) return hit;
-    const out = evaluateAssumptions(a, db);
+    const out = evaluateAssumptions(a, db, 'auto');
     const metrics = {
       fundIRR: out.returns.fundIRR,
       fundMOIC: out.returns.fundMOIC,
