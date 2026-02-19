@@ -1,5 +1,5 @@
 /* ===================================
-   INVESTOR SITE - STYLESHEET
+   2451 BRICKELL INSIGHTS - STYLESHEET
    =================================== */
 
 /* CSS Variables / Design System */
@@ -473,6 +473,120 @@ h1, h2, h3, h4, h5, h6 {
 
 .footer-divider {
     opacity: 0.4;
+}
+
+/* ===================================
+   PASSWORD MODAL
+   =================================== */
+
+.password-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 51, 102, 0.95);
+    backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: var(--space-xl);
+}
+
+.password-modal.hidden {
+    display: none;
+}
+
+.password-box {
+    background: var(--white);
+    border-radius: var(--radius-xl);
+    padding: var(--space-2xl);
+    width: 100%;
+    max-width: 420px;
+    text-align: center;
+    box-shadow: var(--shadow-xl);
+}
+
+.password-icon {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto var(--space-lg);
+    background: var(--gradient-bay);
+    border-radius: var(--radius-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.password-icon svg {
+    width: 32px;
+    height: 32px;
+    color: var(--white);
+}
+
+.password-box h2 {
+    font-size: var(--text-xl);
+    margin-bottom: var(--space-sm);
+}
+
+.password-box p {
+    color: var(--dark-gray);
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-lg);
+}
+
+.password-input-group {
+    position: relative;
+    margin-bottom: var(--space-lg);
+}
+
+.password-input {
+    width: 100%;
+    padding: var(--space-md) var(--space-lg);
+    border: 2px solid var(--medium-gray);
+    border-radius: var(--radius-md);
+    font-size: var(--text-base);
+    transition: border-color var(--transition-fast);
+}
+
+.password-input:focus {
+    outline: none;
+    border-color: var(--teal);
+}
+
+.password-input.error {
+    border-color: #e74c3c;
+    animation: shake 0.5s ease;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-5px); }
+    40%, 80% { transform: translateX(5px); }
+}
+
+.password-error {
+    color: #e74c3c;
+    font-size: var(--text-sm);
+    margin-top: var(--space-sm);
+    display: none;
+}
+
+.password-error.visible {
+    display: block;
+}
+
+.password-submit {
+    width: 100%;
+    padding: var(--space-md) var(--space-lg);
+    background: var(--teal);
+    color: var(--white);
+    font-weight: 600;
+    font-size: var(--text-base);
+    border-radius: var(--radius-md);
+    transition: background var(--transition-fast);
+}
+
+.password-submit:hover {
+    background: var(--teal-dark);
 }
 
 /* ===================================
@@ -1582,6 +1696,7 @@ h1, h2, h3, h4, h5, h6 {
 /* Print Styles */
 @media print {
     .site-header,
+    .password-modal,
     .carousel-controls,
     .form-section {
         display: none;

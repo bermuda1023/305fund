@@ -1,13 +1,13 @@
 {
   "buildingInfo": {
-    "address": "Confidential",
+    "address": "2451 Brickell Ave, Miami, FL 33129",
     "yearBuilt": 1963,
     "stories": 21,
     "totalUnits": 359,
-    "acreage": 8,
+    "acreage": 8.3,
     "coordinates": {
-      "lat": 25.7617,
-      "lng": -80.1918
+      "lat": 25.7486,
+      "lng": -80.1897
     }
   },
   "valuationSummary": {

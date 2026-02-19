@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Investor materials: valuation context, strategy, and diligence documents (location confidential).">
-    <title>Investment Opportunity | Investor Room</title>
+    <meta name="description" content="Invest in 2451 Brickell Ave: $200M Valuation with $600M+ Exit Potential. Data-driven analysis.">
+    <title>Investment Opportunity | 2451 Brickell Insights</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
@@ -196,73 +196,68 @@
             .explorer-stats { grid-template-columns: 1fr; }
             .stat-box.insight { grid-column: span 1; }
         }
-
-        /* Minimal access gate (do not leak details pre-auth) */
-        .access-modal {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.65);
-            backdrop-filter: blur(12px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 2000;
-            padding: 24px;
-        }
-        .access-card {
-            width: 100%;
-            max-width: 420px;
-            background: var(--white);
-            border-radius: var(--radius-xl);
-            box-shadow: var(--shadow-xl);
-            padding: var(--space-2xl);
-            text-align: center;
-        }
-        .access-card h2 { margin-bottom: var(--space-sm); }
-        .access-card p { color: var(--dark-gray); font-size: var(--text-sm); margin-bottom: var(--space-lg); }
-        .access-input {
-            width: 100%;
-            padding: 10px 12px;
-            border: 2px solid var(--medium-gray);
-            border-radius: var(--radius-md);
-            font-size: 14px;
-        }
-        .access-error {
-            display: none;
-            color: #e74c3c;
-            font-size: var(--text-sm);
-            margin-top: var(--space-sm);
-        }
-        .access-error.visible { display: block; }
-        .access-btn {
-            margin-top: var(--space-lg);
-            width: 100%;
-            padding: 10px 12px;
-            background: var(--gold);
-            color: var(--white);
-            border-radius: var(--radius-md);
-            font-weight: 700;
-        }
     </style>
 </head>
 <body class="investor-page">
-    <div class="access-modal" id="accessModal">
-        <div class="access-card">
-            <h2>Access Required</h2>
-            <p>Enter password to view the potential investor materials.</p>
-            <form id="accessForm">
-                <input id="accessInput" class="access-input" type="password" placeholder="Password" autocomplete="current-password" required>
-                <div id="accessError" class="access-error">Incorrect password.</div>
-                <button class="access-btn" type="submit">Enter</button>
-            </form>
+    <!-- Gate 1: unlock the deck (password C4) -->
+    <section id="deckGate" style="padding: 0; margin: 0;">
+        <div style="max-width: 720px; margin: 0 auto; padding: 56px 16px;">
+            <div style="background: var(--white); border-radius: 16px; padding: 24px; box-shadow: var(--shadow-lg);">
+                <h2 style="margin-bottom: 8px; color: var(--navy);">Investor Deck Access</h2>
+                <p style="color: var(--dark-gray); font-size: 0.95rem; margin-bottom: 16px;">
+                    Enter the password to view the deck.
+                </p>
+                <form id="deckUnlockForm">
+                    <input id="deckPassword" type="password" placeholder="Password" autocomplete="current-password" class="password-input" required>
+                    <div id="deckUnlockError" class="password-error" style="margin-top: 10px;">Incorrect password.</div>
+                    <button type="submit" class="password-submit" style="background: var(--gold); margin-top: 14px;">View Deck</button>
+                </form>
+            </div>
         </div>
+    </section>
+
+    <div id="deckContent" style="display:none;">
+        <!-- Public view: Gamma deck -->
+        <section id="deck" style="padding: 0; margin: 0;">
+            <div style="max-width: 1100px; margin: 0 auto; padding: 24px 16px;">
+                <div style="position: relative; width: 100%; padding-top: 64.2857%; border-radius: 16px; overflow: hidden; background: rgba(0,0,0,0.04); box-shadow: var(--shadow-lg);">
+                    <iframe
+                        src="https://gamma.app/embed/irzikfjmunm2kll"
+                        style="position: absolute; inset: 0; width: 100%; height: 100%; border: 0;"
+                        allow="fullscreen"
+                        title="Project Bay-Shield"
+                    ></iframe>
+                </div>
+            </div>
+        </section>
+
+        <!-- Gate 2: unlock full site (password admin) -->
+        <section id="unlock" style="padding: 0; margin: 0;">
+            <div style="max-width: 720px; margin: 0 auto; padding: 0 16px 56px;">
+                <div style="background: var(--white); border-radius: 16px; padding: 24px; box-shadow: var(--shadow-lg);">
+                    <h2 style="margin-bottom: 8px; color: var(--navy);">Unlock Full Diligence</h2>
+                    <p style="color: var(--dark-gray); font-size: 0.95rem; margin-bottom: 16px;">
+                        After NDA execution, enter the access password to view the full investor website (specific address, maps, unit details, and source tables).
+                    </p>
+                    <form id="ndaUnlockForm">
+                        <label style="display:flex; gap: 10px; align-items:flex-start; font-size: 0.9rem; color: var(--charcoal); margin-bottom: 14px;">
+                            <input id="ndaConfirm" type="checkbox" style="margin-top: 4px;" required>
+                            <span>I confirm I have executed the NDA.</span>
+                        </label>
+                        <input id="ndaPassword" type="password" placeholder="Password" autocomplete="current-password" class="password-input" required>
+                        <div id="ndaUnlockError" class="password-error" style="margin-top: 10px;">Incorrect password.</div>
+                        <button type="submit" class="password-submit" style="background: var(--gold); margin-top: 14px;">Unlock Full Site</button>
+                    </form>
+                </div>
+            </div>
+        </section>
     </div>
 
     <div id="mainContent" style="display:none;">
         <!-- Header -->
         <header class="site-header">
             <nav class="nav-container">
-                <a href="#opportunity" class="nav-logo"><i data-lucide="building-2"></i><span>Investor Room</span></a>
+                <a href="#deck" class="nav-logo"><i data-lucide="building-2"></i><span>2451 Brickell</span></a>
                 <div class="nav-links">
                     <a href="#opportunity" class="nav-link" data-en="Opportunity" data-es="Oportunidad">Opportunity</a>
                     <a href="#timeline" class="nav-link" data-en="Strategy" data-es="Estrategia">Strategy</a>
@@ -285,8 +280,8 @@
             <div class="hero-bg" style="background: linear-gradient(135deg, #003366 0%, #1a4a6e 40%, #D4A373 100%);"></div>
             <div class="hero-overlay" style="background: linear-gradient(180deg, rgba(0, 51, 102, 0.75) 0%, rgba(0, 51, 102, 0.9) 100%);"></div>
             <div class="hero-content">
-                <h1 class="fade-in" data-en="Unlock Redevelopment Gold" data-es="Descubra el Potencial de Redesarrollo">Unlock Redevelopment Gold</h1>
-                <p class="hero-subtitle fade-in stagger-1" data-en="Buy units implying a ~$200M valuation today—position for a $600M+ bulk exit via developer buyout. 8+ acres of prime Biscayne Bay waterfront." data-es="Compre unidades a una valoración implícita de ~$200M hoy—posiciónese para una salida de $600M+ mediante venta a desarrolladores. 8+ acres de primera línea en la Bahía de Biscayne.">Buy units implying a ~$200M valuation today—position for a $600M+ bulk exit via developer buyout. 8+ acres of prime Biscayne Bay waterfront.</p>
+                <h1 class="fade-in" data-en="Unlock Redevelopment Gold at 2451 Brickell Ave" data-es="Descubra el Potencial de Redesarrollo en 2451 Brickell Ave">Unlock Redevelopment Gold at 2451 Brickell Ave</h1>
+                <p class="hero-subtitle fade-in stagger-1" data-en="Buy units implying a ~$200M valuation today—position for a $600M+ bulk exit via developer buyout. 8.3 acres of prime Biscayne Bay waterfront." data-es="Compre unidades a una valoración implícita de ~$200M hoy—posiciónese para una salida de $600M+ mediante venta a desarrolladores. 8.3 acres de primera línea en la Bahía de Biscayne.">Buy units implying a ~$200M valuation today—position for a $600M+ bulk exit via developer buyout. 8.3 acres of prime Biscayne Bay waterfront.</p>
                 <div class="fade-in stagger-2" style="display: flex; gap: var(--space-md); justify-content: center; flex-wrap: wrap;">
                     <a href="#invest" class="btn btn-primary"><i data-lucide="briefcase"></i><span data-en="Express Interest" data-es="Expresar Interés">Express Interest</span></a>
                     <a href="#data" class="btn btn-secondary"><i data-lucide="bar-chart-3"></i><span data-en="View Data" data-es="Ver Datos">View Data</span></a>
@@ -306,33 +301,13 @@
                     </div>
                     <div class="metric-card">
                         <span class="metric-value gold counter" data-target="615" data-prefix="$" data-suffix="M">$0M</span>
-                        <span class="metric-label" data-en="Land Value (8+ acres)" data-es="Valor del Terreno (8+ acres)">Land Value (8+ acres)</span>
+                        <span class="metric-label" data-en="Land Value (8.3 acres)" data-es="Valor del Terreno (8.3 acres)">Land Value (8.3 acres)</span>
                         <span class="metric-note" data-en="At $1,700/sf waterfront rate" data-es="A $1,700/pies² frente al mar">At $1,700/sf waterfront rate</span>
                     </div>
                     <div class="metric-card">
                         <span class="metric-value counter" data-target="2.8" data-suffix="x" data-decimals="1">0x</span>
                         <span class="metric-label" data-en="Potential ROI" data-es="ROI Potencial">Potential ROI</span>
                         <span class="metric-note">$615M ÷ $218M</span>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Pitch Deck -->
-        <section class="section section-alt" id="deck">
-            <div class="container">
-                <div class="section-header fade-in">
-                    <h2>Investor Pitch Deck</h2>
-                    <p>Embedded presentation for review.</p>
-                </div>
-                <div class="fade-in" style="background: var(--white); border-radius: var(--radius-xl); padding: var(--space-lg); box-shadow: var(--shadow-lg);">
-                    <div style="position: relative; width: 100%; padding-top: 64.2857%; border-radius: var(--radius-lg); overflow: hidden; background: var(--gray-50);">
-                        <iframe
-                            src="https://gamma.app/embed/irzikfjmunm2kll"
-                            style="position: absolute; inset: 0; width: 100%; height: 100%; border: 0;"
-                            allow="fullscreen"
-                            title="Project Bay-Shield"
-                        ></iframe>
                     </div>
                 </div>
             </div>
@@ -347,9 +322,9 @@
                 </div>
                 <div class="two-col">
                     <div class="content-block fade-in">
-                        <h3 data-en="Why This Site?" data-es="¿Por qué este sitio?">Why This Site?</h3>
-                        <p data-en="This 1963-built, 21-story condo sits on 8+ acres of prime Brickell waterfront—one of the largest contiguous parcels in the area. With 359 units, 23 recent sales (2024-2025) imply an average building value of $218M." data-es="Este condominio de 21 pisos construido en 1963 se encuentra en 8+ acres de primera línea en Brickell—uno de los terrenos contiguos más grandes del área. Con 359 unidades, 23 ventas recientes (2024-2025) implican un valor promedio del edificio de $218M.">This 1963-built, 21-story condo sits on 8+ acres of prime Brickell waterfront—one of the largest contiguous parcels in the area. With 359 units, <strong>23 recent sales (2024-2025)</strong> imply an average building value of <strong>$218M</strong>.</p>
-                        <p data-en="But as raw land, comparable sales suggest $615M potential. At ~$1,700/sq ft for waterfront land (8+ acres):" data-es="Pero como terreno, ventas comparables sugieren un potencial de $615M. A ~$1,700/pies² para terreno frente al mar (8+ acres):">But as raw land, comparable sales suggest $615M potential. At ~$1,700/sq ft for waterfront land (8+ acres):</p>
+                        <h3 data-en="Why 2451 Brickell Ave?" data-es="¿Por qué 2451 Brickell Ave?">Why 2451 Brickell Ave?</h3>
+                        <p data-en="This 1963-built, 21-story condo sits on 8.3 acres of prime Brickell waterfront—one of the largest contiguous parcels in the area. With 359 units, 23 recent sales (2024-2025) imply an average building value of $218M." data-es="Este condominio de 21 pisos construido en 1963 se encuentra en 8.3 acres de primera línea en Brickell—uno de los terrenos contiguos más grandes del área. Con 359 unidades, 23 ventas recientes (2024-2025) implican un valor promedio del edificio de $218M.">This 1963-built, 21-story condo sits on 8.3 acres of prime Brickell waterfront—one of the largest contiguous parcels in the area. With 359 units, <strong>23 recent sales (2024-2025)</strong> imply an average building value of <strong>$218M</strong>.</p>
+                        <p data-en="But as raw land, comparable sales suggest $615M potential. At ~$1,700/sq ft for waterfront land (8.3 acres ≈ 361,548 sq ft):" data-es="Pero como terreno, ventas comparables sugieren un potencial de $615M. A ~$1,700/pies² para terreno frente al mar (8.3 acres ≈ 361,548 pies²):">But as raw land, comparable sales suggest $615M potential. At ~$1,700/sq ft for waterfront land (8.3 acres ≈ 361,548 sq ft):</p>
                         <ul>
                             <li><strong data-en="361,548 sq ft × $1,700 = $615M land value" data-es="361,548 pies² × $1,700 = $615M valor del terreno">361,548 sq ft × $1,700 = $615M</strong> <span data-en="land value" data-es="valor del terreno">land value</span></li>
                             <li><span data-en="Current implied value: $218M (avg of 23 sales)" data-es="Valor implícito actual: $218M (promedio de 23 ventas)">Current implied value: $218M (avg of 23 sales)</span></li>
@@ -357,13 +332,8 @@
                             <li><strong data-en="Potential arbitrage: ~$400M spread" data-es="Arbitraje potencial: ~$400M de diferencia">Potential arbitrage: ~$400M spread</strong></li>
                         </ul>
                     </div>
-                    <div class="map-container fade-in stagger-1" style="display:flex;align-items:center;justify-content:center;padding:var(--space-2xl);text-align:center;">
-                        <div>
-                            <h4 style="margin-bottom:var(--space-sm);">Location withheld</h4>
-                            <p style="color:var(--text-light);font-size:var(--text-sm);">
-                                The exact address and map are intentionally omitted from this public overview.
-                            </p>
-                        </div>
+                    <div class="map-container fade-in stagger-1">
+                        <iframe src="https://maps.google.com/maps?q=2451+Brickell+Ave,+Miami,+FL+33129&t=&z=16&ie=UTF8&iwloc=&output=embed" allowfullscreen="" loading="lazy" title="2451 Brickell Ave, Miami, FL 33129" referrerpolicy="no-referrer-when-downgrade"></iframe>
                     </div>
                 </div>
                 <div class="comparison-visual fade-in">
@@ -376,7 +346,7 @@
                     <div class="comparison-box highlight">
                         <span class="comparison-value">$615M</span>
                         <span class="comparison-label">Land Value</span>
-                        <p style="font-size: var(--text-xs); margin-top: 8px; opacity: 0.9;">8+ acres × $1,700/sf</p>
+                        <p style="font-size: var(--text-xs); margin-top: 8px; opacity: 0.9;">8.3 acres × $1,700/sf</p>
                     </div>
                 </div>
                 
@@ -384,14 +354,10 @@
                 <div class="property-showcase fade-in" style="margin-top: var(--space-3xl);">
                     <h3 style="text-align: center; margin-bottom: var(--space-lg); color: var(--navy);">
                         <i data-lucide="camera" style="width: 24px; height: 24px; vertical-align: middle; margin-right: 8px;"></i>
-                        <span data-en="The Property: 8+ Acres of Prime Waterfront" data-es="La Propiedad: 8+ Acres de Primera Línea Frente al Mar">The Property: 8+ Acres of Prime Waterfront</span>
+                        <span data-en="The Property: 8.3 Acres of Prime Waterfront" data-es="La Propiedad: 8.3 Acres de Primera Línea Frente al Mar">The Property: 8.3 Acres of Prime Waterfront</span>
                     </h3>
                     <div class="showcase-image-wrapper">
-                        <img
-                            src="builidng images.png"
-                            alt="Property showcase (aerial views, amenities, bayfront context)"
-                            class="showcase-image"
-                        >
+                        <img src="builidng images.png" alt="2451 Brickell Ave property showcase - 8.3 acres of prime Brickell waterfront with pool, tennis courts, and stunning bay views" class="showcase-image">
                     </div>
                     <p style="text-align: center; margin-top: var(--space-lg); color: var(--text-light); font-size: var(--text-sm);" data-en="Aerial views, amenities, and bayfront location — one of Miami's largest contiguous waterfront parcels" data-es="Vistas aéreas, amenidades y ubicación frente a la bahía — uno de los terrenos contiguos más grandes de Miami frente al mar">
                         Aerial views, amenities, and bayfront location — one of Miami's largest contiguous waterfront parcels
@@ -440,7 +406,7 @@
                                 <span style="font-weight: 600; color: var(--navy); font-size: var(--text-sm);">Max Density</span>
                             </div>
                             <p style="color: var(--text); font-size: var(--text-xs); line-height: 1.5;">
-                                Up to <strong>150 units/acre</strong>—the highest density. On 8+ acres: <strong>1,200+ units</strong>.
+                                Up to <strong>150 units/acre</strong>—the highest density. On 8.3 acres: <strong>1,200+ units</strong>.
                             </p>
                         </div>
                         
@@ -511,7 +477,7 @@
                             </thead>
                             <tbody>
                                 <tr style="border-bottom: 1px solid var(--gray-200);">
-                                    <td style="padding: 14px;"><strong style="color: var(--gold);">Brickell Waterfront Assemblage</strong></td>
+                                    <td style="padding: 14px;"><strong style="color: var(--gold);">1001 & 1111 Brickell Bay Dr</strong></td>
                                     <td style="padding: 14px; text-align: center;">2025</td>
                                     <td style="padding: 14px; text-align: center;">4.25</td>
                                     <td style="padding: 14px; text-align: center; color: var(--gold); font-weight: 700;">$520M</td>
@@ -526,10 +492,10 @@
                                     <td style="padding: 14px; text-align: center; color: var(--teal); font-weight: 700;">$670M</td>
                                     <td style="padding: 14px; text-align: center;">$160M</td>
                                     <td style="padding: 14px; text-align: center; font-weight: 600;">$3,660</td>
-                                    <td style="padding: 14px; color: var(--text-light);">Multiple parcels (addresses withheld)</td>
+                                    <td style="padding: 14px; color: var(--text-light);">Multiple parcels at 1201, 1221, 1250, 1260 Brickell</td>
                                 </tr>
                                 <tr style="border-bottom: 1px solid var(--gray-200);">
-                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ Component parcel (address withheld)</span></td>
+                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ 1201 Brickell Bay Dr</span></td>
                                     <td style="padding: 14px; text-align: center;">Apr 2022</td>
                                     <td style="padding: 14px; text-align: center;">2.5</td>
                                     <td style="padding: 14px; text-align: center;">$363M</td>
@@ -538,7 +504,7 @@
                                     <td style="padding: 14px; color: var(--text-light);">Vacant waterfront (Hollo family, held 22 yrs)</td>
                                 </tr>
                                 <tr style="border-bottom: 1px solid var(--gray-200); background: rgba(0, 168, 150, 0.03);">
-                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ Component parcel (address withheld)</span></td>
+                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ 1221 Brickell Ave</span></td>
                                     <td style="padding: 14px; text-align: center;">2022</td>
                                     <td style="padding: 14px; text-align: center;">—</td>
                                     <td style="padding: 14px; text-align: center;">$287M</td>
@@ -547,7 +513,7 @@
                                     <td style="padding: 14px; color: var(--text-light);">28-story office tower</td>
                                 </tr>
                                 <tr style="border-bottom: 1px solid var(--gray-200);">
-                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ Component parcels (address withheld)</span></td>
+                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ 1250 & 1260 Brickell Bay</span></td>
                                     <td style="padding: 14px; text-align: center;">2022</td>
                                     <td style="padding: 14px; text-align: center;">~0.5</td>
                                     <td style="padding: 14px; text-align: center;">$20M</td>
@@ -562,7 +528,7 @@
                                     <td style="padding: 14px; text-align: center;">$48M</td>
                                     <td style="padding: 14px; text-align: center;">$44M</td>
                                     <td style="padding: 14px; text-align: center;">$1,000</td>
-                                    <td style="padding: 14px; color: var(--text-light);">61-unit condo buyout, direct waterfront neighborhood</td>
+                                    <td style="padding: 14px; color: var(--text-light);">61-unit condo buyout, direct waterfront neighbor</td>
                                 </tr>
                                 <tr style="border-bottom: 1px solid var(--gray-200);">
                                     <td style="padding: 14px;"><strong style="color: var(--teal);">Una Site (Inflation-Adjusted)</strong></td>
@@ -574,9 +540,9 @@
                                     <td style="padding: 14px; color: var(--text-light);">2014 price × 2.44x (MIXRNSA 179→436)</td>
                                 </tr>
                                 <tr style="background: linear-gradient(135deg, rgba(212, 163, 115, 0.1) 0%, rgba(0, 168, 150, 0.1) 100%);">
-                                    <td style="padding: 14px;"><strong style="color: var(--gold);">This Site</strong></td>
+                                    <td style="padding: 14px;"><strong style="color: var(--gold);">2451 Brickell Ave (This Site)</strong></td>
                                     <td style="padding: 14px; text-align: center; font-weight: 700;">TBD</td>
-                                    <td style="padding: 14px; text-align: center; font-weight: 700;">8+</td>
+                                    <td style="padding: 14px; text-align: center; font-weight: 700;">8.3</td>
                                     <td style="padding: 14px; text-align: center; color: var(--gold); font-weight: 700;">$615M*</td>
                                     <td style="padding: 14px; text-align: center; font-weight: 700;">$74M</td>
                                     <td style="padding: 14px; text-align: center; font-weight: 700; color: var(--gold);">$1,700</td>
@@ -599,17 +565,17 @@
                         <div class="una-case-study fade-in stagger-1" style="background: linear-gradient(135deg, rgba(0, 51, 102, 0.03) 0%, rgba(212, 163, 115, 0.08) 100%); border-radius: var(--radius-xl); padding: var(--space-2xl); border: 1px solid rgba(212, 163, 115, 0.3);">
                             <h4 style="color: var(--navy); margin-bottom: var(--space-lg); display: flex; align-items: center; gap: var(--space-sm);">
                                 <i data-lucide="landmark" style="width: 22px; height: 22px; color: var(--gold);"></i>
-                                Case Study: Una Residences (Brickell Waterfront)
+                                Case Study: Una Residences (Our Neighbor)
                             </h4>
                             <div style="margin-bottom: var(--space-lg);">
                                 <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7; margin-bottom: var(--space-md);">
-                                    <strong>The Playbook:</strong> In 2014, developers acquired the 61-unit Sail on Brickell condo on the waterfront corridor—for approximately <strong>$48 million</strong> through a condo termination buyout.
+                                    <strong>The Playbook:</strong> In 2014, developers acquired the 61-unit Sail on Brickell condo at 2627 S Bayshore Dr—our direct waterfront neighbor—for approximately <strong>$48 million</strong> through a condo termination buyout.
                                 </p>
                                 <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7; margin-bottom: var(--space-md);">
                                     <strong>The Result:</strong> That 1.1-acre site is now <strong>Una Residences</strong>, a 47-story ultra-luxury tower with units selling for $2,000-$3,000+ per square foot. The land value alone—adjusted for Miami's 2.44x index growth since 2014—would be worth <strong>~$117M today</strong>.
                                 </p>
                                 <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7;">
-                                    <strong>The Opportunity:</strong> The site has <strong>7.5x more land</strong> than Una's site. At comparable $/acre valuations, this parcel could command <strong>$615M-$800M</strong> from developers.
+                                    <strong>The Opportunity:</strong> 2451 Brickell has <strong>7.5x more land</strong> than Una's site. At comparable $/acre valuations, this parcel could command <strong>$615M-$800M</strong> from developers.
                                 </p>
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md); text-align: center;">
@@ -682,7 +648,7 @@
                                     <tr><td>Implied Value Range</td><td><strong>$159M - $290M</strong></td><td>Significant variance = opportunity</td></tr>
                                     <tr><td>Price Range (2024-25)</td><td><strong>$360K - $1.4M</strong></td><td>Entry points for all budgets</td></tr>
                                     <tr><td>Price Per Sq Ft</td><td><strong>$357 - $675</strong></td><td>Avg $530/sf (below new builds)</td></tr>
-                                    <tr><td>Land Value (8+ acres)</td><td><strong>$615M</strong></td><td>361,548 sf × $1,700/sf</td></tr>
+                                    <tr><td>Land Value (8.3 acres)</td><td><strong>$615M</strong></td><td>361,548 sf × $1,700/sf</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -937,29 +903,46 @@
                         <div class="calc-input-group">
                             <label style="display: block; font-weight: 600; color: var(--navy); margin-bottom: var(--space-xs); font-size: 11px;">
                                 <i data-lucide="home" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
-                                Scenario
+                                Unit Type
                             </label>
                             <select id="unitTypeSelect" style="width: 100%; padding: 8px 10px; border: 2px solid var(--gray-200); border-radius: var(--radius-md); font-size: 12px; font-family: var(--font-body); cursor: pointer;">
                                 <option value="">-- Select --</option>
-                                <optgroup label="Standard Scenarios">
-                                    <option value="A">Scenario A</option>
-                                    <option value="B">Scenario B</option>
-                                    <option value="C">Scenario C</option>
-                                    <option value="D">Scenario D</option>
-                                    <option value="E">Scenario E</option>
-                                    <option value="F">Scenario F</option>
-                                    <option value="G">Scenario G</option>
-                                    <option value="H">Scenario H</option>
-                                    <option value="J">Scenario J</option>
-                                    <option value="K">Scenario K</option>
-                                    <option value="L">Scenario L</option>
-                                    <option value="M">Scenario M</option>
-                                    <option value="N">Scenario N</option>
-                                    <option value="P">Scenario P</option>
-                                    <option value="R">Scenario R</option>
-                                    <option value="S">Scenario S</option>
-                                    <option value="T">Scenario T</option>
-                                    <option value="U">Scenario U</option>
+                                <optgroup label="Standard Units">
+                                    <option value="A">Type A (2BR, 1305sf)</option>
+                                    <option value="B">Type B (2BR, 1188sf)</option>
+                                    <option value="C">Type C (1BR, 886sf)</option>
+                                    <option value="D">Type D (3BR, 1703sf)</option>
+                                    <option value="E">Type E (2BR, 1188sf)</option>
+                                    <option value="F">Type F (1BR, 1012sf)</option>
+                                    <option value="G">Type G (2BR, 1357sf)</option>
+                                    <option value="H">Type H (2BR, 1188sf)</option>
+                                    <option value="J">Type J (3BR, 1703sf)</option>
+                                    <option value="K">Type K (1BR, 886sf)</option>
+                                    <option value="L">Type L (2BR, 1188sf)</option>
+                                    <option value="M">Type M (2BR, 1357sf)</option>
+                                    <option value="N">Type N (1BR, 1012sf)</option>
+                                    <option value="P">Type P (1BR, 832sf)</option>
+                                    <option value="R">Type R (1BR, 886sf)</option>
+                                    <option value="S">Type S (2BR, 1188sf)</option>
+                                    <option value="T">Type T (1BR, 832sf)</option>
+                                    <option value="U">Type U (1BR, 1012sf)</option>
+                                </optgroup>
+                                <optgroup label="Special/Combined Units">
+                                    <option value="12E&F">Unit 12E&F (3BR, 2189sf)</option>
+                                    <option value="19E&F">Unit 19E&F (3BR, 2189sf)</option>
+                                    <option value="19G&H">Unit 19G&H (3BR, 2500sf)</option>
+                                    <option value="16D">Unit 16D (3BR, 1900sf)</option>
+                                    <option value="16E">Unit 16E (1BR, 900sf)</option>
+                                    <option value="21H">Unit 21H (1BR, 886sf)</option>
+                                    <option value="21J">Unit 21J (3BR, 2000sf)</option>
+                                    <option value="1A">Unit 1A (2BR, 1500sf)</option>
+                                    <option value="1B">Unit 1B (2BR, 1200sf)</option>
+                                    <option value="A1">Unit A1 (2BR, 1450sf)</option>
+                                    <option value="B1">Unit B1 (2BR, 1500sf)</option>
+                                    <option value="B2">Unit B2 (2BR, 1600sf)</option>
+                                    <option value="C1">Unit C1 (1BR, 600sf)</option>
+                                    <option value="C2">Unit C2 (4BR, 7000sf)</option>
+                                    <option value="C3">Unit C3 (1BR, 750sf)</option>
                                 </optgroup>
                             </select>
                         </div>
@@ -1107,7 +1090,19 @@
                     
                     <!-- Results Section -->
                     <div id="calculatorResults" style="display: none;">
-                        <!-- Unit-specific details intentionally omitted to avoid leaking building fingerprints. -->
+                        
+                        <!-- Unit Info Bar -->
+                        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--navy); color: white; padding: var(--space-sm) var(--space-md); border-radius: var(--radius-md); margin-bottom: var(--space-md);">
+                            <div style="display: flex; align-items: center; gap: var(--space-md);">
+                                <span style="font-weight: 700; font-size: 14px;">Unit <span id="resultUnitType">X</span></span>
+                                <span style="opacity: 0.7; font-size: 12px;"><span id="resultSqft">--</span> sf</span>
+                                <span style="opacity: 0.7; font-size: 12px;"><span id="resultOwnership">--</span> ownership</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: var(--space-md);">
+                                <span style="font-size: 11px; opacity: 0.7;">Est. HOA: <span id="resultHOA" style="color: var(--gold);">$--</span>/mo</span>
+                                <span style="font-size: 11px; opacity: 0.7;">Prop Tax: <span id="resultPropTax" style="color: var(--gold);">$--</span>/yr</span>
+                            </div>
+                        </div>
                         
                         <!-- Key Metrics Grid -->
                         <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--space-sm); margin-bottom: var(--space-md);">
@@ -1208,14 +1203,14 @@
                         </div>
                         
                         <p style="font-size: 10px; color: var(--text-light); margin-top: var(--space-sm); text-align: center; font-style: italic;">
-                            * Projections are estimates based on assumptions. Actual results may vary. This is not financial advice.
+                            * Projections are estimates based on assumptions. Actual results may vary. This is not financial advice. HOA scaled from Unit N ($1,024/mo).
                         </p>
                     </div>
                     
                     <!-- Empty State -->
                     <div id="calculatorEmpty" style="text-align: center; padding: var(--space-xl); color: var(--text-light);">
                         <i data-lucide="calculator" style="width: 48px; height: 48px; margin-bottom: var(--space-md); opacity: 0.3;"></i>
-                        <p style="font-size: var(--text-sm); margin-bottom: var(--space-xs);">Select a scenario, enter buy price and rent to model your investment</p>
+                        <p style="font-size: var(--text-sm); margin-bottom: var(--space-xs);">Select a unit type, enter buy price and rent to model your investment</p>
                         <p style="font-size: 11px; opacity: 0.7;">Adjust growth assumptions to see different scenarios</p>
                     </div>
                 </div>
@@ -1336,7 +1331,7 @@
                 </form>
                 <div style="text-align: center; margin-top: var(--space-xl); padding-top: var(--space-lg); border-top: 1px solid var(--medium-gray);">
                     <p style="font-size: var(--text-sm); color: var(--dark-gray); margin-bottom: var(--space-md);">Prefer to discuss directly?</p>
-                    <a href="mailto:invest@305opportunitiesfund.com" class="btn btn-secondary" style="color: var(--gold); border-color: var(--gold);"><i data-lucide="calendar"></i><span>Schedule a Call</span></a>
+                    <a href="mailto:invest@brickell2451insights.com" class="btn btn-secondary" style="color: var(--gold); border-color: var(--gold);"><i data-lucide="calendar"></i><span>Schedule a Call</span></a>
                     <p style="font-size: var(--text-xs); color: var(--text-light); margin-top: var(--space-sm); font-style: italic;">* Email scheduling coming soon</p>
                 </div>
             </div>
@@ -1346,8 +1341,8 @@
         <footer class="site-footer">
             <div class="footer-grid">
                 <div class="footer-brand">
-                    <h3>Brickell Insights</h3>
-                    <p data-en="Data-driven investment analysis for a confidential waterfront opportunity." data-es="Análisis de inversión basado en datos para una oportunidad frente al mar confidencial.">Data-driven investment analysis for a confidential waterfront opportunity.</p>
+                    <h3>2451 Brickell Insights</h3>
+                    <p data-en="Data-driven investment analysis for 2451 Brickell Ave, Miami's premier waterfront opportunity." data-es="Análisis de inversión basado en datos para 2451 Brickell Ave, la principal oportunidad frente al mar de Miami.">Data-driven investment analysis for 2451 Brickell Ave, Miami's premier waterfront opportunity.</p>
                 </div>
                 <div class="footer-col">
                     <h4 data-en="Quick Links" data-es="Enlaces Rápidos">Quick Links</h4>
@@ -1356,12 +1351,12 @@
                         <li><a href="#timeline" data-en="Strategy" data-es="Estrategia">Strategy</a></li>
                         <li><a href="#data" data-en="Data" data-es="Datos">Data</a></li>
                         <li><a href="#invest" data-en="Get Involved" data-es="Participar">Get Involved</a></li>
-                        <li><a href="index.html" data-en="Home" data-es="Inicio">Home</a></li>
+                        <li><a href="#deck" data-en="Home" data-es="Inicio">Home</a></li>
                     </ul>
                 </div>
                 <div class="footer-col">
                     <h4 data-en="Contact" data-es="Contacto">Contact</h4>
-                    <ul><li><a href="mailto:invest@305opportunitiesfund.com">invest@305opportunitiesfund.com</a></li></ul>
+                    <ul><li><a href="mailto:invest@brickell2451insights.com">invest@brickell2451insights.com</a></li></ul>
                     <p style="font-size: var(--text-xs); color: var(--text-light); margin-top: var(--space-xs); font-style: italic;">* Email coming soon</p>
                 </div>
             </div>
@@ -1374,61 +1369,103 @@
 
     <script>
         (function () {
-            var KEY = 'investor_site_access';
-            var modal = document.getElementById('accessModal');
-            var form = document.getElementById('accessForm');
-            var input = document.getElementById('accessInput');
-            var err = document.getElementById('accessError');
-            var main = document.getElementById('mainContent');
+            var DECK_KEY = 'brickell_investor_deck_unlocked';
+            var FULL_KEY = 'brickell_investor_full_unlocked';
 
-            function unlock() {
-                try { sessionStorage.setItem(KEY, 'true'); } catch (e) { /* ignore */ }
-                if (modal) modal.style.display = 'none';
-                if (main) main.style.display = 'block';
-                document.body.style.overflow = '';
-                // Re-run reveal/counters if the site JS has already loaded.
-                try {
-                    if (typeof initScrollAnimations === 'function') initScrollAnimations();
-                    if (typeof initCounters === 'function') initCounters();
-                } catch (e) { /* ignore */ }
+            var deckGate = document.getElementById('deckGate');
+            var deckContent = document.getElementById('deckContent');
+            var deckForm = document.getElementById('deckUnlockForm');
+            var deckPwd = document.getElementById('deckPassword');
+            var deckErr = document.getElementById('deckUnlockError');
+
+            var main = document.getElementById('mainContent');
+            var unlockSection = document.getElementById('unlock');
+            var form = document.getElementById('ndaUnlockForm');
+            var pwd = document.getElementById('ndaPassword');
+            var err = document.getElementById('ndaUnlockError');
+
+            function showDeck() {
+                if (deckGate) deckGate.style.display = 'none';
+                if (deckContent) deckContent.style.display = 'block';
+                // Keep the full site hidden until Gate 2 succeeds.
+                if (main) main.style.display = 'none';
             }
 
-            var already = false;
-            try { already = sessionStorage.getItem(KEY) === 'true'; } catch (e) { already = false; }
-            if (already) {
-                unlock();
+            function showMain() {
+                if (main) main.style.display = 'block';
+                if (unlockSection) unlockSection.style.display = 'none';
+                // Re-init animations/counters once content becomes visible.
+                function tryInit() {
+                    try {
+                        if (typeof initScrollAnimations === 'function') initScrollAnimations();
+                        if (typeof initCounters === 'function') initCounters();
+                    } catch (e) { /* ignore */ }
+                }
+                tryInit();
+                setTimeout(tryInit, 0);
+                setTimeout(tryInit, 250);
+            }
+
+            var deckUnlocked = false;
+            var fullUnlocked = false;
+            try { deckUnlocked = sessionStorage.getItem(DECK_KEY) === 'true'; } catch (e) { deckUnlocked = false; }
+            try { fullUnlocked = sessionStorage.getItem(FULL_KEY) === 'true'; } catch (e) { fullUnlocked = false; }
+
+            if (deckUnlocked) showDeck();
+            if (fullUnlocked) {
+                showDeck();
+                showMain();
                 return;
             }
 
-            // Locked state
-            if (main) main.style.display = 'none';
-            document.body.style.overflow = 'hidden';
-            if (modal) modal.style.display = 'flex';
-            if (input) setTimeout(function () { try { input.focus(); } catch (e) { /* ignore */ } }, 50);
-
-            if (form) {
-                form.addEventListener('submit', function (e) {
+            if (deckErr) deckErr.classList.remove('visible');
+            if (deckForm) {
+                deckForm.addEventListener('submit', function (e) {
                     e.preventDefault();
-                    var val = String(input && input.value ? input.value : '').trim();
+                    var val = String(deckPwd && deckPwd.value ? deckPwd.value : '').trim();
                     if (val === 'C4') {
-                        unlock();
+                        try { sessionStorage.setItem(DECK_KEY, 'true'); } catch (e2) { /* ignore */ }
+                        showDeck();
+                        try { window.location.hash = '#deck'; } catch (e3) { /* ignore */ }
                     } else {
-                        if (err) err.classList.add('visible');
-                        if (input) input.value = '';
+                        if (deckErr) deckErr.classList.add('visible');
+                        if (deckPwd) deckPwd.value = '';
                     }
                 });
             }
-            if (input) {
-                input.addEventListener('input', function () {
+            if (deckPwd) {
+                deckPwd.addEventListener('input', function () {
+                    if (deckErr) deckErr.classList.remove('visible');
+                });
+            }
+
+            if (err) err.classList.remove('visible');
+            if (form) {
+                form.addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    var val = String(pwd && pwd.value ? pwd.value : '').trim();
+                    if (val === 'admin') {
+                        try { sessionStorage.setItem(FULL_KEY, 'true'); } catch (e2) { /* ignore */ }
+                        showMain();
+                        // Jump to the revealed page top.
+                        try { window.location.hash = '#opportunity'; } catch (e3) { /* ignore */ }
+                    } else {
+                        if (err) err.classList.add('visible');
+                        if (pwd) pwd.value = '';
+                    }
+                });
+            }
+            if (pwd) {
+                pwd.addEventListener('input', function () {
                     if (err) err.classList.remove('visible');
                 });
             }
         })();
     </script>
 
-    <!-- Local scripts -->
-    <script src="js/main.js?v=2" defer></script>
-    <script src="js/charts.js?v=2" defer></script>
+    <script src="js/main.js"></script>
+    <script src="js/charts.js"></script>
+    <script>lucide.createIcons();</script>
 </body>
 </html>
 

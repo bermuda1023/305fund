@@ -1,6 +1,6 @@
 /**
- * Investor site - Chart.js visualizations
- * Using real sales data (251 recorded sales, 2001-2025)
+ * 2451 Brickell Insights - Chart.js Visualizations
+ * Using REAL sales data from 2451 Brickell Ave (251 recorded sales, 2001-2025)
  */
 
 const ChartColors = {
@@ -224,7 +224,7 @@ function createEntryExitChart(canvasId) {
                     callbacks: {
                         label: (ctx) => {
                             if (ctx.dataIndex === 0) return 'Based on 23 sales (2024-2025)';
-                            return '8+ acres × $1,700/sf = $615M';
+                            return '8.3 acres × $1,700/sf = $615M';
                         }
                     }
                 }
@@ -1902,17 +1902,12 @@ function calculateInvestment() {
     const year1Cashflow = yearlyData[0].netCashflow - (yearlyData[0].refiCashOut || 0);
     const cashOnCash = year1Cashflow / initialEquity;
     
-    // Update display - Unit Info Bar (optional; may be omitted for confidentiality)
-    const resultUnitTypeEl = document.getElementById('resultUnitType');
-    if (resultUnitTypeEl) resultUnitTypeEl.textContent = unitType;
-    const resultSqftEl = document.getElementById('resultSqft');
-    if (resultSqftEl) resultSqftEl.textContent = sqft.toLocaleString();
-    const resultOwnershipEl = document.getElementById('resultOwnership');
-    if (resultOwnershipEl) resultOwnershipEl.textContent = ownershipPct.toFixed(4) + '%';
-    const resultHOAEl = document.getElementById('resultHOA');
-    if (resultHOAEl) resultHOAEl.textContent = formatCurrencyFull(monthlyHOA);
-    const resultPropTaxEl = document.getElementById('resultPropTax');
-    if (resultPropTaxEl) resultPropTaxEl.textContent = formatCurrencyFull(yearlyPropTax);
+    // Update display - Unit Info Bar
+    document.getElementById('resultUnitType').textContent = unitType;
+    document.getElementById('resultSqft').textContent = sqft.toLocaleString();
+    document.getElementById('resultOwnership').textContent = ownershipPct.toFixed(4) + '%';
+    document.getElementById('resultHOA').textContent = formatCurrencyFull(monthlyHOA);
+    document.getElementById('resultPropTax').textContent = formatCurrencyFull(yearlyPropTax);
     
     // Key Metrics
     document.getElementById('resultMOIC').textContent = moic.toFixed(2) + 'x';

@@ -1,5 +1,5 @@
 /**
- * Investor site - Main JavaScript
+ * 2451 Brickell Insights - Main JavaScript
  * Handles language toggle and interactive elements
  */
 
