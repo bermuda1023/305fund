@@ -104,7 +104,7 @@ export function initDb(): void {
   } catch (error: any) {
     // Older DBs can fail on newly added index columns before migrations run.
     const msg = String(error?.message || '');
-    if (!msg.includes('lp_account_id') && !msg.includes('capital_call_item_id')) {
+    if (!msg.includes('no such column')) {
       throw error;
     }
     const schemaWithoutNewIndexes = SCHEMA
@@ -114,6 +114,18 @@ export function initDb(): void {
       )
       .replace(
         /CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_call_item ON cash_flow_actuals\(capital_call_item_id\);\s*/g,
+        ''
+      )
+      .replace(
+        /CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_entity ON cash_flow_actuals\(entity_id\);\s*/g,
+        ''
+      )
+      .replace(
+        /CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_reno ON cash_flow_actuals\(unit_renovation_id\);\s*/g,
+        ''
+      )
+      .replace(
+        /CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_bank_txn ON cash_flow_actuals\(bank_transaction_id\);\s*/g,
         ''
       );
     database.exec(schemaWithoutNewIndexes);
@@ -200,6 +212,23 @@ export function initDb(): void {
       database.exec(sql);
     } catch {
       // Column already exists — ignore
+    }
+  }
+
+  // If we had to skip index creation earlier due to missing columns, ensure indexes exist now.
+  // Safe to run repeatedly.
+  const deferredIndexes = [
+    `CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_entity ON cash_flow_actuals(entity_id);`,
+    `CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_reno ON cash_flow_actuals(unit_renovation_id);`,
+    `CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_bank_txn ON cash_flow_actuals(bank_transaction_id);`,
+    `CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_lp ON cash_flow_actuals(lp_account_id);`,
+    `CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_call_item ON cash_flow_actuals(capital_call_item_id);`,
+  ];
+  for (const sql of deferredIndexes) {
+    try {
+      database.exec(sql);
+    } catch {
+      // If the column still doesn't exist for some reason, ignore.
     }
   }
 

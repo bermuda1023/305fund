@@ -1,7 +1,7 @@
 import type { UnitType } from '../types/portfolio';
 
 /**
- * All unit type configurations for Brickell Town House (2451 Brickell Ave).
+ * All unit type configurations for Brickell Town House.
  * Standard units (A-U) repeat on floors 2-20.
  * Special units are specific floor/letter combinations.
  */

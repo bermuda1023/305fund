@@ -100,7 +100,7 @@ function seed() {
     db.prepare(`
       INSERT OR IGNORE INTO users (email, password_hash, role, name)
       VALUES (?, ?, 'gp', ?)
-    `).run('james@brickell2451insights.com', gpHash, 'James Anfossi');
+    `).run('admin+gp@local', gpHash, 'Admin GP');
 
     // 5. Count results
     const unitTypeCount = (db.prepare('SELECT COUNT(*) as c FROM unit_types').get() as any).c;

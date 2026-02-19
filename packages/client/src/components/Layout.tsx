@@ -3,20 +3,20 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../lib/auth';
 
 const gpLinks = [
-  { to: '/dashboard', label: 'Dashboard', icon: '◉' },
-  { to: '/portfolio', label: 'Portfolio', icon: '◫' },
-  { to: '/model', label: 'Model', icon: '◈' },
-  { to: '/sensitivity', label: 'Sensitivity', icon: '◍' },
-  { to: '/contracts', label: 'Voting Consensus', icon: '◪' },
-  { to: '/listings', label: 'Units for Sale', icon: '◧' },
-  { to: '/market', label: 'Market Data', icon: '◬' },
-  { to: '/entities', label: 'Entities', icon: '◇' },
-  { to: '/actuals', label: 'Actuals', icon: '◈' },
-  { to: '/lp-admin', label: 'LP Admin', icon: '◎' },
+  { to: '/app/dashboard', label: 'Dashboard', icon: '◉' },
+  { to: '/app/portfolio', label: 'Portfolio', icon: '◫' },
+  { to: '/app/model', label: 'Model', icon: '◈' },
+  { to: '/app/sensitivity', label: 'Sensitivity', icon: '◍' },
+  { to: '/app/contracts', label: 'Voting Consensus', icon: '◪' },
+  { to: '/app/listings', label: 'Units for Sale', icon: '◧' },
+  { to: '/app/market', label: 'Market Data', icon: '◬' },
+  { to: '/app/entities', label: 'Entities', icon: '◇' },
+  { to: '/app/actuals', label: 'Actuals', icon: '◈' },
+  { to: '/app/lp-admin', label: 'LP Admin', icon: '◎' },
 ];
 
 const lpLinks = [
-  { to: '/lp', label: 'My Portal', icon: '◉' },
+  { to: '/app/lp', label: 'My Portal', icon: '◉' },
 ];
 
 export default function Layout() {
@@ -51,7 +51,7 @@ export default function Layout() {
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate('/');
   };
 
   const links = useMemo(() => (isGP ? gpLinks : lpLinks), [isGP]);

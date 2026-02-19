@@ -13,7 +13,7 @@ router.use(requireAuth, requireGP);
 // GET /api/listings - Current listings
 router.get('/', (req: Request, res: Response) => {
   const db = getDb();
-  const fundEmail = process.env.FROM_EMAIL || 'fund@brickell2451insights.com';
+  const fundEmail = process.env.FROM_EMAIL || 'fund@305opportunitiesfund.com';
   const listings = db.prepare(`
     SELECT
       l.*,

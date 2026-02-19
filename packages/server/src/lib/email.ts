@@ -15,7 +15,7 @@ function toHtml(text: string) {
 }
 
 export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boolean> {
-  const from = process.env.FROM_EMAIL || 'fund@brickell2451insights.com';
+  const from = process.env.FROM_EMAIL || 'fund@305opportunitiesfund.com';
   const { to, subject, text } = args;
   const html = args.html || toHtml(text);
   const bccList = Array.isArray(args.bcc)

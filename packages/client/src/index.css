@@ -509,6 +509,134 @@ body {
   background: var(--bg-tertiary);
 }
 
+/* Landing */
+.landing-shell {
+  min-height: 100vh;
+  padding: 3.5rem 1.25rem;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background:
+    radial-gradient(1200px 700px at 50% -150px, rgba(20,184,166,0.35), transparent 60%),
+    radial-gradient(900px 600px at 85% 10%, rgba(99,102,241,0.22), transparent 55%),
+    linear-gradient(180deg, #0b6f85 0%, #0a556f 35%, #083a55 100%);
+}
+
+.landing-inner {
+  width: 100%;
+  max-width: 1100px;
+}
+
+.landing-hero {
+  text-align: center;
+  margin-bottom: 2.25rem;
+}
+
+.landing-eyebrow {
+  font-size: 0.82rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(241, 245, 249, 0.85);
+}
+
+.landing-title {
+  margin-top: 1.2rem;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #f8fafc;
+}
+
+.landing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+.landing-card {
+  background: rgba(248, 250, 252, 0.96);
+  border-radius: 18px;
+  padding: 2rem 2rem 1.6rem;
+  border: 1px solid rgba(2, 6, 23, 0.08);
+  box-shadow: 0 30px 70px rgba(2, 6, 23, 0.25);
+}
+
+.landing-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+  color: #0f172a;
+}
+
+.landing-icon-gp {
+  background: linear-gradient(135deg, rgba(20,184,166,0.22), rgba(20,184,166,0.12));
+  border: 1px solid rgba(20,184,166,0.28);
+}
+
+.landing-icon-investor {
+  background: linear-gradient(135deg, rgba(245,158,11,0.22), rgba(245,158,11,0.12));
+  border: 1px solid rgba(245,158,11,0.30);
+}
+
+.landing-card-title {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+
+.landing-card-body {
+  margin-top: 0.6rem;
+  color: rgba(30, 41, 59, 0.75);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  max-width: 34rem;
+}
+
+.landing-cta-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 1.35rem;
+}
+
+.landing-signedin {
+  margin-top: 1.1rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid rgba(2, 6, 23, 0.08);
+  color: rgba(30, 41, 59, 0.7);
+  font-size: 0.85rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.landing-signout {
+  background: none;
+  border: none;
+  color: rgba(30, 41, 59, 0.7);
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.landing-signout:hover {
+  color: rgba(30, 41, 59, 0.95);
+}
+
+@media (max-width: 900px) {
+  .landing-shell { padding: 2.5rem 1rem; }
+  .landing-grid { grid-template-columns: 1fr; }
+  .landing-card { padding: 1.6rem 1.4rem 1.35rem; }
+  .landing-title { font-size: 1.7rem; }
+}
+
 .period-toggle button {
   padding: 0.3rem 0.7rem;
   font-size: 0.68rem; font-weight: 600; font-family: var(--font-mono);

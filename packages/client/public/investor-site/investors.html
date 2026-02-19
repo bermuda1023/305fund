@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Investor materials: valuation context, strategy, and diligence documents (location confidential).">
+    <title>Investment Opportunity | Investor Room</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="css/styles.css">
+    <style>
+        .investor-page .btn-primary { background: var(--gold); }
+        .investor-page .btn-primary:hover { background: #c49363; }
+        .investor-page .metric-value { color: var(--gold); }
+        .investor-page .timeline-icon { border-color: var(--gold); }
+        .investor-page .timeline-step:hover .timeline-icon { background: var(--gold); }
+        .investor-page .timeline-icon svg { color: var(--gold); }
+        .investor-page .timeline-step:hover .timeline-icon svg { color: var(--white); }
+        .comparison-visual { display: grid; grid-template-columns: 1fr auto 1fr; gap: var(--space-xl); align-items: center; margin: var(--space-2xl) 0; }
+        .comparison-box { text-align: center; padding: var(--space-2xl); background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); }
+        .comparison-box.highlight { background: var(--gradient-gold); color: var(--white); }
+        .comparison-box.highlight .comparison-value { color: var(--white); }
+        .comparison-value { font-family: var(--font-heading); font-size: var(--text-5xl); font-weight: 700; color: var(--navy); display: block; margin-bottom: var(--space-sm); }
+        .comparison-label { font-size: var(--text-lg); opacity: 0.9; }
+        .comparison-arrow { display: flex; flex-direction: column; align-items: center; gap: var(--space-sm); }
+        .comparison-arrow svg { width: 48px; height: 48px; color: var(--gold); }
+        .comparison-arrow span { font-weight: 600; color: var(--gold); }
+        @media (max-width: 768px) { .comparison-visual { grid-template-columns: 1fr; } .comparison-arrow { transform: rotate(90deg); } }
+        
+        /* Property Showcase */
+        .property-showcase {
+            background: var(--white);
+            border-radius: var(--radius-xl);
+            padding: var(--space-2xl);
+            box-shadow: var(--shadow-lg);
+        }
+        .showcase-image-wrapper {
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: var(--shadow-md);
+        }
+        .showcase-image {
+            width: 100%;
+            height: auto;
+            display: block;
+            transition: transform 0.5s ease;
+        }
+        .showcase-image-wrapper:hover .showcase-image {
+            transform: scale(1.02);
+        }
+        
+        /* Valuation Explorer Styles */
+        .valuation-explorer {
+            background: var(--white);
+            border-radius: var(--radius-xl);
+            padding: var(--space-2xl);
+            box-shadow: var(--shadow-lg);
+        }
+        .explorer-header { margin-bottom: var(--space-xl); }
+        .explorer-header h3 { 
+            font-size: var(--text-2xl); 
+            color: var(--navy); 
+            margin-bottom: var(--space-sm);
+            display: flex;
+            align-items: center;
+        }
+        .explorer-header p { color: var(--text-light); }
+        
+        .filter-controls {
+            display: flex;
+            align-items: center;
+            gap: var(--space-lg);
+            margin-bottom: var(--space-xl);
+            flex-wrap: wrap;
+        }
+        .filter-label { font-weight: 600; color: var(--navy); }
+        .filter-buttons { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
+        .filter-btn {
+            padding: var(--space-sm) var(--space-lg);
+            border: 2px solid var(--gray-200);
+            background: var(--white);
+            border-radius: var(--radius-full);
+            font-family: var(--font-body);
+            font-size: var(--text-sm);
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: var(--text);
+        }
+        .filter-btn:hover { border-color: var(--gold); color: var(--gold); }
+        .filter-btn.active { 
+            background: var(--gold); 
+            border-color: var(--gold); 
+            color: var(--white); 
+        }
+        .filter-count { opacity: 0.7; font-weight: 400; }
+        
+        .explorer-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: var(--space-lg);
+            align-items: stretch;
+        }
+        .explorer-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: var(--space-sm);
+            align-content: start;
+        }
+        .stat-box {
+            background: var(--gray-50);
+            padding: var(--space-sm) var(--space-md);
+            border-radius: var(--radius-md);
+            text-align: center;
+        }
+        .stat-box.insight {
+            background: linear-gradient(135deg, rgba(0, 168, 150, 0.1) 0%, rgba(212, 163, 115, 0.1) 100%);
+            text-align: left;
+            grid-column: span 2;
+        }
+        .stat-label {
+            display: block;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-light);
+            margin-bottom: 2px;
+        }
+        .stat-value {
+            display: block;
+            font-family: var(--font-heading);
+            font-size: var(--text-lg);
+            font-weight: 700;
+            color: var(--navy);
+        }
+        .stat-value.highlight { color: var(--gold); font-size: var(--text-xl); }
+        .stat-insight { font-size: var(--text-xs); line-height: 1.4; color: var(--text); }
+        
+        .sales-table-wrapper { overflow-x: auto; }
+        .sales-detail-table tbody tr { transition: background 0.2s ease; }
+        .sales-detail-table tbody tr:hover { background: rgba(212, 163, 115, 0.1); }
+        .sales-detail-table tbody tr.hidden { display: none; }
+        .sales-detail-table tbody tr.hidden-row { display: none; }
+        
+        .show-more-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: var(--space-md);
+            padding: 8px 16px;
+            background: var(--white);
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius-md);
+            color: var(--navy);
+            font-size: var(--text-sm);
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .show-more-btn:hover {
+            background: var(--gray-50);
+            border-color: var(--navy);
+        }
+        
+        .data-toggle-btn {
+            padding: 6px 12px;
+            font-size: 12px;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            background: transparent;
+            color: var(--text-light);
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        .data-toggle-btn:hover {
+            color: var(--navy);
+        }
+        .data-toggle-btn.active {
+            background: var(--white);
+            color: var(--navy);
+            box-shadow: var(--shadow-sm);
+        }
+        .sales-detail-table .implied-high { color: #27ae60; font-weight: 600; }
+        .sales-detail-table .implied-low { color: #e74c3c; font-weight: 600; }
+        .sales-detail-table .implied-mid { color: var(--navy); }
+        
+        @media (max-width: 968px) {
+            .explorer-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 576px) {
+            .filter-controls { flex-direction: column; align-items: flex-start; }
+            .explorer-stats { grid-template-columns: 1fr; }
+            .stat-box.insight { grid-column: span 1; }
+        }
+
+        /* Minimal access gate (do not leak details pre-auth) */
+        .access-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(12px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            padding: 24px;
+        }
+        .access-card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--white);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-xl);
+            padding: var(--space-2xl);
+            text-align: center;
+        }
+        .access-card h2 { margin-bottom: var(--space-sm); }
+        .access-card p { color: var(--dark-gray); font-size: var(--text-sm); margin-bottom: var(--space-lg); }
+        .access-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid var(--medium-gray);
+            border-radius: var(--radius-md);
+            font-size: 14px;
+        }
+        .access-error {
+            display: none;
+            color: #e74c3c;
+            font-size: var(--text-sm);
+            margin-top: var(--space-sm);
+        }
+        .access-error.visible { display: block; }
+        .access-btn {
+            margin-top: var(--space-lg);
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--gold);
+            color: var(--white);
+            border-radius: var(--radius-md);
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body class="investor-page">
+    <div class="access-modal" id="accessModal">
+        <div class="access-card">
+            <h2>Access Required</h2>
+            <p>Enter password to view the potential investor materials.</p>
+            <form id="accessForm">
+                <input id="accessInput" class="access-input" type="password" placeholder="Password" autocomplete="current-password" required>
+                <div id="accessError" class="access-error">Incorrect password.</div>
+                <button class="access-btn" type="submit">Enter</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="mainContent" style="display:none;">
+        <!-- Header -->
+        <header class="site-header">
+            <nav class="nav-container">
+                <a href="#opportunity" class="nav-logo"><i data-lucide="building-2"></i><span>Investor Room</span></a>
+                <div class="nav-links">
+                    <a href="#opportunity" class="nav-link" data-en="Opportunity" data-es="Oportunidad">Opportunity</a>
+                    <a href="#timeline" class="nav-link" data-en="Strategy" data-es="Estrategia">Strategy</a>
+                    <a href="#data" class="nav-link" data-en="Data" data-es="Datos">Data</a>
+                    <a href="#calculator" class="nav-link" data-en="Calculator" data-es="Calculadora">Calculator</a>
+                    <a href="#risks" class="nav-link" data-en="Risks" data-es="Riesgos">Risks</a>
+                    <a href="#invest" class="nav-link" data-en="Get Involved" data-es="Participar">Get Involved</a>
+                    <button class="nav-lang-toggle" id="langToggle">
+                        <span class="lang-option active" data-lang="en">EN</span>
+                        <span class="lang-divider">|</span>
+                        <span class="lang-option" data-lang="es">ES</span>
+                    </button>
+                </div>
+                <button class="nav-toggle"><span></span><span></span><span></span></button>
+            </nav>
+        </header>
+
+        <!-- Hero -->
+        <section class="hero">
+            <div class="hero-bg" style="background: linear-gradient(135deg, #003366 0%, #1a4a6e 40%, #D4A373 100%);"></div>
+            <div class="hero-overlay" style="background: linear-gradient(180deg, rgba(0, 51, 102, 0.75) 0%, rgba(0, 51, 102, 0.9) 100%);"></div>
+            <div class="hero-content">
+                <h1 class="fade-in" data-en="Unlock Redevelopment Gold" data-es="Descubra el Potencial de Redesarrollo">Unlock Redevelopment Gold</h1>
+                <p class="hero-subtitle fade-in stagger-1" data-en="Buy units implying a ~$200M valuation today—position for a $600M+ bulk exit via developer buyout. 8+ acres of prime Biscayne Bay waterfront." data-es="Compre unidades a una valoración implícita de ~$200M hoy—posiciónese para una salida de $600M+ mediante venta a desarrolladores. 8+ acres de primera línea en la Bahía de Biscayne.">Buy units implying a ~$200M valuation today—position for a $600M+ bulk exit via developer buyout. 8+ acres of prime Biscayne Bay waterfront.</p>
+                <div class="fade-in stagger-2" style="display: flex; gap: var(--space-md); justify-content: center; flex-wrap: wrap;">
+                    <a href="#invest" class="btn btn-primary"><i data-lucide="briefcase"></i><span data-en="Express Interest" data-es="Expresar Interés">Express Interest</span></a>
+                    <a href="#data" class="btn btn-secondary"><i data-lucide="bar-chart-3"></i><span data-en="View Data" data-es="Ver Datos">View Data</span></a>
+                </div>
+            </div>
+            <div class="scroll-indicator"><span data-en="Scroll to explore" data-es="Desplácese para explorar">Scroll to explore</span><i data-lucide="chevron-down"></i></div>
+        </section>
+
+        <!-- Key Metrics -->
+        <section class="section">
+            <div class="container">
+                <div class="metrics-grid fade-in">
+                    <div class="metric-card">
+                        <span class="metric-value counter" data-target="218" data-prefix="$" data-suffix="M">$0M</span>
+                        <span class="metric-label" data-en="Current Implied Value" data-es="Valor Implícito Actual">Current Implied Value</span>
+                        <span class="metric-note" data-en="Avg of 23 sales (2024-2025)" data-es="Promedio de 23 ventas (2024-2025)">Avg of 23 sales (2024-2025)</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-value gold counter" data-target="615" data-prefix="$" data-suffix="M">$0M</span>
+                        <span class="metric-label" data-en="Land Value (8+ acres)" data-es="Valor del Terreno (8+ acres)">Land Value (8+ acres)</span>
+                        <span class="metric-note" data-en="At $1,700/sf waterfront rate" data-es="A $1,700/pies² frente al mar">At $1,700/sf waterfront rate</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-value counter" data-target="2.8" data-suffix="x" data-decimals="1">0x</span>
+                        <span class="metric-label" data-en="Potential ROI" data-es="ROI Potencial">Potential ROI</span>
+                        <span class="metric-note">$615M ÷ $218M</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Pitch Deck -->
+        <section class="section section-alt" id="deck">
+            <div class="container">
+                <div class="section-header fade-in">
+                    <h2>Investor Pitch Deck</h2>
+                    <p>Embedded presentation for review.</p>
+                </div>
+                <div class="fade-in" style="background: var(--white); border-radius: var(--radius-xl); padding: var(--space-lg); box-shadow: var(--shadow-lg);">
+                    <div style="position: relative; width: 100%; padding-top: 64.2857%; border-radius: var(--radius-lg); overflow: hidden; background: var(--gray-50);">
+                        <iframe
+                            src="https://gamma.app/embed/irzikfjmunm2kll"
+                            style="position: absolute; inset: 0; width: 100%; height: 100%; border: 0;"
+                            allow="fullscreen"
+                            title="Project Bay-Shield"
+                        ></iframe>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Opportunity -->
+        <section class="section section-alt" id="opportunity">
+            <div class="container">
+                <div class="section-header fade-in">
+                    <h2 data-en="The Opportunity" data-es="La Oportunidad">The Opportunity</h2>
+                    <p data-en="A unique arbitrage play in Miami's hottest real estate market." data-es="Una oportunidad única de arbitraje en el mercado inmobiliario más activo de Miami.">A unique arbitrage play in Miami's hottest real estate market.</p>
+                </div>
+                <div class="two-col">
+                    <div class="content-block fade-in">
+                        <h3 data-en="Why This Site?" data-es="¿Por qué este sitio?">Why This Site?</h3>
+                        <p data-en="This 1963-built, 21-story condo sits on 8+ acres of prime Brickell waterfront—one of the largest contiguous parcels in the area. With 359 units, 23 recent sales (2024-2025) imply an average building value of $218M." data-es="Este condominio de 21 pisos construido en 1963 se encuentra en 8+ acres de primera línea en Brickell—uno de los terrenos contiguos más grandes del área. Con 359 unidades, 23 ventas recientes (2024-2025) implican un valor promedio del edificio de $218M.">This 1963-built, 21-story condo sits on 8+ acres of prime Brickell waterfront—one of the largest contiguous parcels in the area. With 359 units, <strong>23 recent sales (2024-2025)</strong> imply an average building value of <strong>$218M</strong>.</p>
+                        <p data-en="But as raw land, comparable sales suggest $615M potential. At ~$1,700/sq ft for waterfront land (8+ acres):" data-es="Pero como terreno, ventas comparables sugieren un potencial de $615M. A ~$1,700/pies² para terreno frente al mar (8+ acres):">But as raw land, comparable sales suggest $615M potential. At ~$1,700/sq ft for waterfront land (8+ acres):</p>
+                        <ul>
+                            <li><strong data-en="361,548 sq ft × $1,700 = $615M land value" data-es="361,548 pies² × $1,700 = $615M valor del terreno">361,548 sq ft × $1,700 = $615M</strong> <span data-en="land value" data-es="valor del terreno">land value</span></li>
+                            <li><span data-en="Current implied value: $218M (avg of 23 sales)" data-es="Valor implícito actual: $218M (promedio de 23 ventas)">Current implied value: $218M (avg of 23 sales)</span></li>
+                            <li><span data-en="Implied value range: $159M - $290M" data-es="Rango de valor implícito: $159M - $290M">Implied value range: $159M - $290M</span></li>
+                            <li><strong data-en="Potential arbitrage: ~$400M spread" data-es="Arbitraje potencial: ~$400M de diferencia">Potential arbitrage: ~$400M spread</strong></li>
+                        </ul>
+                    </div>
+                    <div class="map-container fade-in stagger-1" style="display:flex;align-items:center;justify-content:center;padding:var(--space-2xl);text-align:center;">
+                        <div>
+                            <h4 style="margin-bottom:var(--space-sm);">Location withheld</h4>
+                            <p style="color:var(--text-light);font-size:var(--text-sm);">
+                                The exact address and map are intentionally omitted from this public overview.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="comparison-visual fade-in">
+                    <div class="comparison-box">
+                        <span class="comparison-value">$218M</span>
+                        <span class="comparison-label">Current Implied Value</span>
+                        <p style="font-size: var(--text-xs); margin-top: 8px; opacity: 0.7;">Avg of 23 sales (2024-2025)</p>
+                    </div>
+                    <div class="comparison-arrow"><i data-lucide="arrow-right"></i><span>2.8x Potential</span></div>
+                    <div class="comparison-box highlight">
+                        <span class="comparison-value">$615M</span>
+                        <span class="comparison-label">Land Value</span>
+                        <p style="font-size: var(--text-xs); margin-top: 8px; opacity: 0.9;">8+ acres × $1,700/sf</p>
+                    </div>
+                </div>
+                
+                <!-- Property Showcase -->
+                <div class="property-showcase fade-in" style="margin-top: var(--space-3xl);">
+                    <h3 style="text-align: center; margin-bottom: var(--space-lg); color: var(--navy);">
+                        <i data-lucide="camera" style="width: 24px; height: 24px; vertical-align: middle; margin-right: 8px;"></i>
+                        <span data-en="The Property: 8+ Acres of Prime Waterfront" data-es="La Propiedad: 8+ Acres de Primera Línea Frente al Mar">The Property: 8+ Acres of Prime Waterfront</span>
+                    </h3>
+                    <div class="showcase-image-wrapper">
+                        <img
+                            src="builidng images.png"
+                            alt="Property showcase (aerial views, amenities, bayfront context)"
+                            class="showcase-image"
+                        >
+                    </div>
+                    <p style="text-align: center; margin-top: var(--space-lg); color: var(--text-light); font-size: var(--text-sm);" data-en="Aerial views, amenities, and bayfront location — one of Miami's largest contiguous waterfront parcels" data-es="Vistas aéreas, amenidades y ubicación frente a la bahía — uno de los terrenos contiguos más grandes de Miami frente al mar">
+                        Aerial views, amenities, and bayfront location — one of Miami's largest contiguous waterfront parcels
+                    </p>
+                </div>
+                
+                <!-- Zoning Section -->
+                <div class="zoning-section fade-in" style="margin-top: var(--space-3xl);">
+                    <div class="zoning-header" style="text-align: center; margin-bottom: var(--space-2xl);">
+                        <h3 style="color: var(--navy); margin-bottom: var(--space-sm);">
+                            <i data-lucide="building-2" style="width: 28px; height: 28px; vertical-align: middle; margin-right: 10px; color: var(--gold);"></i>
+                            <span data-en="T6-24A-R Zoning: Miami's Most Valuable Designation" data-es="Zonificación T6-24A-R: La Designación Más Valiosa de Miami">T6-24A-R Zoning: Miami's Most Valuable Designation</span>
+                        </h3>
+                        <p style="color: var(--text-light); max-width: 700px; margin: 0 auto;" data-en="Under Miami 21, this property carries the city's highest-intensity zoning—designed for major urban development" data-es="Bajo Miami 21, esta propiedad tiene la zonificación de mayor intensidad de la ciudad—diseñada para desarrollo urbano mayor">
+                            Under Miami 21, this property carries the city's highest-intensity zoning—designed for major urban development
+                        </p>
+                    </div>
+                    
+                    <div class="zoning-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-md);">
+                        <!-- T6 Urban Core -->
+                        <div class="zoning-card" style="background: var(--white); border-radius: var(--radius-xl); padding: var(--space-md); box-shadow: var(--shadow-md); border-top: 4px solid var(--navy);">
+                            <div style="display: flex; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm);">
+                                <span style="background: var(--navy); color: white; font-weight: 700; padding: 4px 10px; border-radius: var(--radius-sm); font-size: var(--text-base);">T6</span>
+                                <span style="font-weight: 600; color: var(--navy); font-size: var(--text-sm);">Urban Core</span>
+                            </div>
+                            <p style="color: var(--text); font-size: var(--text-xs); line-height: 1.5;">
+                                The <strong>highest intensity zone</strong> in Miami 21. Reserved for 24-hour urban environments with maximum density and mixed-use development.
+                            </p>
+                        </div>
+                        
+                        <!-- 24 Stories -->
+                        <div class="zoning-card" style="background: var(--white); border-radius: var(--radius-xl); padding: var(--space-md); box-shadow: var(--shadow-md); border-top: 4px solid var(--teal);">
+                            <div style="display: flex; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm);">
+                                <span style="background: var(--teal); color: white; font-weight: 700; padding: 4px 10px; border-radius: var(--radius-sm); font-size: var(--text-base);">24</span>
+                                <span style="font-weight: 600; color: var(--navy); font-size: var(--text-sm);">Base Height</span>
+                            </div>
+                            <p style="color: var(--text); font-size: var(--text-xs); line-height: 1.5;">
+                                <strong>24-story base height</strong> with potential for more through Miami's Public Benefits Program bonuses.
+                            </p>
+                        </div>
+                        
+                        <!-- A - High Density -->
+                        <div class="zoning-card" style="background: var(--white); border-radius: var(--radius-xl); padding: var(--space-md); box-shadow: var(--shadow-md); border-top: 4px solid var(--gold);">
+                            <div style="display: flex; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm);">
+                                <span style="background: var(--gold); color: white; font-weight: 700; padding: 4px 10px; border-radius: var(--radius-sm); font-size: var(--text-base);">A</span>
+                                <span style="font-weight: 600; color: var(--navy); font-size: var(--text-sm);">Max Density</span>
+                            </div>
+                            <p style="color: var(--text); font-size: var(--text-xs); line-height: 1.5;">
+                                Up to <strong>150 units/acre</strong>—the highest density. On 8+ acres: <strong>1,200+ units</strong>.
+                            </p>
+                        </div>
+                        
+                        <!-- R - Restricted -->
+                        <div class="zoning-card" style="background: var(--white); border-radius: var(--radius-xl); padding: var(--space-md); box-shadow: var(--shadow-md); border-top: 4px solid #8b5cf6;">
+                            <div style="display: flex; align-items: center; gap: var(--space-xs); margin-bottom: var(--space-sm);">
+                                <span style="background: #8b5cf6; color: white; font-weight: 700; padding: 4px 10px; border-radius: var(--radius-sm); font-size: var(--text-base);">R</span>
+                                <span style="font-weight: 600; color: var(--navy); font-size: var(--text-sm);">Residential</span>
+                            </div>
+                            <p style="color: var(--text); font-size: var(--text-xs); line-height: 1.5;">
+                                Primarily residential with <strong>ground-floor retail</strong>. Ideal for luxury towers.
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <!-- Why This Matters -->
+                    <div class="zoning-value" style="margin-top: var(--space-2xl); background: linear-gradient(135deg, rgba(0, 51, 102, 0.03) 0%, rgba(212, 163, 115, 0.08) 100%); border-radius: var(--radius-xl); padding: var(--space-2xl); border: 1px solid rgba(212, 163, 115, 0.3);">
+                        <h4 style="color: var(--navy); margin-bottom: var(--space-lg); display: flex; align-items: center; gap: var(--space-sm);">
+                            <i data-lucide="sparkles" style="width: 22px; height: 22px; color: var(--gold);"></i>
+                            Why T6-24A-R Commands Premium Land Values
+                        </h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: var(--space-xl);">
+                            <div>
+                                <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7; margin-bottom: var(--space-md);">
+                                    <strong style="color: var(--navy);">Maximum FAR (Floor Area Ratio):</strong> T6 zoning offers FAR up to 12+, meaning developers can build 12x the lot area in floor space. More buildable square footage = higher land value.
+                                </p>
+                                <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7;">
+                                    <strong style="color: var(--navy);">Rare & Protected:</strong> T6 zones are limited to Miami's urban core. You can't rezone suburban land to T6—this scarcity protects and increases value.
+                                </p>
+                            </div>
+                            <div>
+                                <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7; margin-bottom: var(--space-md);">
+                                    <strong style="color: var(--navy);">Developer-Ready:</strong> No rezoning battles or variance requests. The entitlements are already in place for a major project—saving developers 1-2 years and millions in legal/planning costs.
+                                </p>
+                                <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7;">
+                                    <strong style="color: var(--navy);">Bayfront + T6 = Ultra-Premium:</strong> Waterfront parcels with T6 zoning are exceptionally rare. This combination commands the highest per-square-foot land prices in South Florida.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Comparable Sales Section -->
+                <div class="comparables-section fade-in" style="margin-top: var(--space-3xl);">
+                    <div class="comparables-header" style="text-align: center; margin-bottom: var(--space-2xl);">
+                        <h3 style="color: var(--navy); margin-bottom: var(--space-sm);">
+                            <i data-lucide="scale" style="width: 28px; height: 28px; vertical-align: middle; margin-right: 10px; color: var(--gold);"></i>
+                            Comparable Land Sales & Market Context
+                        </h3>
+                        <p style="color: var(--text-light); max-width: 700px; margin: 0 auto;">
+                            Recent Brickell waterfront transactions demonstrate the premium developers pay for sites like this
+                        </p>
+                    </div>
+                    
+                    <!-- Comparables Table -->
+                    <div class="comparables-table-wrapper" style="background: var(--white); border-radius: var(--radius-xl); padding: var(--space-xl); box-shadow: var(--shadow-lg); margin-bottom: var(--space-2xl); overflow-x: auto;">
+                        <table class="data-table" style="width: 100%; border-collapse: collapse; font-size: var(--text-sm);">
+                            <thead>
+                                <tr style="background: var(--navy); color: white;">
+                                    <th style="padding: 14px; text-align: left; font-weight: 600;">Property</th>
+                                    <th style="padding: 14px; text-align: center; font-weight: 600;">Year</th>
+                                    <th style="padding: 14px; text-align: center; font-weight: 600;">Acres</th>
+                                    <th style="padding: 14px; text-align: center; font-weight: 600;">Price</th>
+                                    <th style="padding: 14px; text-align: center; font-weight: 600;">$/Acre</th>
+                                    <th style="padding: 14px; text-align: center; font-weight: 600;">$/Sq Ft</th>
+                                    <th style="padding: 14px; text-align: left; font-weight: 600;">Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr style="border-bottom: 1px solid var(--gray-200);">
+                                    <td style="padding: 14px;"><strong style="color: var(--gold);">Brickell Waterfront Assemblage</strong></td>
+                                    <td style="padding: 14px; text-align: center;">2025</td>
+                                    <td style="padding: 14px; text-align: center;">4.25</td>
+                                    <td style="padding: 14px; text-align: center; color: var(--gold); font-weight: 700;">$520M</td>
+                                    <td style="padding: 14px; text-align: center;">$122M</td>
+                                    <td style="padding: 14px; text-align: center; font-weight: 600;">$2,810</td>
+                                    <td style="padding: 14px; color: var(--text-light);">Record-breaking Brickell waterfront deal</td>
+                                </tr>
+                                <tr style="border-bottom: 1px solid var(--gray-200); background: rgba(0, 168, 150, 0.03);">
+                                    <td style="padding: 14px;"><strong style="color: var(--navy);">Citadel Assemblage (Total)</strong></td>
+                                    <td style="padding: 14px; text-align: center;">2022</td>
+                                    <td style="padding: 14px; text-align: center;">~4.2</td>
+                                    <td style="padding: 14px; text-align: center; color: var(--teal); font-weight: 700;">$670M</td>
+                                    <td style="padding: 14px; text-align: center;">$160M</td>
+                                    <td style="padding: 14px; text-align: center; font-weight: 600;">$3,660</td>
+                                    <td style="padding: 14px; color: var(--text-light);">Multiple parcels (addresses withheld)</td>
+                                </tr>
+                                <tr style="border-bottom: 1px solid var(--gray-200);">
+                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ Component parcel (address withheld)</span></td>
+                                    <td style="padding: 14px; text-align: center;">Apr 2022</td>
+                                    <td style="padding: 14px; text-align: center;">2.5</td>
+                                    <td style="padding: 14px; text-align: center;">$363M</td>
+                                    <td style="padding: 14px; text-align: center;">$145M</td>
+                                    <td style="padding: 14px; text-align: center;">$3,330</td>
+                                    <td style="padding: 14px; color: var(--text-light);">Vacant waterfront (Hollo family, held 22 yrs)</td>
+                                </tr>
+                                <tr style="border-bottom: 1px solid var(--gray-200); background: rgba(0, 168, 150, 0.03);">
+                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ Component parcel (address withheld)</span></td>
+                                    <td style="padding: 14px; text-align: center;">2022</td>
+                                    <td style="padding: 14px; text-align: center;">—</td>
+                                    <td style="padding: 14px; text-align: center;">$287M</td>
+                                    <td style="padding: 14px; text-align: center;">—</td>
+                                    <td style="padding: 14px; text-align: center;">—</td>
+                                    <td style="padding: 14px; color: var(--text-light);">28-story office tower</td>
+                                </tr>
+                                <tr style="border-bottom: 1px solid var(--gray-200);">
+                                    <td style="padding: 14px; padding-left: 28px;"><span style="color: var(--text-light);">↳ Component parcels (address withheld)</span></td>
+                                    <td style="padding: 14px; text-align: center;">2022</td>
+                                    <td style="padding: 14px; text-align: center;">~0.5</td>
+                                    <td style="padding: 14px; text-align: center;">$20M</td>
+                                    <td style="padding: 14px; text-align: center;">$40M</td>
+                                    <td style="padding: 14px; text-align: center;">$920</td>
+                                    <td style="padding: 14px; color: var(--text-light);">Adjacent lots for assemblage</td>
+                                </tr>
+                                <tr style="border-bottom: 1px solid var(--gray-200); background: rgba(212, 163, 115, 0.05);">
+                                    <td style="padding: 14px;"><strong style="color: var(--navy);">Una Residences Site</strong></td>
+                                    <td style="padding: 14px; text-align: center;">2014</td>
+                                    <td style="padding: 14px; text-align: center;">~1.1</td>
+                                    <td style="padding: 14px; text-align: center;">$48M</td>
+                                    <td style="padding: 14px; text-align: center;">$44M</td>
+                                    <td style="padding: 14px; text-align: center;">$1,000</td>
+                                    <td style="padding: 14px; color: var(--text-light);">61-unit condo buyout, direct waterfront neighborhood</td>
+                                </tr>
+                                <tr style="border-bottom: 1px solid var(--gray-200);">
+                                    <td style="padding: 14px;"><strong style="color: var(--teal);">Una Site (Inflation-Adjusted)</strong></td>
+                                    <td style="padding: 14px; text-align: center;">→ 2025</td>
+                                    <td style="padding: 14px; text-align: center;">~1.1</td>
+                                    <td style="padding: 14px; text-align: center; color: var(--teal); font-weight: 700;">~$117M</td>
+                                    <td style="padding: 14px; text-align: center;">$106M</td>
+                                    <td style="padding: 14px; text-align: center; font-weight: 600;">$2,440</td>
+                                    <td style="padding: 14px; color: var(--text-light);">2014 price × 2.44x (MIXRNSA 179→436)</td>
+                                </tr>
+                                <tr style="background: linear-gradient(135deg, rgba(212, 163, 115, 0.1) 0%, rgba(0, 168, 150, 0.1) 100%);">
+                                    <td style="padding: 14px;"><strong style="color: var(--gold);">This Site</strong></td>
+                                    <td style="padding: 14px; text-align: center; font-weight: 700;">TBD</td>
+                                    <td style="padding: 14px; text-align: center; font-weight: 700;">8+</td>
+                                    <td style="padding: 14px; text-align: center; color: var(--gold); font-weight: 700;">$615M*</td>
+                                    <td style="padding: 14px; text-align: center; font-weight: 700;">$74M</td>
+                                    <td style="padding: 14px; text-align: center; font-weight: 700; color: var(--gold);">$1,700</td>
+                                    <td style="padding: 14px; color: var(--text);">*Conservative estimate at $1,700/sf</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Miami RE Index Chart & Una Case Study -->
+                    <div class="two-col" style="gap: var(--space-2xl);">
+                        <div class="chart-container fade-in">
+                            <h4 class="chart-title">Miami Real Estate Index (2010-2025)</h4>
+                            <canvas id="miamiIndexChart" height="280"></canvas>
+                            <p style="font-size: var(--text-xs); color: var(--text-light); margin-top: var(--space-sm); text-align: center;">
+                                S&P/Case-Shiller Miami Home Price Index (MIXRNSA) — 2.94x growth since 2010
+                            </p>
+                        </div>
+                        
+                        <div class="una-case-study fade-in stagger-1" style="background: linear-gradient(135deg, rgba(0, 51, 102, 0.03) 0%, rgba(212, 163, 115, 0.08) 100%); border-radius: var(--radius-xl); padding: var(--space-2xl); border: 1px solid rgba(212, 163, 115, 0.3);">
+                            <h4 style="color: var(--navy); margin-bottom: var(--space-lg); display: flex; align-items: center; gap: var(--space-sm);">
+                                <i data-lucide="landmark" style="width: 22px; height: 22px; color: var(--gold);"></i>
+                                Case Study: Una Residences (Brickell Waterfront)
+                            </h4>
+                            <div style="margin-bottom: var(--space-lg);">
+                                <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7; margin-bottom: var(--space-md);">
+                                    <strong>The Playbook:</strong> In 2014, developers acquired the 61-unit Sail on Brickell condo on the waterfront corridor—for approximately <strong>$48 million</strong> through a condo termination buyout.
+                                </p>
+                                <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7; margin-bottom: var(--space-md);">
+                                    <strong>The Result:</strong> That 1.1-acre site is now <strong>Una Residences</strong>, a 47-story ultra-luxury tower with units selling for $2,000-$3,000+ per square foot. The land value alone—adjusted for Miami's 2.44x index growth since 2014—would be worth <strong>~$117M today</strong>.
+                                </p>
+                                <p style="color: var(--text); font-size: var(--text-sm); line-height: 1.7;">
+                                    <strong>The Opportunity:</strong> The site has <strong>7.5x more land</strong> than Una's site. At comparable $/acre valuations, this parcel could command <strong>$615M-$800M</strong> from developers.
+                                </p>
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md); text-align: center;">
+                                <div style="background: var(--white); padding: var(--space-md); border-radius: var(--radius-md);">
+                                    <span style="display: block; font-size: var(--text-2xl); font-weight: 700; color: var(--navy);">$48M</span>
+                                    <span style="font-size: var(--text-xs); color: var(--text-light);">2014 Acquisition</span>
+                                </div>
+                                <div style="background: var(--white); padding: var(--space-md); border-radius: var(--radius-md);">
+                                    <span style="display: block; font-size: var(--text-2xl); font-weight: 700; color: var(--teal);">2.44x</span>
+                                    <span style="font-size: var(--text-xs); color: var(--text-light);">Index Growth ('14→'25)</span>
+                                </div>
+                                <div style="background: var(--white); padding: var(--space-md); border-radius: var(--radius-md);">
+                                    <span style="display: block; font-size: var(--text-2xl); font-weight: 700; color: var(--gold);">~$117M</span>
+                                    <span style="font-size: var(--text-xs); color: var(--text-light);">Today's Value</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Strategy Timeline -->
+        <section class="section" id="timeline">
+            <div class="container">
+                <div class="section-header fade-in">
+                    <h2 data-en="From $200M Entry to $600M+ Exit" data-es="De Entrada de $200M a Salida de $600M+">From $200M Entry to $600M+ Exit</h2>
+                    <p data-en="A structured approach to capturing the land value arbitrage." data-es="Un enfoque estructurado para capturar el arbitraje del valor del terreno.">A structured approach to capturing the land value arbitrage.</p>
+                </div>
+                <div class="timeline fade-in">
+                    <div class="timeline-step">
+                        <div class="timeline-icon"><i data-lucide="shopping-cart"></i></div>
+                        <h4 data-en="Acquire Units" data-es="Adquirir Unidades">Acquire Units</h4>
+                        <p data-en="Buy at $400-600/sq ft. 1BD units from ~$300K. Build ownership % and voting power." data-es="Compre a $400-600/pies². Unidades 1BD desde ~$300K. Acumule % de propiedad y poder de voto.">Buy at $400-600/sq ft. 1BD units from ~$300K. Build ownership % and voting power.</p>
+                    </div>
+                    <div class="timeline-step">
+                        <div class="timeline-icon"><i data-lucide="users"></i></div>
+                        <h4 data-en="Build Voting Bloc" data-es="Construir Bloque de Votos">Build Voting Bloc</h4>
+                        <p data-en="Target 80% via partnerships. FL law requires supermajority for termination." data-es="Objetivo 80% mediante alianzas. La ley de FL requiere supermayoría para terminación.">Target 80% via partnerships. FL law requires supermajority for termination.</p>
+                    </div>
+                    <div class="timeline-step">
+                        <div class="timeline-icon"><i data-lucide="handshake"></i></div>
+                        <h4 data-en="Partner with Developers" data-es="Asociarse con Desarrolladores">Partner with Developers</h4>
+                        <p data-en="Approach Related Group, Terra, OKO Group. Leverage land for luxury towers." data-es="Contactar Related Group, Terra, OKO Group. Aprovechar el terreno para torres de lujo.">Approach Related Group, Terra, OKO Group. Leverage land for luxury towers.</p>
+                    </div>
+                    <div class="timeline-step">
+                        <div class="timeline-icon"><i data-lucide="banknote"></i></div>
+                        <h4 data-en="Exit & Profit" data-es="Salida y Ganancia">Exit & Profit</h4>
+                        <p data-en="Payout: $600M+ (3x+ ROI after 1-3 years). Pro-rata distribution." data-es="Pago: $600M+ (3x+ ROI después de 1-3 años). Distribución proporcional.">Payout: $600M+ (3x+ ROI after 1-3 years). Pro-rata distribution.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Data Section -->
+        <section class="section section-alt" id="data">
+            <div class="container">
+                <div class="section-header fade-in">
+                    <h2 data-en="Backed by Recent Sales Data" data-es="Respaldado por Datos de Ventas Recientes">Backed by Recent Sales Data</h2>
+                    <p data-en="Analysis of 23 recorded sales from 2022-2025 public records." data-es="Análisis de 23 ventas registradas de registros públicos 2022-2025.">Analysis of 23 recorded sales from 2022-2025 public records.</p>
+                </div>
+                <div class="two-col">
+                    <div class="fade-in">
+                        <div class="data-table-wrapper">
+                            <table class="data-table">
+                                <thead><tr><th>Metric</th><th>Value</th><th>Implication</th></tr></thead>
+                                <tbody>
+                                    <tr><td>Total Sales Analyzed</td><td><strong>251 (2001-2025)</strong></td><td>Comprehensive market data</td></tr>
+                                    <tr><td>2024-2025 Avg Implied Value</td><td><strong>$218M</strong></td><td>Based on 23 recent sales</td></tr>
+                                    <tr><td>Implied Value Range</td><td><strong>$159M - $290M</strong></td><td>Significant variance = opportunity</td></tr>
+                                    <tr><td>Price Range (2024-25)</td><td><strong>$360K - $1.4M</strong></td><td>Entry points for all budgets</td></tr>
+                                    <tr><td>Price Per Sq Ft</td><td><strong>$357 - $675</strong></td><td>Avg $530/sf (below new builds)</td></tr>
+                                    <tr><td>Land Value (8+ acres)</td><td><strong>$615M</strong></td><td>361,548 sf × $1,700/sf</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="chart-container fade-in stagger-1">
+                        <h4 class="chart-title" data-en="Entry vs. Exit Valuation" data-es="Valoración de Entrada vs. Salida">Entry vs. Exit Valuation</h4>
+                        <canvas id="entryExitChart" height="280"></canvas>
+                    </div>
+                </div>
+                <div class="two-col" style="margin-top: var(--space-2xl);">
+                    <div class="chart-container fade-in">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-sm);">
+                            <h4 class="chart-title" style="margin-bottom: 0;" data-en="Price per Sq Ft Analysis" data-es="Análisis de Precio por Pie Cuadrado">Price per Sq Ft Analysis</h4>
+                            <div class="price-chart-toggle" style="display: flex; gap: 4px; background: var(--gray-100); padding: 3px; border-radius: var(--radius-md);">
+                                <button id="toggleSqft" class="toggle-btn active" style="padding: 4px 10px; font-size: 11px; border: none; border-radius: var(--radius-sm); cursor: pointer; background: var(--white); color: var(--navy); font-weight: 600; transition: all 0.2s;">By Size</button>
+                                <button id="toggleBeds" class="toggle-btn" style="padding: 4px 10px; font-size: 11px; border: none; border-radius: var(--radius-sm); cursor: pointer; background: transparent; color: var(--text-light); font-weight: 500; transition: all 0.2s;">By Beds</button>
+                            </div>
+                        </div>
+                        <div id="priceChartSqft">
+                            <canvas id="salesScatterChart" height="280"></canvas>
+                        </div>
+                        <div id="priceChartBeds" style="display: none;">
+                            <canvas id="priceByBedsChart" height="280"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-container fade-in stagger-1">
+                        <h4 class="chart-title" data-en="Total Return by Exit Scenario" data-es="Retorno Total por Escenario de Salida">Total Return by Exit Scenario</h4>
+                        <canvas id="leverageChart" height="280"></canvas>
+                        <p class="chart-note" style="font-size: var(--text-xs); color: var(--text-light); margin-top: var(--space-sm); text-align: center;" data-en="Entry at $218M for $615M land = $397M built-in spread (182% base gain). Future appreciation adds on top." data-es="Entrada a $218M para terreno de $615M = $397M de diferencia incorporada (182% ganancia base). La apreciación futura se suma.">
+                            Entry at $218M for $615M land = $397M built-in spread (182% base gain). Future appreciation adds on top.
+                        </p>
+                    </div>
+                </div>
+                
+                <!-- Leverage Explainer Callout -->
+                <div class="leverage-callout fade-in" style="margin-top: var(--space-2xl); background: linear-gradient(135deg, rgba(0, 51, 102, 0.05) 0%, rgba(212, 163, 115, 0.1) 100%); border-radius: var(--radius-xl); padding: var(--space-2xl); border-left: 4px solid var(--gold);">
+                    <h4 style="color: var(--navy); margin-bottom: var(--space-md); display: flex; align-items: center; gap: var(--space-sm);">
+                        <i data-lucide="trending-up" style="width: 24px; height: 24px; color: var(--gold);"></i>
+                        <span data-en="A Built-In 182% Gain at Entry" data-es="Una Ganancia Incorporada del 182% al Entrar">A Built-In 182% Gain at Entry</span>
+                    </h4>
+                    <p style="color: var(--text); line-height: 1.7; margin-bottom: var(--space-md);" data-en="You're buying units at a ~$218M implied building valuation for land worth $615M. This $397M spread is your built-in arbitrage gain—a 182% return captured at exit regardless of market movement. It's a one-time entry discount, not a perpetual multiplier." data-es="Está comprando unidades a una valoración implícita de ~$218M para un terreno de $615M. Esta diferencia de $397M es su ganancia de arbitraje incorporada—un retorno del 182% capturado al salir, independientemente del movimiento del mercado. Es un descuento único de entrada, no un multiplicador perpetuo.">
+                        You're buying units at a ~<strong>$218M implied building valuation</strong> for land worth <strong>$615M</strong>. 
+                        This <strong>$397M spread</strong> is your built-in arbitrage gain—a <strong>182% return</strong> captured at exit 
+                        regardless of market movement. It's a one-time entry discount, not a perpetual multiplier.
+                    </p>
+                    <p style="color: var(--text); line-height: 1.7; margin-bottom: var(--space-md);" data-en="If Miami land appreciates after you buy, those gains add on top of your base 182%. For example: if land rises 30% to $800M, your total return becomes 267% ($800M ÷ $218M - 1). The base spread is locked in; market gains are gravy." data-es="Si el terreno de Miami se aprecia después de su compra, esas ganancias se suman a su 182% base. Por ejemplo: si el terreno sube 30% a $800M, su retorno total se convierte en 267% ($800M ÷ $218M - 1). La diferencia base está asegurada; las ganancias del mercado son extra.">
+                        If Miami land appreciates after you buy, those gains <strong>add on top</strong> of your base 182%. 
+                        For example: if land rises 30% to $800M, your total return becomes <strong>267%</strong> ($800M ÷ $218M - 1). 
+                        The base spread is locked in; market gains are gravy.
+                    </p>
+                    <p style="color: var(--text-light); font-size: var(--text-sm); line-height: 1.6;" data-en="No timeline promised. When the building eventually sells—whether in 2 years or 10—you capture the spread between what you paid and the pro-rata land value. More investor-aligned owners accelerates the path to the 80% vote threshold." data-es="Sin cronograma prometido. Cuando el edificio finalmente se venda—ya sea en 2 años o 10—usted captura la diferencia entre lo que pagó y el valor proporcional del terreno. Más propietarios alineados con inversionistas acelera el camino hacia el umbral del 80% de votos.">
+                        <strong>No timeline promised.</strong> When the building eventually sells—whether in 2 years or 10—you capture 
+                        the spread between what you paid and the pro-rata land value. More investor-aligned owners accelerates the path 
+                        to the 80% vote threshold.
+                    </p>
+                </div>
+                
+                <!-- Rental Market Section -->
+                <div class="rental-market-section fade-in" style="margin-top: var(--space-2xl);">
+                    <div class="section-header" style="text-align: left; margin-bottom: var(--space-lg);">
+                        <h3 style="color: var(--navy); display: flex; align-items: center; gap: var(--space-sm);">
+                            <i data-lucide="key" style="width: 24px; height: 24px; color: var(--gold);"></i>
+                            <span data-en="Rental Market Insights" data-es="Información del Mercado de Alquiler">Rental Market Insights</span>
+                        </h3>
+                        <div style="display: flex; align-items: center; gap: var(--space-md); flex-wrap: wrap; margin-top: var(--space-sm);">
+                            <p style="color: var(--text-light); font-size: var(--text-sm); margin: 0;">
+                                Analysis of <span id="rentalDataCount" style="font-weight: 600; color: var(--navy);">67 rentals</span> from public records.
+                            </p>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <span style="font-size: 11px; color: var(--text-light);">Filter years:</span>
+                                <button class="rental-year-btn" data-year="2022">2022</button>
+                                <button class="rental-year-btn" data-year="2023">2023</button>
+                                <button class="rental-year-btn active" data-year="2024">2024</button>
+                                <button class="rental-year-btn active" data-year="2025">2025</button>
+                                <button class="rental-year-btn active" data-year="2026">2026</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="two-col">
+                        <div class="chart-container">
+                            <h4 class="chart-title" data-en="Rent by Bedroom Type" data-es="Renta por Tipo de Habitación">Rent by Bedroom Type</h4>
+                            <canvas id="rentByBedsChart" height="280"></canvas>
+                        </div>
+                        <div>
+                            <div class="data-table-wrapper">
+                                <table class="data-table" style="font-size: 13px;">
+                                    <thead>
+                                        <tr>
+                                            <th>Unit Type</th>
+                                            <th>Avg Rent</th>
+                                            <th>Range</th>
+                                            <th>$/SF</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr id="rental1brRow">
+                                            <td><strong>1 Bedroom</strong></td>
+                                            <td class="rent-avg">$2,896/mo</td>
+                                            <td class="rent-range">$2,400 - $3,650</td>
+                                            <td class="rent-psf">$3.21</td>
+                                        </tr>
+                                        <tr id="rental2brRow">
+                                            <td><strong>2 Bedroom</strong></td>
+                                            <td class="rent-avg">$3,748/mo</td>
+                                            <td class="rent-range">$3,000 - $4,600</td>
+                                            <td class="rent-psf">$3.10</td>
+                                        </tr>
+                                        <tr id="rental3brRow">
+                                            <td><strong>3 Bedroom</strong></td>
+                                            <td class="rent-avg">$6,425/mo</td>
+                                            <td class="rent-range">$6,300 - $6,550</td>
+                                            <td class="rent-psf">$3.77</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style="font-size: 10px; color: var(--text-light); margin-top: var(--space-sm); line-height: 1.5;">
+                                *Estimates based on selected years. Actual yields vary by unit. Click years above to include/exclude from calculations.
+                            </p>
+                            <div style="margin-top: var(--space-md); padding: var(--space-sm); background: rgba(212, 163, 115, 0.1); border-radius: var(--radius-md); border-left: 3px solid var(--gold);">
+                                <p style="font-size: 11px; color: var(--navy); margin: 0; font-weight: 500;">
+                                    <i data-lucide="trending-up" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px; color: var(--gold);"></i>
+                                    Rents up 43% since 2021 ($2,445 → $3,515 avg)
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive Implied Valuation Explorer -->
+                <div class="valuation-explorer fade-in" style="margin-top: var(--space-2xl);">
+                    <div class="explorer-header">
+                        <h3><i data-lucide="sliders-horizontal" style="width:24px;height:24px;margin-right:12px;vertical-align:middle;"></i><span data-en="Implied Valuation Explorer" data-es="Explorador de Valoración Implícita">Implied Valuation Explorer</span></h3>
+                        <p data-en="Filter by bedroom type to see how different unit sales imply different building valuations. Based on 23 actual sales (2024-2026), sorted chronologically." data-es="Filtre por tipo de habitación para ver cómo diferentes ventas implican diferentes valoraciones del edificio. Basado en 23 ventas reales (2024-2026), ordenadas cronológicamente.">Filter by bedroom type to see how different unit sales imply different building valuations. Based on 23 actual sales (2024-2026), sorted chronologically.</p>
+                    </div>
+                    
+                    <div class="filter-controls">
+                        <span class="filter-label" data-en="Filter by Unit Type:" data-es="Filtrar por Tipo de Unidad:">Filter by Unit Type:</span>
+                        <div class="filter-buttons">
+                            <button class="filter-btn active" data-filter="all">All Units <span class="filter-count">(23)</span></button>
+                            <button class="filter-btn" data-filter="1">1 Bedroom <span class="filter-count">(12)</span></button>
+                            <button class="filter-btn" data-filter="2">2 Bedroom <span class="filter-count">(8)</span></button>
+                            <button class="filter-btn" data-filter="3">3 Bedroom <span class="filter-count">(3)</span></button>
+                        </div>
+                    </div>
+                    
+                    <div class="explorer-grid">
+                        <div class="chart-container" style="flex: 2; min-height: 280px; max-height: 320px;">
+                            <h4 class="chart-title">Implied Building Value by Sale</h4>
+                            <canvas id="impliedValueExplorer"></canvas>
+                        </div>
+                        <div class="explorer-stats">
+                            <div class="stat-box">
+                                <span class="stat-label">Selected Unit Type</span>
+                                <span class="stat-value" id="statUnitType">All Units</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Average Implied Value</span>
+                                <span class="stat-value highlight" id="statAvgValue">$218M</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Value Range</span>
+                                <span class="stat-value" id="statRange">$159M - $290M</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Avg Price/Sq Ft</span>
+                                <span class="stat-value" id="statPricePerSqft">$530</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Typical Entry Price</span>
+                                <span class="stat-value" id="statEntryPrice">$360K - $1.4M</span>
+                            </div>
+                            <div class="stat-box insight">
+                                <span class="stat-label">Investment Insight</span>
+                                <span class="stat-insight" id="statInsight">Smaller units offer lower entry points with similar upside potential when the building is sold.</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="sales-table-wrapper" style="margin-top: var(--space-xl);">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-md);">
+                            <h4 style="margin: 0;">Transaction Data</h4>
+                            <div class="data-toggle-btns" style="display: flex; gap: 4px; background: var(--gray-100); padding: 3px; border-radius: var(--radius-md);">
+                                <button class="data-toggle-btn active" data-view="sales" onclick="toggleDataView('sales')" id="salesToggleBtn">Sales (23)</button>
+                                <button class="data-toggle-btn" data-view="rentals" onclick="toggleDataView('rentals')" id="rentalsToggleBtn">Rentals</button>
+                            </div>
+                        </div>
+                        
+                        <!-- Sales Table -->
+                        <div id="salesTableContainer">
+                            <table class="data-table sales-detail-table" id="salesDetailTable">
+                                <thead>
+                                    <tr>
+                                        <th>Unit</th>
+                                        <th>Date</th>
+                                        <th>Beds</th>
+                                        <th>Sq Ft</th>
+                                        <th>Sale Price</th>
+                                        <th>$/Sq Ft</th>
+                                        <th>Implied Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="salesTableBody">
+                                    <!-- Populated by JavaScript -->
+                                </tbody>
+                            </table>
+                            <button id="showMoreSalesBtn" class="show-more-btn" onclick="toggleSalesTable()" style="display: none;">
+                                <span>Show More</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                            </button>
+                        </div>
+                        
+                        <!-- Rentals Table -->
+                        <div id="rentalsTableContainer" style="display: none;">
+                            <table class="data-table sales-detail-table" id="rentalsDetailTable">
+                                <thead>
+                                    <tr>
+                                        <th>Unit</th>
+                                        <th>Date</th>
+                                        <th>Beds</th>
+                                        <th>Sq Ft</th>
+                                        <th>Monthly Rent</th>
+                                        <th>$/Sq Ft</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="rentalsTableBody">
+                                    <!-- Populated by JavaScript -->
+                                </tbody>
+                            </table>
+                            <button id="showMoreRentalsBtn" class="show-more-btn" onclick="toggleRentalsTable()" style="display: none;">
+                                <span>Show More</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Unit Investment Calculator -->
+        <section class="section" id="calculator">
+            <div class="container">
+                <div class="section-header fade-in">
+                    <h2 data-en="Investment Simulator" data-es="Simulador de Inversión">Investment Simulator</h2>
+                    <p data-en="Model cashflows, returns, and exit scenarios for any unit. Simulate how a fund of units might perform." data-es="Modele flujos de caja, retornos y escenarios de salida para cualquier unidad.">Model cashflows, returns, and exit scenarios for any unit. Simulate how a fund of units might perform.</p>
+                </div>
+                
+                <div class="calculator-container fade-in" style="background: var(--white); border-radius: var(--radius-lg); padding: var(--space-lg); box-shadow: var(--shadow-lg); max-width: 1100px; margin: 0 auto;">
+                    
+                    <!-- Primary Inputs Row -->
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-md); margin-bottom: var(--space-md);">
+                        <div class="calc-input-group">
+                            <label style="display: block; font-weight: 600; color: var(--navy); margin-bottom: var(--space-xs); font-size: 11px;">
+                                <i data-lucide="home" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                Scenario
+                            </label>
+                            <select id="unitTypeSelect" style="width: 100%; padding: 8px 10px; border: 2px solid var(--gray-200); border-radius: var(--radius-md); font-size: 12px; font-family: var(--font-body); cursor: pointer;">
+                                <option value="">-- Select --</option>
+                                <optgroup label="Standard Scenarios">
+                                    <option value="A">Scenario A</option>
+                                    <option value="B">Scenario B</option>
+                                    <option value="C">Scenario C</option>
+                                    <option value="D">Scenario D</option>
+                                    <option value="E">Scenario E</option>
+                                    <option value="F">Scenario F</option>
+                                    <option value="G">Scenario G</option>
+                                    <option value="H">Scenario H</option>
+                                    <option value="J">Scenario J</option>
+                                    <option value="K">Scenario K</option>
+                                    <option value="L">Scenario L</option>
+                                    <option value="M">Scenario M</option>
+                                    <option value="N">Scenario N</option>
+                                    <option value="P">Scenario P</option>
+                                    <option value="R">Scenario R</option>
+                                    <option value="S">Scenario S</option>
+                                    <option value="T">Scenario T</option>
+                                    <option value="U">Scenario U</option>
+                                </optgroup>
+                            </select>
+                        </div>
+                        <div class="calc-input-group">
+                            <label style="display: block; font-weight: 600; color: var(--navy); margin-bottom: var(--space-xs); font-size: 11px;">
+                                <i data-lucide="dollar-sign" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                Buy Price
+                            </label>
+                            <div style="position: relative;">
+                                <span style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-light); font-weight: 600; font-size: 12px;">$</span>
+                                <input type="text" id="buyPriceInput" placeholder="500,000" style="width: 100%; padding: 8px 10px 8px 24px; border: 2px solid var(--gray-200); border-radius: var(--radius-md); font-size: 12px; font-family: var(--font-body);">
+                            </div>
+                        </div>
+                        <div class="calc-input-group">
+                            <label style="display: block; font-weight: 600; color: var(--navy); margin-bottom: var(--space-xs); font-size: 11px;">
+                                <i data-lucide="key" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                Monthly Rent
+                            </label>
+                            <div style="position: relative;">
+                                <span style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-light); font-weight: 600; font-size: 12px;">$</span>
+                                <input type="text" id="monthlyRentInput" placeholder="3,500" style="width: 100%; padding: 8px 10px 8px 24px; border: 2px solid var(--gray-200); border-radius: var(--radius-md); font-size: 12px; font-family: var(--font-body);">
+                            </div>
+                            <div id="rentEstimate" style="margin-top: 4px; font-size: 10px; color: var(--text-light); display: none;">
+                                <span style="color: var(--gold);">★</span> Market range: <span id="rentRangeText">--</span>
+                            </div>
+                        </div>
+                        <div class="calc-input-group">
+                            <label style="display: block; font-weight: 600; color: var(--navy); margin-bottom: var(--space-xs); font-size: 11px;">
+                                <i data-lucide="calendar" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                Hold Period (Years)
+                            </label>
+                            <select id="holdPeriodSelect" style="width: 100%; padding: 8px 10px; border: 2px solid var(--gray-200); border-radius: var(--radius-md); font-size: 12px; font-family: var(--font-body); cursor: pointer;">
+                                <option value="3">3 Years</option>
+                                <option value="5" selected>5 Years</option>
+                                <option value="7">7 Years</option>
+                                <option value="10">10 Years</option>
+                                <option value="12">12 Years</option>
+                                <option value="15">15 Years</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <!-- Growth & Expense Assumptions -->
+                    <div style="background: var(--gray-50); border-radius: var(--radius-md); padding: var(--space-md); margin-bottom: var(--space-md);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-sm);">
+                            <span style="font-weight: 600; color: var(--navy); font-size: 12px;">
+                                <i data-lucide="sliders" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                Growth & Expense Assumptions
+                            </span>
+                            <button id="resetAssumptions" style="font-size: 10px; color: var(--teal); background: none; border: none; cursor: pointer; text-decoration: underline;">Reset to Defaults</button>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--space-md);">
+                            <div>
+                                <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Rent Growth/yr</label>
+                                <div style="display: flex; align-items: center; gap: 4px;">
+                                    <input type="number" id="rentGrowthInput" value="3" min="0" max="15" step="0.5" style="width: 50px; padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px; text-align: center;">
+                                    <span style="font-size: 12px; color: var(--text-light);">%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Land Value Growth/yr</label>
+                                <div style="display: flex; align-items: center; gap: 4px;">
+                                    <input type="number" id="landGrowthInput" value="5" min="0" max="20" step="0.5" style="width: 50px; padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px; text-align: center;">
+                                    <span style="font-size: 12px; color: var(--text-light);">%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Unit Value Growth/yr</label>
+                                <div style="display: flex; align-items: center; gap: 4px;">
+                                    <input type="number" id="unitGrowthInput" value="3" min="-5" max="15" step="0.5" style="width: 50px; padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px; text-align: center;">
+                                    <span style="font-size: 12px; color: var(--text-light);">%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Property Tax Rate</label>
+                                <div style="display: flex; align-items: center; gap: 4px;">
+                                    <input type="number" id="propTaxInput" value="1.41" min="0" max="5" step="0.01" style="width: 50px; padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px; text-align: center;">
+                                    <span style="font-size: 12px; color: var(--text-light);">%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Expense Growth/yr</label>
+                                <div style="display: flex; align-items: center; gap: 4px;">
+                                    <input type="number" id="expenseGrowthInput" value="2" min="0" max="10" step="0.5" style="width: 50px; padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px; text-align: center;">
+                                    <span style="font-size: 12px; color: var(--text-light);">%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Financing / Leverage Options -->
+                    <div style="background: linear-gradient(135deg, rgba(0, 51, 102, 0.05) 0%, rgba(0, 51, 102, 0.02) 100%); border: 1px solid rgba(0, 51, 102, 0.1); border-radius: var(--radius-md); padding: var(--space-md); margin-bottom: var(--space-md);">
+                        <div style="display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-xs);">
+                            <input type="checkbox" id="useFinancing" style="width: 16px; height: 16px; cursor: pointer;">
+                            <label for="useFinancing" style="font-size: 12px; font-weight: 600; color: var(--navy); cursor: pointer;">
+                                <i data-lucide="landmark" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                Add Financing / Leverage
+                            </label>
+                        </div>
+                        <div id="financingOptions" style="display: none; padding-left: 24px; margin-top: var(--space-sm);">
+                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-sm);">
+                                <div>
+                                    <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Financing Year</label>
+                                    <select id="financingYear" style="width: 100%; padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px;">
+                                        <option value="0" selected>Year 0 (Acquisition)</option>
+                                        <option value="2">Year 2 (Refi)</option>
+                                        <option value="3">Year 3 (Refi)</option>
+                                        <option value="4">Year 4 (Refi)</option>
+                                        <option value="5">Year 5 (Refi)</option>
+                                        <option value="6">Year 6 (Refi)</option>
+                                        <option value="7">Year 7 (Refi)</option>
+                                        <option value="8">Year 8 (Refi)</option>
+                                        <option value="10">Year 10 (Refi)</option>
+                                        <option value="12">Year 12 (Refi)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Loan-to-Value (LTV)</label>
+                                    <div style="display: flex; align-items: center; gap: 4px;">
+                                        <input type="number" id="financingLTV" value="65" min="0" max="90" step="5" style="width: 50px; padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px; text-align: center;">
+                                        <span style="font-size: 12px; color: var(--text-light);">%</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Interest Rate</label>
+                                    <div style="display: flex; align-items: center; gap: 4px;">
+                                        <input type="number" id="financingRate" value="7.0" min="0" max="15" step="0.25" style="width: 50px; padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px; text-align: center;">
+                                        <span style="font-size: 12px; color: var(--text-light);">%</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label style="display: block; font-size: 10px; color: var(--text-light); margin-bottom: 4px;">Loan Term</label>
+                                    <select id="financingTerm" style="padding: 6px; border: 1px solid var(--gray-200); border-radius: 4px; font-size: 12px;">
+                                        <option value="15">15 yr</option>
+                                        <option value="20">20 yr</option>
+                                        <option value="30" selected>30 yr</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div id="financingSummary" style="margin-top: var(--space-sm); font-size: 10px; color: var(--text-light); padding: 8px; background: rgba(0,0,0,0.03); border-radius: 4px;">
+                                Loan: $-- | Monthly Payment: $-- | Equity Required: $--
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Results Section -->
+                    <div id="calculatorResults" style="display: none;">
+                        <!-- Unit-specific details intentionally omitted to avoid leaking building fingerprints. -->
+                        
+                        <!-- Key Metrics Grid -->
+                        <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--space-sm); margin-bottom: var(--space-md);">
+                            <div style="background: linear-gradient(135deg, rgba(0, 168, 150, 0.1) 0%, rgba(0, 168, 150, 0.02) 100%); padding: var(--space-sm); border-radius: var(--radius-md); text-align: center; border: 1px solid rgba(0, 168, 150, 0.2);">
+                                <span style="display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--teal); margin-bottom: 2px;">MOIC</span>
+                                <span id="resultMOIC" style="display: block; font-family: var(--font-heading); font-size: 18px; font-weight: 700; color: var(--teal);">--</span>
+                                <span style="font-size: 9px; color: var(--text-light);">Multiple</span>
+                            </div>
+                            <div style="background: linear-gradient(135deg, rgba(212, 163, 115, 0.1) 0%, rgba(212, 163, 115, 0.02) 100%); padding: var(--space-sm); border-radius: var(--radius-md); text-align: center; border: 1px solid rgba(212, 163, 115, 0.2);">
+                                <span style="display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--gold); margin-bottom: 2px;">IRR</span>
+                                <span id="resultIRR" style="display: block; font-family: var(--font-heading); font-size: 18px; font-weight: 700; color: var(--gold);">--</span>
+                                <span style="font-size: 9px; color: var(--text-light);">Annualized</span>
+                            </div>
+                            <div style="background: var(--gray-50); padding: var(--space-sm); border-radius: var(--radius-md); text-align: center;">
+                                <span style="display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-light); margin-bottom: 2px;">Cash-on-Cash</span>
+                                <span id="resultCoC" style="display: block; font-family: var(--font-heading); font-size: 18px; font-weight: 700; color: var(--navy);">--</span>
+                                <span style="font-size: 9px; color: var(--text-light);">Year 1</span>
+                            </div>
+                            <div style="background: var(--gray-50); padding: var(--space-sm); border-radius: var(--radius-md); text-align: center;">
+                                <span style="display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-light); margin-bottom: 2px;">Total Profit</span>
+                                <span id="resultProfit" style="display: block; font-family: var(--font-heading); font-size: 18px; font-weight: 700; color: #22c55e;">--</span>
+                                <span style="font-size: 9px; color: var(--text-light);">At Exit</span>
+                            </div>
+                            <div style="background: var(--gray-50); padding: var(--space-sm); border-radius: var(--radius-md); text-align: center;">
+                                <span style="display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-light); margin-bottom: 2px;">Exit Value</span>
+                                <span id="resultExitValue" style="display: block; font-family: var(--font-heading); font-size: 18px; font-weight: 700; color: var(--navy);">--</span>
+                                <span style="font-size: 9px; color: var(--text-light);">Your Unit</span>
+                            </div>
+                            <div style="background: var(--gray-50); padding: var(--space-sm); border-radius: var(--radius-md); text-align: center;">
+                                <span style="display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-light); margin-bottom: 2px;">Entry Valuation</span>
+                                <span id="resultEntryValuation" style="display: block; font-family: var(--font-heading); font-size: 18px; font-weight: 700; color: var(--navy);">--</span>
+                                <span style="font-size: 9px; color: var(--text-light);">Implied Bldg</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Capital Events Summary -->
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); margin-bottom: var(--space-md);">
+                            <div style="background: linear-gradient(135deg, rgba(0, 51, 102, 0.08) 0%, rgba(0, 51, 102, 0.02) 100%); border: 1px solid rgba(0, 51, 102, 0.15); border-radius: var(--radius-md); padding: var(--space-md); text-align: center;">
+                                <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 4px;">
+                                    <div style="width: 12px; height: 12px; background: rgba(0, 51, 102, 0.9); border-radius: 2px;"></div>
+                                    <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--navy); font-weight: 600;">Initial Equity (Year 0)</span>
+                                </div>
+                                <span id="resultInitialEquity" style="font-family: var(--font-heading); font-size: 24px; font-weight: 700; color: var(--navy);">-$--</span>
+                            </div>
+                            <div style="background: linear-gradient(135deg, rgba(212, 163, 115, 0.15) 0%, rgba(212, 163, 115, 0.02) 100%); border: 1px solid rgba(212, 163, 115, 0.3); border-radius: var(--radius-md); padding: var(--space-md); text-align: center;">
+                                <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 4px;">
+                                    <div style="width: 12px; height: 12px; background: rgba(212, 163, 115, 0.9); border-radius: 2px;"></div>
+                                    <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--gold); font-weight: 600;">Sale Proceeds (Exit)</span>
+                                </div>
+                                <span id="resultSaleProceeds" style="font-family: var(--font-heading); font-size: 24px; font-weight: 700; color: var(--gold);">+$--</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Cashflow Chart -->
+                        <div style="background: var(--gray-50); border-radius: var(--radius-md); padding: var(--space-md); margin-bottom: var(--space-md);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-sm);">
+                                <span style="font-weight: 600; color: var(--navy); font-size: 12px;">
+                                    <i data-lucide="bar-chart-3" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                    Operating Cashflows
+                                </span>
+                                <div style="display: flex; gap: var(--space-xs);">
+                                    <button id="chartViewCashflow" class="chart-toggle-btn active" style="padding: 4px 10px; font-size: 10px; border: 1px solid var(--gray-200); border-radius: 4px; background: var(--white); cursor: pointer;">Cashflow</button>
+                                    <button id="chartViewNAV" class="chart-toggle-btn" style="padding: 4px 10px; font-size: 10px; border: 1px solid var(--gray-200); border-radius: 4px; background: transparent; cursor: pointer;">NAV</button>
+                                </div>
+                            </div>
+                            <div style="height: 250px;">
+                                <canvas id="cashflowChart"></canvas>
+                            </div>
+                        </div>
+                        
+                        <!-- Detailed Yearly Table -->
+                        <div style="background: var(--white); border: 1px solid var(--gray-200); border-radius: var(--radius-md); overflow: hidden;">
+                            <div style="background: var(--gray-50); padding: var(--space-sm) var(--space-md); border-bottom: 1px solid var(--gray-200);">
+                                <span style="font-weight: 600; color: var(--navy); font-size: 12px;">
+                                    <i data-lucide="table" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                    Year-by-Year Projections
+                                </span>
+                            </div>
+                            <div style="overflow-x: auto;">
+                                <table id="cashflowTable" style="width: 100%; font-size: 11px; border-collapse: collapse;">
+                                    <thead>
+                                        <tr style="background: var(--gray-50);">
+                                            <th style="padding: 8px 12px; text-align: left; font-weight: 600; color: var(--navy); border-bottom: 1px solid var(--gray-200);">Year</th>
+                                            <th style="padding: 8px 12px; text-align: right; font-weight: 600; color: var(--navy); border-bottom: 1px solid var(--gray-200);">Gross Rent</th>
+                                            <th style="padding: 8px 12px; text-align: right; font-weight: 600; color: var(--navy); border-bottom: 1px solid var(--gray-200);">HOA</th>
+                                            <th style="padding: 8px 12px; text-align: right; font-weight: 600; color: var(--navy); border-bottom: 1px solid var(--gray-200);">Prop Tax</th>
+                                            <th style="padding: 8px 12px; text-align: right; font-weight: 600; color: var(--navy); border-bottom: 1px solid var(--gray-200);">Net Cashflow</th>
+                                            <th style="padding: 8px 12px; text-align: right; font-weight: 600; color: var(--navy); border-bottom: 1px solid var(--gray-200);">Cumulative</th>
+                                            <th style="padding: 8px 12px; text-align: right; font-weight: 600; color: var(--navy); border-bottom: 1px solid var(--gray-200);">Unit NAV</th>
+                                            <th style="padding: 8px 12px; text-align: right; font-weight: 600; color: var(--navy); border-bottom: 1px solid var(--gray-200);">Land NAV</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="cashflowTableBody">
+                                        <!-- Populated by JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <p style="font-size: 10px; color: var(--text-light); margin-top: var(--space-sm); text-align: center; font-style: italic;">
+                            * Projections are estimates based on assumptions. Actual results may vary. This is not financial advice.
+                        </p>
+                    </div>
+                    
+                    <!-- Empty State -->
+                    <div id="calculatorEmpty" style="text-align: center; padding: var(--space-xl); color: var(--text-light);">
+                        <i data-lucide="calculator" style="width: 48px; height: 48px; margin-bottom: var(--space-md); opacity: 0.3;"></i>
+                        <p style="font-size: var(--text-sm); margin-bottom: var(--space-xs);">Select a scenario, enter buy price and rent to model your investment</p>
+                        <p style="font-size: 11px; opacity: 0.7;">Adjust growth assumptions to see different scenarios</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Risks -->
+        <section class="section" id="risks">
+            <div class="container">
+                <div class="section-header fade-in">
+                    <h2 data-en="Balanced View: Risks & Mitigation" data-es="Vista Equilibrada: Riesgos y Mitigación">Balanced View: Risks & Mitigation</h2>
+                    <p data-en="Every investment carries risk. Here's how we address key challenges." data-es="Toda inversión conlleva riesgos. Así es como abordamos los principales desafíos.">Every investment carries risk. Here's how we address key challenges.</p>
+                </div>
+                <div class="risk-list fade-in">
+                    <div class="risk-item">
+                        <div class="risk-icon"><i data-lucide="users-round"></i></div>
+                        <div class="risk-content">
+                            <h4 data-en="Owner Resistance" data-es="Resistencia de Propietarios">Owner Resistance</h4>
+                            <p data-en="Some owners may resist selling. Mitigation: Education campaigns, fair offers above market, relocation assistance." data-es="Algunos propietarios pueden resistirse a vender. Mitigación: Campañas educativas, ofertas justas por encima del mercado, asistencia de reubicación.">Some owners may resist selling. Mitigation: Education campaigns, fair offers above market, relocation assistance.</p>
+                        </div>
+                    </div>
+                    <div class="risk-item">
+                        <div class="risk-icon"><i data-lucide="landmark"></i></div>
+                        <div class="risk-content">
+                            <h4 data-en="Zoning & Regulatory Limits" data-es="Zonificación y Límites Regulatorios">Zoning & Regulatory Limits</h4>
+                            <p data-en="Redevelopment requires approvals. Mitigation: Partner with experienced developers who have track records in Brickell." data-es="El redesarrollo requiere aprobaciones. Mitigación: Asociarse con desarrolladores experimentados con historial en Brickell.">Redevelopment requires approvals. Mitigation: Partner with experienced developers who have track records in Brickell.</p>
+                        </div>
+                    </div>
+                    <div class="risk-item">
+                        <div class="risk-icon"><i data-lucide="clock"></i></div>
+                        <div class="risk-content">
+                            <h4 data-en="Timeline Uncertainty" data-es="Incertidumbre de Cronograma">Timeline Uncertainty</h4>
+                            <p data-en="Process may take 1-3+ years. Mitigation: Units generate rental income (4-6% yield) while waiting." data-es="El proceso puede tomar 1-3+ años. Mitigación: Las unidades generan ingresos por alquiler (4-6% rendimiento) mientras espera.">Process may take 1-3+ years. Mitigation: Units generate rental income (4-6% yield) while waiting.</p>
+                        </div>
+                    </div>
+                    <div class="risk-item">
+                        <div class="risk-icon"><i data-lucide="trending-down"></i></div>
+                        <div class="risk-content">
+                            <h4 data-en="Market Conditions" data-es="Condiciones del Mercado">Market Conditions</h4>
+                            <p data-en="Real estate markets fluctuate. Mitigation: Miami's fundamentals remain strong. Land scarcity supports values." data-es="Los mercados inmobiliarios fluctúan. Mitigación: Los fundamentos de Miami siguen fuertes. La escasez de terrenos apoya los valores.">Real estate markets fluctuate. Mitigation: Miami's fundamentals remain strong. Land scarcity supports values.</p>
+                        </div>
+                    </div>
+                    <div class="risk-item">
+                        <div class="risk-icon"><i data-lucide="file-warning"></i></div>
+                        <div class="risk-content">
+                            <h4 data-en="Special Assessments" data-es="Cuotas Especiales">Special Assessments</h4>
+                            <p data-en="Building may require capital improvements. Mitigation: Factor $10-20K/unit into acquisition costs." data-es="El edificio puede requerir mejoras de capital. Mitigación: Incluya $10-20K/unidad en los costos de adquisición.">Building may require capital improvements. Mitigation: Factor $10-20K/unit into acquisition costs.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Investment Form -->
+        <section class="form-section" id="invest">
+            <div class="form-container fade-in">
+                <div class="form-header">
+                    <h2 data-en="Express Interest" data-es="Expresar Interés">Express Interest</h2>
+                    <p data-en="Join via LLC structure with equal shares and right of first refusal." data-es="Únase mediante estructura LLC con participaciones iguales y derecho de preferencia.">Join via LLC structure with equal shares and right of first refusal.</p>
+                </div>
+                <form data-validate>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" data-en="Full Name *" data-es="Nombre Completo *">Full Name *</label>
+                            <input type="text" class="form-input" required placeholder="John Smith">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" data-en="Email Address *" data-es="Correo Electrónico *">Email Address *</label>
+                            <input type="email" class="form-input" required placeholder="john@example.com">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" data-en="Phone Number" data-es="Número de Teléfono">Phone Number</label>
+                            <input type="tel" class="form-input" placeholder="+1 (305) 555-0123">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" data-en="Investment Budget *" data-es="Presupuesto de Inversión *">Investment Budget *</label>
+                            <select class="form-select" required>
+                                <option value="">Select range</option>
+                                <option value="300-500k">$300K - $500K</option>
+                                <option value="500k-1m">$500K - $1M</option>
+                                <option value="1m-2m">$1M - $2M</option>
+                                <option value="2m+">$2M+</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" data-en="# of Units Interested" data-es="# de Unidades de Interés"># of Units Interested</label>
+                            <select class="form-select">
+                                <option value="1">1 unit</option>
+                                <option value="2-3">2-3 units</option>
+                                <option value="4-5">4-5 units</option>
+                                <option value="5+">5+ units</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" data-en="Investor Status *" data-es="Estado de Inversionista *">Investor Status *</label>
+                            <select class="form-select" required>
+                                <option value="">Select status</option>
+                                <option value="accredited-us">Accredited Investor (US)</option>
+                                <option value="non-accredited-us">Non-Accredited (US)</option>
+                                <option value="international">International Investor</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Additional Notes</label>
+                        <textarea class="form-textarea" placeholder="Any questions or specific interests..."></textarea>
+                    </div>
+                    <div class="form-checkbox" style="margin-bottom: var(--space-lg);">
+                        <input type="checkbox" id="disclaimer" required>
+                        <label for="disclaimer" style="font-size: var(--text-sm); color: var(--dark-gray);">I understand this is for informational purposes only and does not constitute an offer to sell securities. *</label>
+                    </div>
+                    <button type="submit" class="form-submit" style="background: var(--gold);">Submit Interest</button>
+                    <p style="font-size: var(--text-xs); color: var(--text-light); margin-top: var(--space-sm); text-align: center; font-style: italic;">* Form submission coming soon. For now, please use the email below.</p>
+                </form>
+                <div style="text-align: center; margin-top: var(--space-xl); padding-top: var(--space-lg); border-top: 1px solid var(--medium-gray);">
+                    <p style="font-size: var(--text-sm); color: var(--dark-gray); margin-bottom: var(--space-md);">Prefer to discuss directly?</p>
+                    <a href="mailto:invest@305opportunitiesfund.com" class="btn btn-secondary" style="color: var(--gold); border-color: var(--gold);"><i data-lucide="calendar"></i><span>Schedule a Call</span></a>
+                    <p style="font-size: var(--text-xs); color: var(--text-light); margin-top: var(--space-sm); font-style: italic;">* Email scheduling coming soon</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="site-footer">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <h3>Brickell Insights</h3>
+                    <p data-en="Data-driven investment analysis for a confidential waterfront opportunity." data-es="Análisis de inversión basado en datos para una oportunidad frente al mar confidencial.">Data-driven investment analysis for a confidential waterfront opportunity.</p>
+                </div>
+                <div class="footer-col">
+                    <h4 data-en="Quick Links" data-es="Enlaces Rápidos">Quick Links</h4>
+                    <ul>
+                        <li><a href="#opportunity" data-en="Opportunity" data-es="Oportunidad">Opportunity</a></li>
+                        <li><a href="#timeline" data-en="Strategy" data-es="Estrategia">Strategy</a></li>
+                        <li><a href="#data" data-en="Data" data-es="Datos">Data</a></li>
+                        <li><a href="#invest" data-en="Get Involved" data-es="Participar">Get Involved</a></li>
+                        <li><a href="index.html" data-en="Home" data-es="Inicio">Home</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4 data-en="Contact" data-es="Contacto">Contact</h4>
+                    <ul><li><a href="mailto:invest@305opportunitiesfund.com">invest@305opportunitiesfund.com</a></li></ul>
+                    <p style="font-size: var(--text-xs); color: var(--text-light); margin-top: var(--space-xs); font-style: italic;">* Email coming soon</p>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p class="footer-disclaimer" data-en="This site is for informational purposes only and does not constitute financial, legal, or real estate advice. It is not an offer to sell or solicitation to buy securities. Consult professionals before making decisions." data-es="Este sitio es solo para fines informativos y no constituye asesoramiento financiero, legal o inmobiliario. No es una oferta de venta ni solicitud de compra de valores. Consulte a profesionales antes de tomar decisiones.">This site is for informational purposes only and does not constitute financial, legal, or real estate advice. It is not an offer to sell or solicitation to buy securities. Consult professionals before making decisions.</p>
+                <p class="footer-copyright">&copy; 2026 HBIC LLC</p>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        (function () {
+            var KEY = 'investor_site_access';
+            var modal = document.getElementById('accessModal');
+            var form = document.getElementById('accessForm');
+            var input = document.getElementById('accessInput');
+            var err = document.getElementById('accessError');
+            var main = document.getElementById('mainContent');
+
+            function unlock() {
+                try { sessionStorage.setItem(KEY, 'true'); } catch (e) { /* ignore */ }
+                if (modal) modal.style.display = 'none';
+                if (main) main.style.display = 'block';
+                document.body.style.overflow = '';
+                // Re-run reveal/counters if the site JS has already loaded.
+                try {
+                    if (typeof initScrollAnimations === 'function') initScrollAnimations();
+                    if (typeof initCounters === 'function') initCounters();
+                } catch (e) { /* ignore */ }
+            }
+
+            var already = false;
+            try { already = sessionStorage.getItem(KEY) === 'true'; } catch (e) { already = false; }
+            if (already) {
+                unlock();
+                return;
+            }
+
+            // Locked state
+            if (main) main.style.display = 'none';
+            document.body.style.overflow = 'hidden';
+            if (modal) modal.style.display = 'flex';
+            if (input) setTimeout(function () { try { input.focus(); } catch (e) { /* ignore */ } }, 50);
+
+            if (form) {
+                form.addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    var val = String(input && input.value ? input.value : '').trim();
+                    if (val === 'C4') {
+                        unlock();
+                    } else {
+                        if (err) err.classList.add('visible');
+                        if (input) input.value = '';
+                    }
+                });
+            }
+            if (input) {
+                input.addEventListener('input', function () {
+                    if (err) err.classList.remove('visible');
+                });
+            }
+        })();
+    </script>
+
+    <!-- Local scripts -->
+    <script src="js/main.js?v=2" defer></script>
+    <script src="js/charts.js?v=2" defer></script>
+</body>
+</html>
+

@@ -29,6 +29,9 @@ interface DocumentUploadProps {
 
 const CATEGORIES = [
   'general',
+  'teaser',
+  'deck',
+  'nda',
   'kyc',
   'aml',
   'accreditation',
@@ -57,6 +60,9 @@ const CATEGORIES = [
 
 const CATEGORY_LABELS: Record<string, string> = {
   general: 'General',
+  teaser: 'Teaser',
+  deck: 'Deck',
+  nda: 'NDA',
   kyc: 'KYC',
   aml: 'AML',
   accreditation: 'Accreditation',

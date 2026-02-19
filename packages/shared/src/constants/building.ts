@@ -1,17 +1,19 @@
 import { STANDARD_LETTERS, SPECIAL_UNIT_TYPES } from './units';
 
 /**
- * Brickell Town House (2451 Brickell Ave) building configuration.
+ * Brickell Town House building configuration.
  */
 export const BUILDING = {
-  address: '2451 Brickell Ave, Miami, FL 33129',
+  // Keep location confidential; do not hardcode a street address.
+  address: 'Miami, FL',
   name: 'Brickell Town House',
   yearBuilt: 1963,
   stories: 21,
   totalUnits: 361,
-  acreage: 8.3,
-  totalSqftLand: 361_548, // 8.3 acres in sqft
-  coordinates: { lat: 25.7486, lng: -80.1897 },
+  acreage: 8, // 8+ (rounded for confidentiality)
+  totalSqftLand: 350_000, // approx (rounded for confidentiality)
+  // City-level coordinates only (not a precise pin).
+  coordinates: { lat: 25.7617, lng: -80.1918 },
 } as const;
 
 /**

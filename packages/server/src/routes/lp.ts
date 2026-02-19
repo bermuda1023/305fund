@@ -875,7 +875,7 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
   const { callId } = req.params;
   const bccMode = req.body?.bccMode !== undefined ? !!req.body.bccMode : true;
   const fundName = String(req.body?.fundName || process.env.FUND_NAME || '305 Opportunities Fund');
-  const fromEmail = process.env.FROM_EMAIL || 'fund@brickell2451insights.com';
+  const fromEmail = process.env.FROM_EMAIL || 'fund@305opportunitiesfund.com';
 
   const call = db.prepare(`
     SELECT id, call_number, total_amount, due_date, purpose, custom_email_subject, custom_email_body

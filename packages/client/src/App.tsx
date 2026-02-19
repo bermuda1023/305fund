@@ -15,6 +15,8 @@ import MarketData from './pages/MarketData';
 import LPPortal from './pages/LPPortal';
 import Entities from './pages/Entities';
 import Actuals from './pages/Actuals';
+import Landing from './pages/Landing';
+import InvestorRoom from './pages/InvestorRoom';
 
 function ProtectedRoute({
   children,
@@ -28,8 +30,8 @@ function ProtectedRoute({
   const { isAuthenticated, isGP, user } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" />;
   if (user?.mustChangePassword && !allowPasswordChangeOnly) return <Navigate to="/change-password" />;
-  if (!user?.mustChangePassword && allowPasswordChangeOnly) return <Navigate to={isGP ? "/dashboard" : "/lp"} />;
-  if (gpOnly && !isGP) return <Navigate to="/lp" />;
+  if (!user?.mustChangePassword && allowPasswordChangeOnly) return <Navigate to={isGP ? "/app/dashboard" : "/app/lp"} />;
+  if (gpOnly && !isGP) return <Navigate to="/app/lp" />;
   return <>{children}</>;
 }
 
@@ -39,6 +41,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/" element={<Landing />} />
+        <Route path="/investor" element={<InvestorRoom />} />
         <Route path="/login" element={<Login />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
@@ -51,13 +55,13 @@ export default function App() {
           }
         />
 
-        <Route path="/" element={
+        <Route path="/app" element={
           <ProtectedRoute>
             <Layout />
           </ProtectedRoute>
         }>
           {/* GP Routes */}
-          <Route index element={<Navigate to={isGP ? "/dashboard" : "/lp"} />} />
+          <Route index element={<Navigate to={isGP ? "/app/dashboard" : "/app/lp"} />} />
           <Route path="dashboard" element={<ProtectedRoute gpOnly><Dashboard /></ProtectedRoute>} />
           <Route path="portfolio" element={<ProtectedRoute gpOnly><Portfolio /></ProtectedRoute>} />
           <Route path="model" element={<ProtectedRoute gpOnly><Model /></ProtectedRoute>} />
@@ -72,6 +76,19 @@ export default function App() {
           {/* LP Route */}
           <Route path="lp" element={<ProtectedRoute><LPPortal /></ProtectedRoute>} />
         </Route>
+
+        {/* Legacy route compatibility */}
+        <Route path="/dashboard" element={<Navigate to="/app/dashboard" replace />} />
+        <Route path="/portfolio" element={<Navigate to="/app/portfolio" replace />} />
+        <Route path="/model" element={<Navigate to="/app/model" replace />} />
+        <Route path="/sensitivity" element={<Navigate to="/app/sensitivity" replace />} />
+        <Route path="/contracts" element={<Navigate to="/app/contracts" replace />} />
+        <Route path="/listings" element={<Navigate to="/app/listings" replace />} />
+        <Route path="/market" element={<Navigate to="/app/market" replace />} />
+        <Route path="/entities" element={<Navigate to="/app/entities" replace />} />
+        <Route path="/actuals" element={<Navigate to="/app/actuals" replace />} />
+        <Route path="/lp-admin" element={<Navigate to="/app/lp-admin" replace />} />
+        <Route path="/lp" element={<Navigate to="/app/lp" replace />} />
       </Routes>
     </BrowserRouter>
   );

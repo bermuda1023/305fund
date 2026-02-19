@@ -1,0 +1,103 @@
+{
+  "buildingInfo": {
+    "address": "Confidential",
+    "yearBuilt": 1963,
+    "stories": 21,
+    "totalUnits": 359,
+    "acreage": 8,
+    "coordinates": {
+      "lat": 25.7617,
+      "lng": -80.1918
+    }
+  },
+  "valuationSummary": {
+    "totalSalesRecorded": 251,
+    "dateRange": "2001-2025",
+    "avgImpliedValue2024_2025": 218000000,
+    "medianImpliedValue2024_2025": 221000000,
+    "avgImpliedValue2025": 213000000,
+    "avgImpliedValue2024": 247000000,
+    "conservativeRange": {
+      "low": 175000000,
+      "high": 290000000
+    },
+    "exitPotential": 600000000,
+    "landValuePerSqFt": 1700
+  },
+  "recentSales2025": [
+    {"date": "2025-01-20", "unit": "#6N", "beds": 1, "baths": 1, "sqft": 1012, "price": 425000, "pricePerSqft": 420, "ownershipPct": 0.2405, "impliedValue": 176692400},
+    {"date": "2025-10-31", "unit": "#5G", "beds": 2, "baths": 2, "sqft": 1357, "price": 485000, "pricePerSqft": 357, "ownershipPct": 0.3053, "impliedValue": 158865300},
+    {"date": "2025-10-27", "unit": "#16K", "beds": 1, "baths": 1, "sqft": 886, "price": 440000, "pricePerSqft": 497, "ownershipPct": 0.2082, "impliedValue": 211384000},
+    {"date": "2025-10-20", "unit": "#10S", "beds": 2, "baths": 2, "sqft": 1188, "price": 475000, "pricePerSqft": 400, "ownershipPct": 0.2775, "impliedValue": 171149000},
+    {"date": "2025-10-03", "unit": "#5E", "beds": 3, "baths": 3, "sqft": 2189, "price": 1400000, "pricePerSqft": 640, "ownershipPct": 0.5153, "impliedValue": 271690600},
+    {"date": "2025-09-19", "unit": "#3E", "beds": 2, "baths": 2, "sqft": 1188, "price": 615000, "pricePerSqft": 518, "ownershipPct": 0.2775, "impliedValue": 221592900},
+    {"date": "2025-09-10", "unit": "#20H", "beds": 2, "baths": 2, "sqft": 1188, "price": 687500, "pricePerSqft": 579, "ownershipPct": 0.2775, "impliedValue": 247715600},
+    {"date": "2025-08-22", "unit": "#20N", "beds": 1, "baths": 1, "sqft": 1012, "price": 470000, "pricePerSqft": 464, "ownershipPct": 0.2405, "impliedValue": 195401000},
+    {"date": "2025-08-05", "unit": "#17G", "beds": 2, "baths": 2, "sqft": 1357, "price": 610000, "pricePerSqft": 450, "ownershipPct": 0.3053, "impliedValue": 199810000},
+    {"date": "2025-07-11", "unit": "#4L", "beds": 2, "baths": 2, "sqft": 1188, "price": 615000, "pricePerSqft": 518, "ownershipPct": 0.2775, "impliedValue": 221592900},
+    {"date": "2025-05-21", "unit": "#12R", "beds": 1, "baths": 1, "sqft": 886, "price": 360000, "pricePerSqft": 406, "ownershipPct": 0.2058, "impliedValue": 174894000},
+    {"date": "2025-04-21", "unit": "#PHK", "beds": 1, "baths": 1, "sqft": 886, "price": 505000, "pricePerSqft": 570, "ownershipPct": 0.2082, "impliedValue": 242611200},
+    {"date": "2025-03-10", "unit": "#18N", "beds": 1, "baths": 1, "sqft": 1012, "price": 516000, "pricePerSqft": 510, "ownershipPct": 0.2405, "impliedValue": 214525400},
+    {"date": "2025-03-10", "unit": "#4J", "beds": 3, "baths": 3, "sqft": 1703, "price": 1150000, "pricePerSqft": 675, "ownershipPct": 0.3964, "impliedValue": 290100800},
+    {"date": "2025-03-07", "unit": "#18R", "beds": 1, "baths": 1, "sqft": 886, "price": 485000, "pricePerSqft": 547, "ownershipPct": 0.2058, "impliedValue": 235621000}
+  ],
+  "recentSales2024": [
+    {"date": "2024-06-14", "unit": "#9A", "beds": 2, "baths": 2, "sqft": 1305, "price": 685000, "pricePerSqft": 525, "ownershipPct": 0.3122, "impliedValue": 219391000},
+    {"date": "2024-05-16", "unit": "#6T", "beds": 1, "baths": 1.5, "sqft": 832, "price": 527000, "pricePerSqft": 633, "ownershipPct": 0.2082, "impliedValue": 253180400},
+    {"date": "2024-05-15", "unit": "#6P", "beds": 1, "baths": 1, "sqft": 832, "price": 520000, "pricePerSqft": 625, "ownershipPct": 0.2058, "impliedValue": 252624600},
+    {"date": "2024-05-09", "unit": "#17R", "beds": 1, "baths": 1, "sqft": 886, "price": 480000, "pricePerSqft": 542, "ownershipPct": 0.2058, "impliedValue": 233192000},
+    {"date": "2024-04-30", "unit": "#5S", "beds": 2, "baths": 2, "sqft": 1188, "price": 782500, "pricePerSqft": 659, "ownershipPct": 0.2775, "impliedValue": 281945400},
+    {"date": "2024-04-05", "unit": "#6S", "beds": 2, "baths": 2, "sqft": 1188, "price": 717800, "pricePerSqft": 604, "ownershipPct": 0.2775, "impliedValue": 258633100},
+    {"date": "2024-04-02", "unit": "#19C", "beds": 1, "baths": 1, "sqft": 886, "price": 500000, "pricePerSqft": 564, "ownershipPct": 0.2082, "impliedValue": 240209100},
+    {"date": "2024-01-31", "unit": "#11K", "beds": 1, "baths": 1, "sqft": 886, "price": 490000, "pricePerSqft": 553, "ownershipPct": 0.2082, "impliedValue": 235404900}
+  ],
+  "priceStats2024_2025": {
+    "minPrice": 360000,
+    "maxPrice": 1400000,
+    "avgPrice": 573000,
+    "medianPrice": 505000,
+    "minPricePerSqft": 357,
+    "maxPricePerSqft": 675,
+    "avgPricePerSqft": 530
+  },
+  "pricePerSqftByType": {
+    "1bed": {"count": 12, "min": 357, "max": 633, "avg": 511},
+    "2bed": {"count": 8, "min": 400, "max": 659, "avg": 531},
+    "3bed": {"count": 3, "min": 640, "max": 675, "avg": 651}
+  },
+  "historicalImpliedValues": [
+    {"year": 2009, "avgImpliedValue": 76000000, "salesCount": 4},
+    {"year": 2010, "avgImpliedValue": 84000000, "salesCount": 8},
+    {"year": 2011, "avgImpliedValue": 89000000, "salesCount": 3},
+    {"year": 2012, "avgImpliedValue": 80000000, "salesCount": 8},
+    {"year": 2013, "avgImpliedValue": 120000000, "salesCount": 18},
+    {"year": 2014, "avgImpliedValue": 127000000, "salesCount": 18},
+    {"year": 2015, "avgImpliedValue": 134000000, "salesCount": 17},
+    {"year": 2016, "avgImpliedValue": 148000000, "salesCount": 13},
+    {"year": 2017, "avgImpliedValue": 124000000, "salesCount": 10},
+    {"year": 2018, "avgImpliedValue": 151000000, "salesCount": 13},
+    {"year": 2019, "avgImpliedValue": 131000000, "salesCount": 9},
+    {"year": 2020, "avgImpliedValue": 134000000, "salesCount": 12},
+    {"year": 2021, "avgImpliedValue": 159000000, "salesCount": 36},
+    {"year": 2022, "avgImpliedValue": 168000000, "salesCount": 15},
+    {"year": 2023, "avgImpliedValue": 241000000, "salesCount": 2},
+    {"year": 2024, "avgImpliedValue": 247000000, "salesCount": 8},
+    {"year": 2025, "avgImpliedValue": 213000000, "salesCount": 15}
+  ],
+  "unitTypes": {
+    "1bed": {"count": 180, "sqftRange": "810-1012", "typicalPrice": "360000-530000"},
+    "2bed": {"count": 140, "sqftRange": "1100-1357", "typicalPrice": "475000-782500"},
+    "3bed": {"count": 39, "sqftRange": "1703-2890", "typicalPrice": "1150000-1400000"}
+  },
+  "amenities": [
+    "Heated Pool",
+    "Fitness Center", 
+    "Tennis Courts",
+    "24/7 Security",
+    "Valet Parking",
+    "Bayfront Access",
+    "BBQ Area",
+    "Community Room"
+  ]
+}
+

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
@@ -11,6 +11,17 @@ export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
 
+  // Support /login?role=gp|lp for the landing page.
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const role = String(params.get('role') || '').toLowerCase();
+      if (role === 'lp' || role === 'gp') setLoginRole(role);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
@@ -21,7 +32,7 @@ export default function Login() {
         navigate('/change-password');
         return;
       }
-      navigate(user.role === 'gp' ? '/dashboard' : '/lp');
+      navigate(user.role === 'gp' ? '/app/dashboard' : '/app/lp');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Invalid email or password');
     } finally {

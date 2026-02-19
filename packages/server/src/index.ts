@@ -36,6 +36,7 @@ import entitiesRoutes from './routes/entities';
 import lpRoutes from './routes/lp';
 import actualsRoutes from './routes/actuals';
 import documentsRoutes from './routes/documents';
+import investorRoutes from './routes/investor';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -244,6 +245,7 @@ app.use('/api/entities', entitiesRoutes);
 app.use('/api/lp', lpRoutes);
 app.use('/api/actuals', actualsRoutes);
 app.use('/api/documents', documentsRoutes);
+app.use('/api/investor', investorRoutes);
 
 // Error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
