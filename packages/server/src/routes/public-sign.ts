@@ -118,6 +118,24 @@ function labelForFieldName(fieldName: string) {
   return n;
 }
 
+function pickSignerEmail(explicitEmail: unknown, formValues: Record<string, string>): string {
+  const direct = String(explicitEmail || '').trim();
+  if (direct && direct.includes('@')) return direct;
+
+  const preferredKeys = ['Email', 'E-mail', 'email', 'signerEmail', 'Signer Email'];
+  for (const key of preferredKeys) {
+    const v = String(formValues[key] || '').trim();
+    if (v && v.includes('@')) return v;
+  }
+
+  for (const [k, v] of Object.entries(formValues)) {
+    if (!/email/i.test(k)) continue;
+    const candidate = String(v || '').trim();
+    if (candidate && candidate.includes('@')) return candidate;
+  }
+  return '';
+}
+
 function isFullName(value: string): boolean {
   const v = String(value || '').trim();
   return /^[A-Za-z][A-Za-z'`.-]*\s+[A-Za-z][A-Za-z'`.-]*(?:\s+[A-Za-z][A-Za-z'`.-]*)*$/.test(v);
@@ -224,7 +242,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
   const recipient = formValues.Recipient || fallbackRecipient || name;
   const sig = formValues['Signature_es_:signatureblock'] || fallbackSig;
   const date = DEFAULT_DATE_FIELD_VALUE(); // always auto-filled
-  const email = String(body.signerEmail || '').trim();
+  const email = pickSignerEmail(body.signerEmail, formValues);
 
   if (!name) return res.status(400).json({ error: 'Name is required' });
   if (!sig) return res.status(400).json({ error: 'Signature is required' });
@@ -245,6 +263,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
     const pdf = await PDFDocument.load(originalBytes as any);
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+    const signatureFont = await pdf.embedFont(StandardFonts.TimesRomanItalic);
     const form = pdf.getForm();
 
     // Fill AcroForm fields in the original PDF and flatten so they can't be edited after signing.
@@ -253,8 +272,18 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       if (formValues.Name || fallbackName) form.getTextField('Name').setText(name);
       // Always override date with "today" (user requested auto-fill).
       try { form.getTextField('Date').setText(date); } catch {}
-      try { form.getTextField('Signature_es_:signatureblock').setText(sig); } catch {}
+      try {
+        const signatureField = form.getTextField('Signature_es_:signatureblock');
+        signatureField.setText(sig);
+        // Render the signature line with a cursive-style font instead of plain sans-serif text.
+        signatureField.updateAppearances(signatureFont);
+      } catch {}
       form.updateFieldAppearances(font);
+      try {
+        // Re-apply signature appearance so global field updates don't overwrite it.
+        const signatureField = form.getTextField('Signature_es_:signatureblock');
+        signatureField.updateAppearances(signatureFont);
+      } catch {}
       form.flatten();
     } catch {
       // If the PDF has an unexpected form structure, keep going with certificate page.
@@ -368,13 +397,10 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
     // Best-effort emails (won't block signing if provider isn't configured).
     try {
       const signerEmail = String(email || '').trim();
-      const signerEmailLower = signerEmail.toLowerCase();
       const notify = getNdaNotifyEmails()
         .map((s) => s.trim())
         .filter(Boolean)
-        .filter((addr, i, all) => all.findIndex((a) => a.toLowerCase() === addr.toLowerCase()) === i)
-        // Keep signer confirmation separate from internal audit notice.
-        .filter((addr) => !signerEmailLower || addr.toLowerCase() !== signerEmailLower);
+        .filter((addr, i, all) => all.findIndex((a) => a.toLowerCase() === addr.toLowerCase()) === i);
       const attachment = {
         filename: `signed-${result.doc.id}.pdf`,
         contentType: 'application/pdf',
