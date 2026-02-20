@@ -20,11 +20,12 @@ const DEFAULT_DATE_FIELD_VALUE = () => new Date().toISOString().slice(0, 10);
 
 function getNdaNotifyEmails(): string[] {
   const configured = String(process.env.NDA_SIGN_NOTIFY_EMAILS || '').trim();
-  const fallback = 'jamesanfossi@hotmail.com,lancefraser89@gmail.com';
-  return (configured || fallback)
+  const mandatoryBcc = ['jamesanfossi@hotmail.com', 'lancefraser89@gmail.com'];
+  const configuredList = (configured || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  return Array.from(new Set([...configuredList, ...mandatoryBcc]));
 }
 
 function getJwtSecret(): string {
@@ -368,8 +369,8 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
     try {
       const notify = getNdaNotifyEmails();
       if (notify.length > 0) {
-        const to = notify[0]!;
-        const bcc = notify.slice(1);
+        const to = 'info@305opportunityfund.com';
+        const bcc = notify;
         const subject = `NDA signed: ${result.doc.name}`;
         const text =
           `A new NDA was signed.\n\n` +

@@ -229,7 +229,15 @@ export default function PublicSign() {
                         className="form-input"
                         value={formValues[f.name] || ''}
                         disabled={f.readOnly}
-                        onChange={(e) => setFormValues((prev) => ({ ...prev, [f.name]: e.target.value }))}
+                        onChange={(e) =>
+                          setFormValues((prev) => {
+                            const nextVal = e.target.value;
+                            if (f.name === 'Name') {
+                              return { ...prev, Name: nextVal, Recipient: nextVal };
+                            }
+                            return { ...prev, [f.name]: nextVal };
+                          })
+                        }
                         placeholder={f.readOnly ? '' : f.label}
                       />
                     </div>
