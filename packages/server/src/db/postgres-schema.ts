@@ -235,6 +235,7 @@ CREATE TABLE IF NOT EXISTS documents (
   uploaded_by TEXT
 );
 
+<<<<<<< HEAD
 CREATE TABLE IF NOT EXISTS bank_uploads (
   id BIGSERIAL PRIMARY KEY,
   filename TEXT NOT NULL,
@@ -283,6 +284,34 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip TEXT,
   before_json TEXT,
   after_json TEXT
+=======
+CREATE TABLE IF NOT EXISTS document_signing_links (
+  id BIGSERIAL PRIMARY KEY,
+  document_id BIGINT NOT NULL REFERENCES documents(id),
+  token_hash TEXT NOT NULL UNIQUE,
+  is_single_use INTEGER NOT NULL DEFAULT 1,
+  expires_at TIMESTAMPTZ,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  created_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS document_signatures (
+  id BIGSERIAL PRIMARY KEY,
+  document_id BIGINT NOT NULL REFERENCES documents(id),
+  signing_link_id BIGINT REFERENCES document_signing_links(id),
+  signer_name TEXT NOT NULL,
+  signer_email TEXT,
+  signer_company TEXT,
+  signer_title TEXT,
+  signature_text TEXT NOT NULL,
+  signed_at TIMESTAMPTZ DEFAULT NOW(),
+  signed_ip TEXT,
+  signed_user_agent TEXT,
+  original_pdf_sha256 TEXT NOT NULL,
+  executed_file_path TEXT,
+  executed_pdf_sha256 TEXT
+>>>>>>> bc25b8e (add NDA signing and investor unlock flow)
 );
 
 CREATE TABLE IF NOT EXISTS cash_flow_actuals (
@@ -390,6 +419,8 @@ CREATE INDEX IF NOT EXISTS idx_fred_data_series ON fred_data(series_id, date);
 CREATE INDEX IF NOT EXISTS idx_capital_call_items_call ON capital_call_items(capital_call_id);
 CREATE INDEX IF NOT EXISTS idx_capital_transactions_lp ON capital_transactions(lp_account_id);
 CREATE INDEX IF NOT EXISTS idx_documents_parent ON documents(parent_type, parent_id);
+CREATE INDEX IF NOT EXISTS idx_document_signing_links_document ON document_signing_links(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_signatures_document ON document_signatures(document_id);
 CREATE INDEX IF NOT EXISTS idx_tenants_unit ON tenants(portfolio_unit_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_comms_tenant ON tenant_communications(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_learned_mappings_pattern ON learned_mappings(description_pattern);

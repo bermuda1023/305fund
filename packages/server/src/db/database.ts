@@ -205,6 +205,8 @@ export function initDb(): void {
     `ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN reset_password_token_hash TEXT`,
     `ALTER TABLE users ADD COLUMN reset_password_expires_at DATETIME`,
+    `ALTER TABLE document_signatures ADD COLUMN signer_company TEXT`,
+    `ALTER TABLE document_signatures ADD COLUMN signer_title TEXT`,
   ];
 
   for (const sql of migrations) {

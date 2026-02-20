@@ -5,6 +5,8 @@ import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import ChangePassword from './pages/ChangePassword';
+import PublicSign from './pages/PublicSign';
+import InvestorGate from './pages/InvestorGate';
 import Dashboard from './pages/Dashboard';
 import Portfolio from './pages/Portfolio';
 import Model from './pages/Model';
@@ -46,6 +48,8 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/sign/:token" element={<PublicSign />} />
+        <Route path="/investor-gate" element={<InvestorGate />} />
         <Route
           path="/change-password"
           element={
