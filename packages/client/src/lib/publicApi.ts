@@ -4,7 +4,7 @@ function baseUrl() {
   return configuredBase && configuredBase.length > 0 ? configuredBase.replace(/\/+$/, '') : '/api';
 }
 
-function buildUrl(path: string) {
+export function buildPublicUrl(path: string) {
   const p = path.startsWith('/') ? path : `/${path}`;
   return `${baseUrl()}${p}`;
 }
@@ -25,7 +25,7 @@ async function readJsonOrThrow(resp: Response) {
 }
 
 export async function publicGet<T>(path: string): Promise<T> {
-  const resp = await fetch(buildUrl(path), {
+  const resp = await fetch(buildPublicUrl(path), {
     method: 'GET',
     headers: { Accept: 'application/json' },
     credentials: 'omit',
@@ -34,7 +34,7 @@ export async function publicGet<T>(path: string): Promise<T> {
 }
 
 export async function publicPost<T>(path: string, body: unknown): Promise<T> {
-  const resp = await fetch(buildUrl(path), {
+  const resp = await fetch(buildPublicUrl(path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(body),

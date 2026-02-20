@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { publicGet, publicPost } from '../lib/publicApi';
+import { buildPublicUrl, publicGet, publicPost } from '../lib/publicApi';
 
 type SignMeta = {
   document: { id: number; name: string };
@@ -24,19 +24,20 @@ export default function PublicSign() {
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
 
   const [signerEmail, setSignerEmail] = useState('');
   const [agree, setAgree] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const docUrl = useMemo(() => {
+  const docEndpoint = useMemo(() => {
     if (!token) return null;
-    // Use relative API path so it works in dev/prod without CORS.
-    return `/api/public/sign/${encodeURIComponent(token)}/document`;
+    return buildPublicUrl(`/public/sign/${encodeURIComponent(token)}/document`);
   }, [token]);
 
   useEffect(() => {
     let cancelled = false;
+    let nextBlobUrl: string | null = null;
     (async () => {
       if (!token) {
         setError('Missing signing token');
@@ -58,6 +59,25 @@ export default function PublicSign() {
           initial[f.name] = f.defaultValue || '';
         }
         setFormValues(initial);
+
+        if (docEndpoint) {
+          const docResp = await fetch(docEndpoint, {
+            method: 'GET',
+            headers: { Accept: 'application/pdf' },
+            credentials: 'omit',
+          });
+          if (!docResp.ok) {
+            throw new Error(`Failed to load NDA PDF (${docResp.status})`);
+          }
+          const blob = await docResp.blob();
+          nextBlobUrl = URL.createObjectURL(blob);
+          if (!cancelled) {
+            setPdfBlobUrl((prev) => {
+              if (prev) URL.revokeObjectURL(prev);
+              return nextBlobUrl;
+            });
+          }
+        }
       } catch (e: any) {
         if (cancelled) return;
         setError(e?.message || 'Failed to load signing page');
@@ -67,8 +87,9 @@ export default function PublicSign() {
     })();
     return () => {
       cancelled = true;
+      if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
     };
-  }, [token]);
+  }, [token, docEndpoint]);
 
   const missingRequired = useMemo(() => {
     const missing: string[] = [];
@@ -104,13 +125,15 @@ export default function PublicSign() {
               ) : null}
             </div>
             <div style={{ padding: '1rem' }}>
-              {docUrl ? (
+              {pdfBlobUrl ? (
                 <iframe
                   title="NDA PDF"
-                  src={docUrl}
+                  src={pdfBlobUrl}
                   style={{ width: '100%', height: 520, border: '1px solid var(--border)', borderRadius: 8 }}
                 />
-              ) : null}
+              ) : (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading NDA preview…</div>
+              )}
             </div>
           </div>
 
