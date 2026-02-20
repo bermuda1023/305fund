@@ -1484,9 +1484,25 @@
                         headers: { 'Accept': 'application/json' },
                         credentials: 'omit'
                     })
-                        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+                        .then(function (r) {
+                            return r.text().then(function (raw) {
+                                var data = null;
+                                if (raw && raw.trim()) {
+                                    try { data = JSON.parse(raw); } catch (e) { data = null; }
+                                }
+                                return {
+                                    ok: r.ok,
+                                    status: r.status,
+                                    statusText: r.statusText,
+                                    data: data
+                                };
+                            });
+                        })
                         .then(function (result) {
-                            if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to start NDA');
+                            if (!result.ok) {
+                                var apiErr = result.data && result.data.error ? result.data.error : '';
+                                throw new Error(apiErr || ('Failed to start NDA (' + result.status + ' ' + (result.statusText || 'error') + ')'));
+                            }
                             if (!result.data || !result.data.url) throw new Error('Missing signing URL');
                             if (statusEl) statusEl.textContent = 'Redirecting to NDA signing...';
                             window.location.href = result.data.url;
