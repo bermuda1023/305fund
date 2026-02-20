@@ -222,7 +222,7 @@ function GPInvestorSection() {
     },
   });
 
-  const visibleInvestors = investors.filter((i) => i.status !== 'removed');
+  const visibleInvestors = investors.filter((i) => i.status !== 'inactive' && i.status !== 'removed');
   const totalCommitments = visibleInvestors.reduce((s, i) => s + i.commitment, 0);
   const totalCalled = visibleInvestors.reduce((s, i) => s + i.called_capital, 0);
   const totalDistributed = visibleInvestors.reduce((s, i) => s + i.distributions, 0);
@@ -417,7 +417,7 @@ function GPInvestorSection() {
                         >
                           {expandedInvestorDocsId === inv.id ? 'Hide Docs' : 'Docs'}
                         </button>
-                        {inv.status !== 'removed' && (
+                        {inv.status !== 'inactive' && inv.status !== 'removed' && (
                           <button
                             className="btn"
                             style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', borderColor: 'var(--red)', color: 'var(--red)' }}

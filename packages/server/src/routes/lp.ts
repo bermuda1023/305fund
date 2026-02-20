@@ -774,8 +774,8 @@ router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res:
       res.status(404).json({ error: 'Investor not found' });
       return;
     }
-    if (String(investor.status || '').toLowerCase() === 'removed') {
-      res.json({ success: true, id: investorId, status: 'removed' });
+    if (String(investor.status || '').toLowerCase() === 'inactive') {
+      res.json({ success: true, id: investorId, status: 'inactive' });
       return;
     }
 
@@ -790,12 +790,12 @@ router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res:
     const nextNotes = investor.notes ? `${investor.notes}\n${stampedNote}` : stampedNote;
     db.prepare(`
       UPDATE lp_accounts
-      SET status = 'removed',
+      SET status = 'inactive',
           notes = ?
       WHERE id = ?
     `).run(nextNotes, investorId);
 
-    res.json({ success: true, id: investorId, status: 'removed' });
+    res.json({ success: true, id: investorId, status: 'inactive' });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to remove investor' });
   }

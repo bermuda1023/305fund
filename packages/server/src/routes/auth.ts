@@ -98,7 +98,7 @@ router.post('/login', loginLimiter, (req: Request, res: Response) => {
 
   if (user.role === 'lp') {
     const lpAccount = db.prepare('SELECT status FROM lp_accounts WHERE user_id = ?').get(user.id) as any;
-    if (lpAccount && String(lpAccount.status || '').toLowerCase() === 'removed') {
+    if (lpAccount && String(lpAccount.status || '').toLowerCase() === 'inactive') {
       res.status(403).json({ error: 'This LP account has been deactivated. Please contact support.' });
       return;
     }
