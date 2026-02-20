@@ -1512,12 +1512,19 @@
                                 var apiErr = result.data && result.data.error ? result.data.error : '';
                                 throw new Error(apiErr || ('Failed to start NDA (' + result.status + ' ' + (result.statusText || 'error') + ')'));
                             }
-                            if (!result.data || !result.data.url) {
+                            var payload = result.data || {};
+                            var signingUrl = payload.url
+                                || payload.signingUrl
+                                || (payload.data && payload.data.url)
+                                || (payload.result && payload.result.url)
+                                || '';
+                            if (!signingUrl) {
+                                var keyMsg = payload && typeof payload === 'object' ? (' Keys: ' + Object.keys(payload).join(', ')) : '';
                                 var rawMsg = result.raw && String(result.raw).trim() ? (' Response: ' + String(result.raw).slice(0, 180)) : '';
-                                throw new Error('Missing signing URL.' + rawMsg);
+                                throw new Error('Missing signing URL.' + keyMsg + rawMsg);
                             }
                             if (statusEl) statusEl.textContent = 'Redirecting to NDA signing...';
-                            window.location.href = result.data.url;
+                            window.location.href = String(signingUrl);
                         })
                         .catch(function (err) {
                             if (statusEl) statusEl.textContent = String(err && err.message ? err.message : err);

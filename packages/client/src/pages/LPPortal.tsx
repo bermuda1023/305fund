@@ -188,6 +188,9 @@ function GPInvestorSection() {
       setOnboardForm({ name: '', entityName: '', email: '', phone: '', commitment: '', notes: '' });
       setShowOnboardForm(false);
     },
+    onError: (err: any) => {
+      window.alert(err?.response?.data?.error || 'Failed to onboard investor.');
+    },
   });
 
   const updateInvestorStatusMutation = useMutation({
@@ -204,21 +207,32 @@ function GPInvestorSection() {
   const removeInvestorMutation = useMutation({
     mutationFn: ({ id, confirmText }: { id: number; confirmText: string }) =>
       api.post(`/lp/investors/${id}/remove`, { confirmText }).then((r) => r.data),
-    onSuccess: () => {
+    onSuccess: (result: { id?: number; status?: string }) => {
+      const removedId = Number(result?.id);
+      if (Number.isFinite(removedId) && removedId > 0) {
+        queryClient.setQueryData<Investor[]>(['gp-investors'], (prev) =>
+          Array.isArray(prev) ? prev.filter((inv) => inv.id !== removedId) : prev
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ['gp-investors'] });
+      window.alert('LP removed successfully.');
+    },
+    onError: (err: any) => {
+      window.alert(err?.response?.data?.error || 'Failed to remove LP.');
     },
   });
 
-  const totalCommitments = investors.reduce((s, i) => s + i.commitment, 0);
-  const totalCalled = investors.reduce((s, i) => s + i.called_capital, 0);
-  const totalDistributed = investors.reduce((s, i) => s + i.distributions, 0);
+  const visibleInvestors = investors.filter((i) => i.status !== 'removed');
+  const totalCommitments = visibleInvestors.reduce((s, i) => s + i.commitment, 0);
+  const totalCalled = visibleInvestors.reduce((s, i) => s + i.called_capital, 0);
+  const totalDistributed = visibleInvestors.reduce((s, i) => s + i.distributions, 0);
 
   return (
     <>
       <div className="card mb-4">
         <div className="card-header flex-between">
           <span className="card-title">Investor Management</span>
-          <span className="badge" style={{ background: 'var(--teal)', color: '#fff' }}>{num(investors.length)} LPs</span>
+          <span className="badge" style={{ background: 'var(--teal)', color: '#fff' }}>{num(visibleInvestors.length)} LPs</span>
         </div>
 
         {/* Summary metrics */}
@@ -237,7 +251,7 @@ function GPInvestorSection() {
           </div>
           <div className="metric-card">
             <div className="metric-label">Number of LPs</div>
-            <div className="metric-value accent">{num(investors.length)}</div>
+            <div className="metric-value accent">{num(visibleInvestors.length)}</div>
           </div>
         </div>
 
@@ -328,7 +342,7 @@ function GPInvestorSection() {
         )}
 
         {/* Investors table */}
-        {investors.length > 0 && (
+        {visibleInvestors.length > 0 && (
           <table className="data-table">
             <thead>
               <tr>
@@ -344,7 +358,7 @@ function GPInvestorSection() {
               </tr>
             </thead>
             <tbody>
-              {investors.map((inv) => (
+              {visibleInvestors.map((inv) => (
                 [
                   <tr key={inv.id}>
                     <td style={{ fontWeight: 600 }}>{inv.name}</td>
@@ -409,7 +423,8 @@ function GPInvestorSection() {
                             style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', borderColor: 'var(--red)', color: 'var(--red)' }}
                             disabled={removeInvestorMutation.isPending}
                             onClick={() => {
-                              const phrase = `REMOVE ${String(inv.email || '').trim().toLowerCase()}`;
+                              const emailPart = String(inv.email || '').trim().toLowerCase();
+                              const phrase = emailPart ? `REMOVE ${emailPart}` : `REMOVE LP-${inv.id}`;
                               const entered = window.prompt(
                                 `To remove this LP, type exactly:\n${phrase}`,
                                 ''

@@ -620,55 +620,89 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
   const db = getDb();
   const { name, entityName, email, phone, commitment, notes } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
+  const cleanName = String(name || '').trim();
+  const commitmentNum = Number(commitment);
 
-  // Create user account for LP
-  const bcrypt = require('bcryptjs');
-  const tempPassword = Math.random().toString(36).slice(2, 10);
-  const hash = bcrypt.hashSync(tempPassword, 10);
+  if (!cleanName) {
+    res.status(400).json({ error: 'Name is required' });
+    return;
+  }
+  if (!normalizedEmail) {
+    res.status(400).json({ error: 'Email is required' });
+    return;
+  }
+  if (!Number.isFinite(commitmentNum) || commitmentNum <= 0) {
+    res.status(400).json({ error: 'Commitment must be a positive number' });
+    return;
+  }
 
-  const userResult = db.prepare(
-    'INSERT INTO users (email, password_hash, role, name, must_change_password) VALUES (?, ?, ?, ?, 1)'
-  ).run(normalizedEmail, hash, 'lp', name);
+  const existingUser = db.prepare('SELECT id, role FROM users WHERE email = ?').get(normalizedEmail) as any;
+  if (existingUser) {
+    const existingLp = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(existingUser.id) as any;
+    if (existingLp) {
+      res.status(409).json({ error: `An LP with email ${normalizedEmail} already exists.` });
+      return;
+    }
+    if (String(existingUser.role || '').toLowerCase() !== 'lp') {
+      res.status(409).json({ error: `Email ${normalizedEmail} already belongs to a non-LP user.` });
+      return;
+    }
+  }
 
-  // Calculate ownership pct
-  const totalCommitment = (db.prepare(
-    'SELECT COALESCE(SUM(commitment), 0) as total FROM lp_accounts'
-  ).get() as any).total + commitment;
-  const ownershipPct = commitment / totalCommitment;
+  try {
+    // Create user account for LP
+    const bcrypt = require('bcryptjs');
+    const tempPassword = Math.random().toString(36).slice(2, 10);
+    const hash = bcrypt.hashSync(tempPassword, 10);
 
-  // Create LP account
-  const lpResult = db.prepare(`
-    INSERT INTO lp_accounts (user_id, name, entity_name, email, phone, commitment, ownership_pct, status, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-  `).run(userResult.lastInsertRowid, name, entityName, email, phone, commitment, ownershipPct, notes);
+    const userResult = db.prepare(
+      'INSERT INTO users (email, password_hash, role, name, must_change_password) VALUES (?, ?, ?, ?, 1)'
+    ).run(normalizedEmail, hash, 'lp', cleanName);
 
-  // Recalculate all LP ownership percentages
-  db.prepare(`
-    UPDATE lp_accounts SET ownership_pct = commitment / (SELECT SUM(commitment) FROM lp_accounts)
-  `).run();
+    // Calculate ownership pct
+    const totalCommitment = (db.prepare(
+      'SELECT COALESCE(SUM(commitment), 0) as total FROM lp_accounts'
+    ).get() as any).total + commitmentNum;
+    const ownershipPct = commitmentNum / totalCommitment;
 
-  let emailSent = false;
-  if (normalizedEmail) {
+    // Create LP account
+    const lpResult = db.prepare(`
+      INSERT INTO lp_accounts (user_id, name, entity_name, email, phone, commitment, ownership_pct, status, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    `).run(userResult.lastInsertRowid, cleanName, entityName, normalizedEmail, phone, commitmentNum, ownershipPct, notes);
+
+    // Recalculate all LP ownership percentages
+    db.prepare(`
+      UPDATE lp_accounts SET ownership_pct = commitment / (SELECT SUM(commitment) FROM lp_accounts)
+    `).run();
+
+    let emailSent = false;
     const fundName = String(process.env.FUND_NAME || '305 Opportunities Fund');
     emailSent = await sendTransactionalEmail({
       to: normalizedEmail,
       subject: `Your ${fundName} investor portal account`,
       text:
-        `Hi ${name || 'Investor'},\n\n` +
+        `Hi ${cleanName || 'Investor'},\n\n` +
         `Your investor portal account has been created.\n\n` +
         `Email: ${normalizedEmail}\n` +
         `Temporary password: ${tempPassword}\n\n` +
         `Please log in and change your password immediately. You will be prompted to change it on first login.\n\n` +
         `If you were not expecting this email, please contact support.`,
     });
-  }
 
-  res.status(201).json({
-    id: lpResult.lastInsertRowid,
-    userId: userResult.lastInsertRowid,
-    tempPassword, // Return so GP can share with LP
-    emailSent,
-  });
+    res.status(201).json({
+      id: lpResult.lastInsertRowid,
+      userId: userResult.lastInsertRowid,
+      tempPassword, // Return so GP can share with LP
+      emailSent,
+    });
+  } catch (err: any) {
+    if (String(err?.code || '') === 'SQLITE_CONSTRAINT_UNIQUE') {
+      res.status(409).json({ error: `Email ${normalizedEmail} already exists.` });
+      return;
+    }
+    res.status(500).json({ error: err?.message || 'Failed to onboard investor' });
+  }
 });
 
 // GET /api/lp/investors - List all investors (GP only)
@@ -739,7 +773,8 @@ router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res:
     res.status(404).json({ error: 'Investor not found' });
     return;
   }
-  const expectedPhrase = `REMOVE ${String(investor.email || '').trim().toLowerCase()}`;
+  const emailPart = String(investor.email || '').trim().toLowerCase();
+  const expectedPhrase = emailPart ? `REMOVE ${emailPart}` : `REMOVE LP-${investorId}`;
   if (!expectedPhrase || confirmText.trim().toLowerCase() !== expectedPhrase.toLowerCase()) {
     res.status(400).json({ error: `Confirmation text mismatch. Type exactly: ${expectedPhrase}` });
     return;
