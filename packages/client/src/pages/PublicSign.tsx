@@ -117,7 +117,23 @@ export default function PublicSign() {
           }
           try {
             const font = await pdf.embedFont(StandardFonts.Helvetica);
+            const signatureFont = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+            try {
+              const signatureField = form.getTextField('Signature_es_:signatureblock');
+              signatureField.updateAppearances(signatureFont);
+              signatureField.setFontSize(18);
+            } catch {
+              // Signature field might not exist on all templates.
+            }
             form.updateFieldAppearances(font);
+            try {
+              // Re-apply after global update so preview keeps the cursive-like signature style.
+              const signatureField = form.getTextField('Signature_es_:signatureblock');
+              signatureField.updateAppearances(signatureFont);
+              signatureField.setFontSize(18);
+            } catch {
+              // Signature field might not exist on all templates.
+            }
           } catch {
             // Fallback to default viewer rendering when font update fails.
           }

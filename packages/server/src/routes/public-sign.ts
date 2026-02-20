@@ -277,12 +277,14 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
         signatureField.setText(sig);
         // Render the signature line with a cursive-style font instead of plain sans-serif text.
         signatureField.updateAppearances(signatureFont);
+        signatureField.setFontSize(18);
       } catch {}
       form.updateFieldAppearances(font);
       try {
         // Re-apply signature appearance so global field updates don't overwrite it.
         const signatureField = form.getTextField('Signature_es_:signatureblock');
         signatureField.updateAppearances(signatureFont);
+        signatureField.setFontSize(18);
       } catch {}
       form.flatten();
     } catch {
