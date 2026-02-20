@@ -757,39 +757,48 @@ router.patch('/investors/:id/status', requireAuth, requireGP, (req: Request, res
 // POST /api/lp/investors/:id/remove - guarded soft-remove of LP account
 router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res: Response) => {
   const db = getDb();
-  const investorId = Number(req.params.id);
-  const confirmText = String(req.body?.confirmText || '');
-  if (!Number.isFinite(investorId) || investorId <= 0) {
-    res.status(400).json({ error: 'Invalid investor id' });
-    return;
-  }
+  try {
+    const investorId = Number(req.params.id);
+    const confirmText = String(req.body?.confirmText || '');
+    if (!Number.isFinite(investorId) || investorId <= 0) {
+      res.status(400).json({ error: 'Invalid investor id' });
+      return;
+    }
 
-  const investor = db.prepare(`
-    SELECT id, email, status, notes
-    FROM lp_accounts
-    WHERE id = ?
-  `).get(investorId) as any;
-  if (!investor) {
-    res.status(404).json({ error: 'Investor not found' });
-    return;
-  }
-  const emailPart = String(investor.email || '').trim().toLowerCase();
-  const expectedPhrase = emailPart ? `REMOVE ${emailPart}` : `REMOVE LP-${investorId}`;
-  if (!expectedPhrase || confirmText.trim().toLowerCase() !== expectedPhrase.toLowerCase()) {
-    res.status(400).json({ error: `Confirmation text mismatch. Type exactly: ${expectedPhrase}` });
-    return;
-  }
+    const investor = db.prepare(`
+      SELECT id, email, status, notes
+      FROM lp_accounts
+      WHERE id = ?
+    `).get(investorId) as any;
+    if (!investor) {
+      res.status(404).json({ error: 'Investor not found' });
+      return;
+    }
+    if (String(investor.status || '').toLowerCase() === 'removed') {
+      res.json({ success: true, id: investorId, status: 'removed' });
+      return;
+    }
 
-  const stampedNote = `[${new Date().toISOString()}] LP soft-removed by GP`;
-  const nextNotes = investor.notes ? `${investor.notes}\n${stampedNote}` : stampedNote;
-  db.prepare(`
-    UPDATE lp_accounts
-    SET status = 'removed',
-        notes = ?
-    WHERE id = ?
-  `).run(nextNotes, investorId);
+    const emailPart = String(investor.email || '').trim().toLowerCase();
+    const expectedPhrase = emailPart ? `REMOVE ${emailPart}` : `REMOVE LP-${investorId}`;
+    if (!expectedPhrase || confirmText.trim().toLowerCase() !== expectedPhrase.toLowerCase()) {
+      res.status(400).json({ error: `Confirmation text mismatch. Type exactly: ${expectedPhrase}` });
+      return;
+    }
 
-  res.json({ success: true, id: investorId, status: 'removed' });
+    const stampedNote = `[${new Date().toISOString()}] LP soft-removed by GP`;
+    const nextNotes = investor.notes ? `${investor.notes}\n${stampedNote}` : stampedNote;
+    db.prepare(`
+      UPDATE lp_accounts
+      SET status = 'removed',
+          notes = ?
+      WHERE id = ?
+    `).run(nextNotes, investorId);
+
+    res.json({ success: true, id: investorId, status: 'removed' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to remove investor' });
+  }
 });
 
 // ---- GP-Only: Capital Calls ----
