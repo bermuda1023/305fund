@@ -1,7 +1,10 @@
 /**
  * Public helper to start the investor NDA signing flow without using the GP upload workflow.
  *
- * Requires `INVESTOR_NDA_PDF_PATH` (local filesystem path) to be configured.
+ * Supports either:
+ * - `INVESTOR_NDA_STORAGE_KEY` (preferred, for S3/R2-backed deployments), or
+ * - `INVESTOR_NDA_PDF_PATH` (local filesystem path fallback).
+ *
  * The server will:
  * - ensure a `documents` row exists for the NDA (category 'nda', parent_type 'fund', parent_id 0)
  * - create a reusable signing link
@@ -12,8 +15,9 @@ import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { createHash, randomBytes } from 'crypto';
+import { Readable } from 'stream';
 import { getDb } from '../db/database';
-import { saveUploadedBuffer } from '../lib/storage';
+import { readStoredFile, saveUploadedBuffer } from '../lib/storage';
 
 const router = Router();
 
@@ -25,6 +29,42 @@ function buildSigningUrl(token: string) {
   const base = String(process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0]?.trim() || 'http://localhost:5173';
   const normalizedBase = base.replace(/\/+$/, '');
   return `${normalizedBase}/sign/${encodeURIComponent(token)}`;
+}
+
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: any[] = [];
+  return await new Promise((resolve, reject) => {
+    stream.on('data', (c) => {
+      if (c instanceof Uint8Array) chunks.push(c);
+      else chunks.push(Buffer.from(c));
+    });
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+}
+
+async function readConfiguredInvestorNda(): Promise<{ bytes: Buffer; filename: string }> {
+  const storageKey = String(process.env.INVESTOR_NDA_STORAGE_KEY || '').trim();
+  if (storageKey) {
+    const fromStorage = await readStoredFile(storageKey);
+    if (!(fromStorage.body instanceof Readable)) {
+      throw new Error('INVESTOR_NDA_STORAGE_KEY resolved to non-readable body');
+    }
+    const bytes = await streamToBuffer(fromStorage.body);
+    const filename = path.basename(storageKey) || 'nda.pdf';
+    return { bytes, filename };
+  }
+
+  const configuredPath = String(process.env.INVESTOR_NDA_PDF_PATH || '').trim();
+  if (!configuredPath) {
+    throw new Error('INVESTOR_NDA_STORAGE_KEY or INVESTOR_NDA_PDF_PATH must be configured');
+  }
+  if (!fs.existsSync(configuredPath)) {
+    throw new Error(`INVESTOR_NDA_PDF_PATH not found: ${configuredPath}`);
+  }
+  const bytes = fs.readFileSync(configuredPath);
+  const filename = path.basename(configuredPath) || 'nda.pdf';
+  return { bytes, filename };
 }
 
 async function ensureInvestorNdaDocument(db: ReturnType<typeof getDb>) {
@@ -39,16 +79,7 @@ async function ensureInvestorNdaDocument(db: ReturnType<typeof getDb>) {
     return { documentId: Number(existing.id) };
   }
 
-  const configuredPath = String(process.env.INVESTOR_NDA_PDF_PATH || '').trim();
-  if (!configuredPath) {
-    throw new Error('INVESTOR_NDA_PDF_PATH is not configured');
-  }
-  if (!fs.existsSync(configuredPath)) {
-    throw new Error(`INVESTOR_NDA_PDF_PATH not found: ${configuredPath}`);
-  }
-
-  const bytes = fs.readFileSync(configuredPath);
-  const filename = path.basename(configuredPath) || 'nda.pdf';
+  const { bytes, filename } = await readConfiguredInvestorNda();
   const stored = await saveUploadedBuffer(bytes, 'documents', filename, 'application/pdf');
 
   const result = db.prepare(`

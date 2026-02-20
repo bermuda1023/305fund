@@ -9,6 +9,8 @@ const EnvSchema = z.object({
   INVESTOR_GATE_PASSWORD_HASH: z.string().optional(), // bcrypt hash
   INVESTOR_TARGET_URL: z.string().optional(),
   NDA_SIGN_NOTIFY_EMAILS: z.string().optional(), // comma-separated list
+  INVESTOR_NDA_STORAGE_KEY: z.string().optional(), // S3/R2 key for fixed investor NDA PDF
+  INVESTOR_NDA_PDF_PATH: z.string().optional(), // local file fallback
   STORAGE_BACKEND: z.enum(['local', 's3']).default('local'),
   S3_BUCKET: z.string().optional(),
   S3_REGION: z.string().optional(),
