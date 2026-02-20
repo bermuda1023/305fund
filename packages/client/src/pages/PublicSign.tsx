@@ -106,7 +106,8 @@ export default function PublicSign() {
             Recipient: String(formValues.Recipient || formValues.Name || '').trim(),
           };
           for (const field of pdfFields) {
-            if (field.readOnly && field.name !== 'Date') continue;
+            // Date and Recipient are read-only in UI, but we still render them in preview.
+            if (field.readOnly && field.name !== 'Date' && field.name !== 'Recipient') continue;
             const val = String(previewValues[field.name] || '').trim();
             try {
               form.getTextField(field.name).setText(val);
@@ -286,9 +287,13 @@ export default function PublicSign() {
                   setSubmitting(true);
                   setError(null);
                   try {
+                    const payloadFormValues: Record<string, string> = {
+                      ...formValues,
+                      Recipient: String(formValues.Recipient || formValues.Name || '').trim(),
+                    };
                     const resp = await publicPost<{ success: boolean; ndaProofToken: string }>(
                       `/public/sign/${encodeURIComponent(token)}/submit`,
-                      { signerEmail, formValues }
+                      { signerEmail, formValues: payloadFormValues }
                     );
                     sessionStorage.setItem('ndaProofToken', resp.ndaProofToken);
                     navigate('/investor-gate');
