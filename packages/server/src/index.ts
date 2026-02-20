@@ -36,14 +36,14 @@ import entitiesRoutes from './routes/entities';
 import lpRoutes from './routes/lp';
 import actualsRoutes from './routes/actuals';
 import documentsRoutes from './routes/documents';
-<<<<<<< HEAD
+
 import investorRoutes from './routes/investor';
-=======
+
 import publicSignRoutes from './routes/public-sign';
 import investorGateRoutes from './routes/investor-gate';
 import publicInvestorHiddenRoutes from './routes/public-investor-hidden';
 import publicInvestorNdaRoutes from './routes/public-investor-nda';
->>>>>>> bc25b8e (add NDA signing and investor unlock flow)
+
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -258,14 +258,13 @@ app.use('/api/entities', entitiesRoutes);
 app.use('/api/lp', lpRoutes);
 app.use('/api/actuals', actualsRoutes);
 app.use('/api/documents', documentsRoutes);
-<<<<<<< HEAD
+
 app.use('/api/investor', investorRoutes);
-=======
+
 app.use('/api/public/sign', publicSignRoutes);
 app.use('/api/public/investor-gate', investorGateRoutes);
 app.use('/api/public/investor-hidden', publicInvestorHiddenRoutes);
 app.use('/api/public/investor-nda', publicInvestorNdaRoutes);
->>>>>>> bc25b8e (add NDA signing and investor unlock flow)
 
 // Error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

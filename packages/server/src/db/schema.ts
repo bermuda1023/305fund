@@ -192,7 +192,7 @@ CREATE TABLE IF NOT EXISTS documents (
   uploaded_by TEXT
 );
 
-<<<<<<< HEAD
+
 -- Bank Uploads
 CREATE TABLE IF NOT EXISTS bank_uploads (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 -- Cash Flow Actuals (allocations applied to bank transactions)
-=======
+
 -- Public signing links (hashed token, can be single-use or reusable)
 CREATE TABLE IF NOT EXISTS document_signing_links (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -275,7 +275,7 @@ CREATE TABLE IF NOT EXISTS document_signatures (
 );
 
 -- Cash Flow Actuals (from bank statements)
->>>>>>> bc25b8e (add NDA signing and investor unlock flow)
+
 CREATE TABLE IF NOT EXISTS cash_flow_actuals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   bank_transaction_id INTEGER REFERENCES bank_transactions(id),

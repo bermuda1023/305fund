@@ -235,7 +235,7 @@ CREATE TABLE IF NOT EXISTS documents (
   uploaded_by TEXT
 );
 
-<<<<<<< HEAD
+
 CREATE TABLE IF NOT EXISTS bank_uploads (
   id BIGSERIAL PRIMARY KEY,
   filename TEXT NOT NULL,
@@ -284,7 +284,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip TEXT,
   before_json TEXT,
   after_json TEXT
-=======
+
 CREATE TABLE IF NOT EXISTS document_signing_links (
   id BIGSERIAL PRIMARY KEY,
   document_id BIGINT NOT NULL REFERENCES documents(id),
@@ -311,7 +311,6 @@ CREATE TABLE IF NOT EXISTS document_signatures (
   original_pdf_sha256 TEXT NOT NULL,
   executed_file_path TEXT,
   executed_pdf_sha256 TEXT
->>>>>>> bc25b8e (add NDA signing and investor unlock flow)
 );
 
 CREATE TABLE IF NOT EXISTS cash_flow_actuals (
