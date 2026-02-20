@@ -22,17 +22,17 @@ function getJwtSecret(): string {
   return 'dev-secret-change-me';
 }
 
-function getInvestorGateHash(): string {
+function getInvestorGateSecrets(): { hash: string; plain: string } {
   const hash = String(process.env.INVESTOR_GATE_PASSWORD_HASH || '').trim();
-  if (!hash) {
+  const plain = String(process.env.INVESTOR_GATE_PASSWORD || '').trim();
+  if (!hash && !plain) {
     if ((process.env.NODE_ENV || 'development') !== 'production') {
       // Dev convenience: allow a shared password without env setup.
-      // In production, we require a bcrypt hash in env.
-      return '';
+      return { hash: '', plain: '' };
     }
-    throw new Error('INVESTOR_GATE_PASSWORD_HASH is not configured');
+    throw new Error('INVESTOR_GATE_PASSWORD_HASH or INVESTOR_GATE_PASSWORD must be configured');
   }
-  return hash;
+  return { hash, plain };
 }
 
 function getInvestorTargetUrl(): string {
@@ -66,8 +66,12 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
 
   try {
     const { signatureId, documentId } = verifyNdaProofToken(ndaProofToken);
-    const hash = getInvestorGateHash();
-    const ok = hash ? bcrypt.compareSync(password, hash) : password === 'admin';
+    const { hash, plain } = getInvestorGateSecrets();
+    const ok = hash
+      ? bcrypt.compareSync(password, hash)
+      : plain
+        ? password === plain
+        : password === 'admin';
     if (!ok) return res.status(401).json({ error: 'Invalid password' });
 
     const investorAccessToken = jwt.sign(

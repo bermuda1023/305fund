@@ -7,6 +7,7 @@ const EnvSchema = z.object({
   JWT_SECRET: z.string().min(16).optional(),
   PUBLIC_CORS_ORIGINS: z.string().optional(), // comma-separated list
   INVESTOR_GATE_PASSWORD_HASH: z.string().optional(), // bcrypt hash
+  INVESTOR_GATE_PASSWORD: z.string().optional(), // plaintext fallback (prefer hash in production)
   INVESTOR_TARGET_URL: z.string().optional(),
   NDA_SIGN_NOTIFY_EMAILS: z.string().optional(), // comma-separated list
   INVESTOR_NDA_STORAGE_KEY: z.string().optional(), // S3/R2 key for fixed investor NDA PDF

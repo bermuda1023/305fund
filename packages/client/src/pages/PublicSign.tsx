@@ -30,6 +30,11 @@ export default function PublicSign() {
   const [agree, setAgree] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  const visiblePdfFields = useMemo(
+    () => pdfFields.filter((f) => f.name !== 'Recipient'),
+    [pdfFields]
+  );
+
   const docEndpoint = useMemo(() => {
     if (!token) return null;
     return buildPublicUrl(`/public/sign/${encodeURIComponent(token)}/document`);
@@ -93,14 +98,19 @@ export default function PublicSign() {
 
   const missingRequired = useMemo(() => {
     const missing: string[] = [];
-    for (const f of pdfFields) {
+    for (const f of visiblePdfFields) {
       if (!f.required) continue;
       const v = String(formValues[f.name] || '').trim();
       if (!v) missing.push(f.label || f.name);
     }
     return missing;
-  }, [pdfFields, formValues]);
-  const canSubmit = missingRequired.length === 0 && agree && !submitting;
+  }, [visiblePdfFields, formValues]);
+  const signatureValue = String(formValues['Signature_es_:signatureblock'] || '').trim();
+  const hasFullNameSignature = useMemo(() => {
+    // Require at least first + last name-like words.
+    return /^[A-Za-z][A-Za-z'`.-]*\s+[A-Za-z][A-Za-z'`.-]*(?:\s+[A-Za-z][A-Za-z'`.-]*)*$/.test(signatureValue);
+  }, [signatureValue]);
+  const canSubmit = missingRequired.length === 0 && hasFullNameSignature && agree && !submitting;
 
   return (
     <div style={{ maxWidth: 980, margin: '0 auto', padding: '1.25rem' }}>
@@ -155,9 +165,9 @@ export default function PublicSign() {
                 </div>
               </div>
 
-              {pdfFields.length > 0 ? (
+              {visiblePdfFields.length > 0 ? (
                 <div className="form-row">
-                  {pdfFields.map((f) => (
+                  {visiblePdfFields.map((f) => (
                     <div key={f.name} className="form-group" style={{ flex: 1, minWidth: 220 }}>
                       <label className="form-label">
                         {f.label}{f.required ? ' *' : ''}
@@ -173,6 +183,9 @@ export default function PublicSign() {
                   ))}
                 </div>
               ) : null}
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.35rem' }}>
+                Fields entered below are used to fill the final signed PDF.
+              </div>
 
               <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
                 By signing, you agree this acts as an electronic signature.
@@ -196,6 +209,11 @@ export default function PublicSign() {
               {!error && missingRequired.length > 0 ? (
                 <div style={{ color: 'var(--gold)', marginBottom: '0.75rem', fontSize: '0.85rem' }}>
                   Missing required fields: {missingRequired.join(', ')}
+                </div>
+              ) : null}
+              {!error && signatureValue && !hasFullNameSignature ? (
+                <div style={{ color: 'var(--gold)', marginBottom: '0.75rem', fontSize: '0.85rem' }}>
+                  Signature must be your full name (first and last).
                 </div>
               ) : null}
 

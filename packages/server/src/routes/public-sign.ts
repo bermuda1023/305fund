@@ -117,6 +117,11 @@ function labelForFieldName(fieldName: string) {
   return n;
 }
 
+function isFullName(value: string): boolean {
+  const v = String(value || '').trim();
+  return /^[A-Za-z][A-Za-z'`.-]*\s+[A-Za-z][A-Za-z'`.-]*(?:\s+[A-Za-z][A-Za-z'`.-]*)*$/.test(v);
+}
+
 // GET /api/public/sign/:token - metadata for signing page
 router.get('/:token', (req: Request, res: Response) => {
   const db = getDb();
@@ -155,13 +160,14 @@ router.get('/:token/form-fields', async (req: Request, res: Response) => {
     const fields = form.getFields().map((f) => {
       const name = f.getName();
       const isDate = name.toLowerCase() === 'date';
-      const required = !isDate; // default policy: date auto-filled, everything else required
+      const isRecipient = name.toLowerCase() === 'recipient';
+      const required = !isDate && !isRecipient; // recipient is auto-populated from signer name
       return {
         name,
         label: labelForFieldName(name),
         type: 'text' as const,
         required,
-        readOnly: isDate,
+        readOnly: isDate || isRecipient,
         defaultValue: isDate ? DEFAULT_DATE_FIELD_VALUE() : '',
       };
     });
@@ -214,14 +220,14 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
   const fallbackSig = String(body.signatureText || '').trim();
 
   const name = formValues.Name || fallbackName;
-  const recipient = formValues.Recipient || fallbackRecipient;
+  const recipient = formValues.Recipient || fallbackRecipient || name;
   const sig = formValues['Signature_es_:signatureblock'] || fallbackSig;
   const date = DEFAULT_DATE_FIELD_VALUE(); // always auto-filled
   const email = String(body.signerEmail || '').trim();
 
-  if (!recipient) return res.status(400).json({ error: 'Recipient is required' });
   if (!name) return res.status(400).json({ error: 'Name is required' });
   if (!sig) return res.status(400).json({ error: 'Signature is required' });
+  if (!isFullName(sig)) return res.status(400).json({ error: 'Signature must be full name (first and last)' });
 
   const result = getValidLinkAndDoc(db, token);
   if ('error' in result) return res.status(400).json({ error: result.error });
@@ -242,7 +248,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
 
     // Fill AcroForm fields in the original PDF and flatten so they can't be edited after signing.
     try {
-      if (formValues.Recipient || fallbackRecipient) form.getTextField('Recipient').setText(recipient);
+      if (recipient) form.getTextField('Recipient').setText(recipient);
       if (formValues.Name || fallbackName) form.getTextField('Name').setText(name);
       // Always override date with "today" (user requested auto-fill).
       try { form.getTextField('Date').setText(date); } catch {}
@@ -349,7 +355,10 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
           `Executed PDF SHA-256: ${executedHash}\n\n` +
           `IP: ${ip}\n` +
           `User-Agent: ${ua}\n`;
-        await sendTransactionalEmail({ to, bcc: bcc.length > 0 ? bcc : undefined, subject, text });
+        const sent = await sendTransactionalEmail({ to, bcc: bcc.length > 0 ? bcc : undefined, subject, text });
+        if (!sent) {
+          console.error(`NDA notification email was not sent for signatureId=${signatureId} docId=${result.doc.id}`);
+        }
       }
     } catch {
       // Ignore notification failures.

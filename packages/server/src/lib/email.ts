@@ -46,8 +46,14 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
           ],
         }),
       });
+      if (!resp.ok) {
+        let body = '';
+        try { body = await resp.text(); } catch {}
+        console.error(`SendGrid email failed (${resp.status}): ${body.slice(0, 500)}`);
+      }
       return resp.ok;
-    } catch {
+    } catch (err: any) {
+      console.error(`SendGrid email exception: ${err?.message || err}`);
       return false;
     }
   }
@@ -70,11 +76,18 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
           html,
         }),
       });
+      if (!resp.ok) {
+        let body = '';
+        try { body = await resp.text(); } catch {}
+        console.error(`Resend email failed (${resp.status}): ${body.slice(0, 500)}`);
+      }
       return resp.ok;
-    } catch {
+    } catch (err: any) {
+      console.error(`Resend email exception: ${err?.message || err}`);
       return false;
     }
   }
 
+  console.error('No email provider configured: set SENDGRID_API_KEY or RESEND_API_KEY');
   return false;
 }
