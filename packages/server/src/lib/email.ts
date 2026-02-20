@@ -1,9 +1,16 @@
+type EmailAttachment = {
+  filename: string;
+  contentType: string;
+  contentBase64: string;
+};
+
 type SendEmailArgs = {
   to: string;
   subject: string;
   text: string;
   html?: string;
   bcc?: string | string[];
+  attachments?: EmailAttachment[];
 };
 
 function toHtml(text: string) {
@@ -23,6 +30,9 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
     : args.bcc
       ? [args.bcc]
       : [];
+  const attachments = (args.attachments || []).filter(
+    (a) => a && a.filename && a.contentType && a.contentBase64
+  );
 
   const sendGridApiKey = process.env.SENDGRID_API_KEY;
   const resendApiKey = process.env.RESEND_API_KEY;
@@ -47,6 +57,16 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
             { type: 'text/plain', value: text },
             { type: 'text/html', value: html },
           ],
+          ...(attachments.length > 0
+            ? {
+                attachments: attachments.map((a) => ({
+                  content: a.contentBase64,
+                  filename: a.filename,
+                  type: a.contentType,
+                  disposition: 'attachment',
+                })),
+              }
+            : {}),
         }),
       });
       if (!resp.ok) {
@@ -77,6 +97,15 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
           subject,
           text,
           html,
+          ...(attachments.length > 0
+            ? {
+                attachments: attachments.map((a) => ({
+                  filename: a.filename,
+                  content: a.contentBase64,
+                  content_type: a.contentType,
+                })),
+              }
+            : {}),
         }),
       });
       if (!resp.ok) {

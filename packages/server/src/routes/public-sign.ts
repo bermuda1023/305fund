@@ -365,12 +365,25 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       { expiresIn: '10m' }
     );
 
-    // Best-effort email notification (won't block signing if email provider isn't configured).
+    // Best-effort emails (won't block signing if provider isn't configured).
     try {
-      const notify = getNdaNotifyEmails();
+      const signerEmail = String(email || '').trim();
+      const signerEmailLower = signerEmail.toLowerCase();
+      const notify = getNdaNotifyEmails()
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .filter((addr, i, all) => all.findIndex((a) => a.toLowerCase() === addr.toLowerCase()) === i)
+        // Keep signer confirmation separate from internal audit notice.
+        .filter((addr) => !signerEmailLower || addr.toLowerCase() !== signerEmailLower);
+      const attachment = {
+        filename: `signed-${result.doc.id}.pdf`,
+        contentType: 'application/pdf',
+        contentBase64: executedBytes.toString('base64'),
+      };
+
       if (notify.length > 0) {
-        const to = 'info@305opportunityfund.com';
-        const bcc = notify;
+        const to = notify[0]!;
+        const bcc = notify.slice(1);
         const subject = `NDA signed: ${result.doc.name}`;
         const text =
           `A new NDA was signed.\n\n` +
@@ -384,9 +397,37 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
           `Executed PDF SHA-256: ${executedHash}\n\n` +
           `IP: ${ip}\n` +
           `User-Agent: ${ua}\n`;
-        const sent = await sendTransactionalEmail({ to, bcc: bcc.length > 0 ? bcc : undefined, subject, text });
+        const sent = await sendTransactionalEmail({
+          to,
+          bcc: bcc.length > 0 ? bcc : undefined,
+          subject,
+          text,
+          attachments: [attachment],
+        });
         if (!sent) {
           console.error(`NDA notification email was not sent for signatureId=${signatureId} docId=${result.doc.id}`);
+        }
+      }
+
+      if (signerEmail) {
+        const subject = `Your signed NDA copy - ${result.doc.name}`;
+        const text =
+          `Hi ${name},\n\n` +
+          `Thank you for signing the NDA for ${recipient}.\n` +
+          `Attached is your signed PDF copy for your records.\n\n` +
+          `Signed at (UTC): ${signedAtIso}\n` +
+          `Date shown on document: ${date}\n\n` +
+          `If you have any questions, just reply to this email.\n\n` +
+          `Best regards,\n` +
+          `305 Opportunities Fund Team`;
+        const sent = await sendTransactionalEmail({
+          to: signerEmail,
+          subject,
+          text,
+          attachments: [attachment],
+        });
+        if (!sent) {
+          console.error(`Signer confirmation email was not sent for signatureId=${signatureId} docId=${result.doc.id}`);
         }
       }
     } catch {
