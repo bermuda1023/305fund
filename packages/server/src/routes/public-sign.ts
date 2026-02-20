@@ -10,7 +10,7 @@
 import { Router, Request, Response } from 'express';
 import { createHash } from 'crypto';
 import jwt from 'jsonwebtoken';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { getDb } from '../db/database';
 import { readStoredFile, saveUploadedBuffer } from '../lib/storage';
 import { sendTransactionalEmail } from '../lib/email';
@@ -262,6 +262,33 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
     const signedAtIso = new Date().toISOString();
     const ua = String(req.get('user-agent') || '');
     const ip = String(req.ip || '');
+    const stampRef = sha256Hex(`${name}|${sig}|${signedAtIso}|${originalHash}`).slice(0, 12).toUpperCase();
+
+    // Draw a visible, unique signature stamp on each page.
+    const stampText = `E-SIGNED ${name} | ${signedAtIso} | REF ${stampRef}`;
+    for (const p of pdf.getPages()) {
+      const { width } = p.getSize();
+      const stampWidth = Math.min(width - 80, 430);
+      const stampX = 40;
+      const stampY = 16;
+      p.drawRectangle({
+        x: stampX,
+        y: stampY,
+        width: stampWidth,
+        height: 20,
+        color: rgb(0.93, 0.96, 1),
+        borderColor: rgb(0.2, 0.35, 0.7),
+        borderWidth: 0.8,
+        opacity: 0.95,
+      });
+      p.drawText(stampText.slice(0, 120), {
+        x: stampX + 6,
+        y: stampY + 6,
+        size: 8,
+        font: fontBold,
+        color: rgb(0.16, 0.28, 0.56),
+      });
+    }
 
     const lines = [
       'Signature Certificate',
@@ -272,6 +299,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       ...(fallbackTitle ? [`Title: ${fallbackTitle}`] : []),
       `Date: ${date}`,
       `Signature: ${sig}`,
+      `Signature Reference: ${stampRef}`,
       `Signed at (UTC): ${signedAtIso}`,
       `IP: ${ip}`,
       `User-Agent: ${ua}`,

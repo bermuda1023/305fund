@@ -25,7 +25,10 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
       : [];
 
   const sendGridApiKey = process.env.SENDGRID_API_KEY;
+  const resendApiKey = process.env.RESEND_API_KEY;
+  let attempted = false;
   if (sendGridApiKey) {
+    attempted = true;
     try {
       const resp = await fetch('https://api.sendgrid.com/v3/mail/send', {
         method: 'POST',
@@ -50,16 +53,16 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
         let body = '';
         try { body = await resp.text(); } catch {}
         console.error(`SendGrid email failed (${resp.status}): ${body.slice(0, 500)}`);
+      } else {
+        return true;
       }
-      return resp.ok;
     } catch (err: any) {
       console.error(`SendGrid email exception: ${err?.message || err}`);
-      return false;
     }
   }
 
-  const resendApiKey = process.env.RESEND_API_KEY;
   if (resendApiKey) {
+    attempted = true;
     try {
       const resp = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -80,14 +83,18 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
         let body = '';
         try { body = await resp.text(); } catch {}
         console.error(`Resend email failed (${resp.status}): ${body.slice(0, 500)}`);
+      } else {
+        return true;
       }
-      return resp.ok;
     } catch (err: any) {
       console.error(`Resend email exception: ${err?.message || err}`);
-      return false;
     }
   }
 
-  console.error('No email provider configured: set SENDGRID_API_KEY or RESEND_API_KEY');
+  if (!attempted) {
+    console.error('No email provider configured: set SENDGRID_API_KEY or RESEND_API_KEY');
+  } else {
+    console.error('All configured email providers failed to send this message.');
+  }
   return false;
 }

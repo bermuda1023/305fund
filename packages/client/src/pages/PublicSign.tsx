@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { buildPublicUrl, publicGet, publicPost } from '../lib/publicApi';
 
 type SignMeta = {
@@ -25,6 +26,8 @@ export default function PublicSign() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [sourcePdfBytes, setSourcePdfBytes] = useState<ArrayBuffer | null>(null);
+  const [previewRendering, setPreviewRendering] = useState(false);
 
   const [signerEmail, setSignerEmail] = useState('');
   const [agree, setAgree] = useState(false);
@@ -42,7 +45,6 @@ export default function PublicSign() {
 
   useEffect(() => {
     let cancelled = false;
-    let nextBlobUrl: string | null = null;
     (async () => {
       if (!token) {
         setError('Missing signing token');
@@ -74,14 +76,8 @@ export default function PublicSign() {
           if (!docResp.ok) {
             throw new Error(`Failed to load NDA PDF (${docResp.status})`);
           }
-          const blob = await docResp.blob();
-          nextBlobUrl = URL.createObjectURL(blob);
-          if (!cancelled) {
-            setPdfBlobUrl((prev) => {
-              if (prev) URL.revokeObjectURL(prev);
-              return nextBlobUrl;
-            });
-          }
+          const bytes = await docResp.arrayBuffer();
+          if (!cancelled) setSourcePdfBytes(bytes);
         }
       } catch (e: any) {
         if (cancelled) return;
@@ -92,9 +88,61 @@ export default function PublicSign() {
     })();
     return () => {
       cancelled = true;
-      if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
     };
   }, [token, docEndpoint]);
+
+  useEffect(() => {
+    if (!sourcePdfBytes) return;
+    let cancelled = false;
+    const debounce = window.setTimeout(() => {
+      (async () => {
+        try {
+          setPreviewRendering(true);
+          const pdf = await PDFDocument.load(sourcePdfBytes as any);
+          const form = pdf.getForm();
+          const previewValues: Record<string, string> = {
+            ...formValues,
+            // Keep Recipient synced even though we hide that field in UI.
+            Recipient: String(formValues.Recipient || formValues.Name || '').trim(),
+          };
+          for (const field of pdfFields) {
+            if (field.readOnly && field.name !== 'Date') continue;
+            const val = String(previewValues[field.name] || '').trim();
+            try {
+              form.getTextField(field.name).setText(val);
+            } catch {
+              // Ignore unknown/non-text fields in preview mode.
+            }
+          }
+          try {
+            const font = await pdf.embedFont(StandardFonts.Helvetica);
+            form.updateFieldAppearances(font);
+          } catch {
+            // Fallback to default viewer rendering when font update fails.
+          }
+          const previewBytes = await pdf.save();
+          const blobUrl = URL.createObjectURL(new Blob([previewBytes as any], { type: 'application/pdf' }));
+          if (cancelled) {
+            URL.revokeObjectURL(blobUrl);
+            return;
+          }
+          setPdfBlobUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return blobUrl;
+          });
+        } catch {
+          // Keep prior preview visible if live render fails.
+        } finally {
+          if (!cancelled) setPreviewRendering(false);
+        }
+      })();
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(debounce);
+    };
+  }, [sourcePdfBytes, formValues, pdfFields]);
 
   const missingRequired = useMemo(() => {
     const missing: string[] = [];
@@ -144,6 +192,11 @@ export default function PublicSign() {
               ) : (
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading NDA preview…</div>
               )}
+              {previewRendering ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.45rem' }}>
+                  Updating preview...
+                </div>
+              ) : null}
             </div>
           </div>
 
