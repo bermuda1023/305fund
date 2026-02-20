@@ -71,6 +71,8 @@ app.use(rateLimit({
   legacyHeaders: false,
 }));
 app.use(express.json({ limit: '10mb' }));
+// Needed for third-party webhooks (e.g., Jotform) which often POST form-encoded bodies.
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Optional read-refresh from Postgres. Disabled by default to avoid clobbering
 // runtime state when upstream data quality/mapping issues exist.

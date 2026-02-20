@@ -231,23 +231,28 @@
             </div>
         </section>
 
-        <!-- Gate 2: unlock full site (password admin) -->
+        <!-- Gate 2: unlock full site (NDA + investor gate) -->
         <section id="unlock" style="padding: 0; margin: 0;">
             <div style="max-width: 720px; margin: 0 auto; padding: 0 16px 56px;">
                 <div style="background: var(--white); border-radius: 16px; padding: 24px; box-shadow: var(--shadow-lg);">
                     <h2 style="margin-bottom: 8px; color: var(--navy);">Unlock Full Diligence</h2>
                     <p style="color: var(--dark-gray); font-size: 0.95rem; margin-bottom: 16px;">
-                        After NDA execution, enter the access password to view the full investor website (specific address, maps, unit details, and source tables).
+                        Sign the NDA to unlock the full investor website (specific address, maps, unit details, and source tables).
                     </p>
-                    <form id="ndaUnlockForm">
-                        <label style="display:flex; gap: 10px; align-items:flex-start; font-size: 0.9rem; color: var(--charcoal); margin-bottom: 14px;">
-                            <input id="ndaConfirm" type="checkbox" style="margin-top: 4px;" required>
-                            <span>I confirm I have executed the NDA.</span>
-                        </label>
-                        <input id="ndaPassword" type="password" placeholder="Password" autocomplete="current-password" class="password-input" required>
-                        <div id="ndaUnlockError" class="password-error" style="margin-top: 10px;">Incorrect password.</div>
-                        <button type="submit" class="password-submit" style="background: var(--gold); margin-top: 14px;">Unlock Full Site</button>
-                    </form>
+                    <div style="margin: 18px 0 0;">
+                        <button
+                            id="startNdaUnlock"
+                            class="password-submit"
+                            style="background: var(--gold); margin-top: 14px;"
+                            type="button"
+                        >
+                            Sign NDA to Unlock
+                        </button>
+                        <div id="ndaUnlockStatus" style="margin-top: 10px; color: var(--dark-gray); font-size: 0.9rem;"></div>
+                        <div style="font-size: 0.85rem; color: var(--text-light); margin-top: 10px;">
+                            This will open the NDA signing flow and return you here with access for this browser session.
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -1370,7 +1375,7 @@
     <script>
         (function () {
             var DECK_KEY = 'brickell_investor_deck_unlocked';
-            var FULL_KEY = 'brickell_investor_full_unlocked';
+            var ACCESS_KEY = 'investorAccessToken';
 
             var deckGate = document.getElementById('deckGate');
             var deckContent = document.getElementById('deckContent');
@@ -1380,9 +1385,8 @@
 
             var main = document.getElementById('mainContent');
             var unlockSection = document.getElementById('unlock');
-            var form = document.getElementById('ndaUnlockForm');
-            var pwd = document.getElementById('ndaPassword');
-            var err = document.getElementById('ndaUnlockError');
+            var startBtn = document.getElementById('startNdaUnlock');
+            var statusEl = document.getElementById('ndaUnlockStatus');
 
             function showDeck() {
                 if (deckGate) deckGate.style.display = 'none';
@@ -1407,16 +1411,47 @@
             }
 
             var deckUnlocked = false;
-            var fullUnlocked = false;
+            var hasAccessToken = false;
             try { deckUnlocked = sessionStorage.getItem(DECK_KEY) === 'true'; } catch (e) { deckUnlocked = false; }
-            try { fullUnlocked = sessionStorage.getItem(FULL_KEY) === 'true'; } catch (e) { fullUnlocked = false; }
+            try { hasAccessToken = !!(sessionStorage.getItem(ACCESS_KEY) || '').trim(); } catch (e) { hasAccessToken = false; }
 
             if (deckUnlocked) showDeck();
-            if (fullUnlocked) {
+            if (hasAccessToken) {
                 showDeck();
                 showMain();
                 return;
             }
+
+            // Access-token support: /investor-site/investors.html#opportunity&access=...
+            // Token is produced by the app after NDA signing + investor gate password.
+            try {
+                var rawHash = (window.location.hash || '').replace(/^#/, '');
+                if (rawHash) {
+                    var parts = rawHash.split('&').filter(Boolean);
+                    var access = '';
+                    for (var i = 0; i < parts.length; i++) {
+                        if (parts[i].indexOf('access=') === 0) {
+                            access = decodeURIComponent(parts[i].slice('access='.length) || '');
+                        }
+                    }
+                    if (access) {
+                        try { sessionStorage.setItem(ACCESS_KEY, access); } catch (e2) { /* ignore */ }
+                        // Remove access from URL hash after storing it
+                        try {
+                            var kept = [];
+                            for (var j = 0; j < parts.length; j++) {
+                                if (parts[j].indexOf('access=') === 0) continue;
+                                kept.push(parts[j]);
+                            }
+                            var nextHash = kept.length ? ('#' + kept.join('&')) : '';
+                            window.history.replaceState({}, '', window.location.pathname + window.location.search + nextHash);
+                        } catch (e3) { /* ignore */ }
+                        showDeck();
+                        showMain();
+                        return;
+                    }
+                }
+            } catch (e) { /* ignore */ }
 
             if (deckErr) deckErr.classList.remove('visible');
             if (deckForm) {
@@ -1439,25 +1474,28 @@
                 });
             }
 
-            if (err) err.classList.remove('visible');
-            if (form) {
-                form.addEventListener('submit', function (e) {
-                    e.preventDefault();
-                    var val = String(pwd && pwd.value ? pwd.value : '').trim();
-                    if (val === 'admin') {
-                        try { sessionStorage.setItem(FULL_KEY, 'true'); } catch (e2) { /* ignore */ }
-                        showMain();
-                        // Jump to the revealed page top.
-                        try { window.location.hash = '#opportunity'; } catch (e3) { /* ignore */ }
-                    } else {
-                        if (err) err.classList.add('visible');
-                        if (pwd) pwd.value = '';
-                    }
-                });
-            }
-            if (pwd) {
-                pwd.addEventListener('input', function () {
-                    if (err) err.classList.remove('visible');
+            if (startBtn) {
+                startBtn.addEventListener('click', function () {
+                    if (statusEl) statusEl.textContent = 'Starting NDA...';
+                    startBtn.disabled = true;
+                    startBtn.style.opacity = '0.7';
+                    fetch('/api/public/investor-nda/start', {
+                        method: 'POST',
+                        headers: { 'Accept': 'application/json' },
+                        credentials: 'omit'
+                    })
+                        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+                        .then(function (result) {
+                            if (!result.ok) throw new Error((result.data && result.data.error) || 'Failed to start NDA');
+                            if (!result.data || !result.data.url) throw new Error('Missing signing URL');
+                            if (statusEl) statusEl.textContent = 'Redirecting to NDA signing...';
+                            window.location.href = result.data.url;
+                        })
+                        .catch(function (err) {
+                            if (statusEl) statusEl.textContent = String(err && err.message ? err.message : err);
+                            startBtn.disabled = false;
+                            startBtn.style.opacity = '1';
+                        });
                 });
             }
         })();

@@ -976,12 +976,12 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       after: { upload, result },
     });
 
-    res.json({
+  res.json({
       ...result,
-      filename: file.originalname,
-      file_type: fileType,
+    filename: file.originalname,
+    file_type: fileType,
       file_path: relativePath,
-      status: 'pending_review',
+    status: 'pending_review',
       message: `${fileType.toUpperCase()} uploaded successfully. It is saved and pending review.`,
     });
     return;
