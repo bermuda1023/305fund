@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { buildPublicUrl, publicGet, publicPost } from '../lib/publicApi';
 
 type SignMeta = {
@@ -120,8 +120,32 @@ export default function PublicSign() {
             const signatureFont = await pdf.embedFont(StandardFonts.TimesRomanItalic);
             try {
               const signatureField = form.getTextField('Signature_es_:signatureblock');
+              signatureField.setText(valOrSig(previewValues['Signature_es_:signatureblock']));
               signatureField.updateAppearances(signatureFont);
               signatureField.setFontSize(18);
+
+              // Some mobile viewers still render field text with default appearance.
+              // Draw an explicit "ink-like" overlay at the signature widget position.
+              const widgets = ((signatureField as any)?.acroField?.getWidgets?.() || []) as any[];
+              const firstWidget = widgets[0];
+              const firstPage = pdf.getPages()[0];
+              if (firstWidget && firstPage) {
+                const rect = firstWidget.getRectangle();
+                const sigText = valOrSig(previewValues['Signature_es_:signatureblock']);
+                if (sigText) {
+                  const size = Math.max(18, Math.min(26, Number(rect?.height || 22) * 0.9));
+                  const x = Number(rect?.x || 80) + 2;
+                  const y = Number(rect?.y || 120) + Math.max(1, (Number(rect?.height || 22) - size) * 0.45);
+                  firstPage.drawText(sigText, {
+                    x,
+                    y,
+                    size,
+                    font: signatureFont,
+                    color: rgb(0.08, 0.2, 0.5),
+                    opacity: 0.95,
+                  });
+                }
+              }
             } catch {
               // Signature field might not exist on all templates.
             }
@@ -204,11 +228,24 @@ export default function PublicSign() {
                 <iframe
                   title="NDA PDF"
                   src={pdfBlobUrl}
-                  style={{ width: '100%', height: 520, border: '1px solid var(--border)', borderRadius: 8 }}
+                  style={{
+                    width: '100%',
+                    height: '78vh',
+                    minHeight: 520,
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                  }}
                 />
               ) : (
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading NDA preview…</div>
               )}
+              {pdfBlobUrl ? (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <a href={pdfBlobUrl} target="_blank" rel="noopener noreferrer" className="btn btn-secondary">
+                    Open Full PDF
+                  </a>
+                </div>
+              ) : null}
               {previewRendering ? (
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '0.45rem' }}>
                   Updating preview...
@@ -328,5 +365,9 @@ export default function PublicSign() {
       ) : null}
     </div>
   );
+}
+
+function valOrSig(v: unknown): string {
+  return String(v || '').trim();
 }
 
