@@ -333,15 +333,10 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
               opacity: 0.98,
             });
           }
+          signatureField.setText('');
         }
       } catch {}
       form.updateFieldAppearances(font);
-      try {
-        // Re-apply signature appearance so global field updates don't overwrite it.
-        const signatureField = form.getTextField('Signature_es_:signatureblock');
-        signatureField.updateAppearances(signatureFont);
-        signatureField.setFontSize(18);
-      } catch {}
       form.flatten();
     } catch {
       // If the PDF has an unexpected form structure, keep going with certificate page.

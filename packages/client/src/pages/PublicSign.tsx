@@ -164,19 +164,12 @@ export default function PublicSign() {
                     opacity: 0.98,
                   });
                 }
+                signatureField.setText('');
               }
             } catch {
               // Signature field might not exist on all templates.
             }
             form.updateFieldAppearances(font);
-            try {
-              // Re-apply after global update so preview keeps the cursive-like signature style.
-              const signatureField = form.getTextField('Signature_es_:signatureblock');
-              signatureField.updateAppearances(signatureFont);
-              signatureField.setFontSize(18);
-            } catch {
-              // Signature field might not exist on all templates.
-            }
           } catch {
             // Fallback to default viewer rendering when font update fails.
           }
