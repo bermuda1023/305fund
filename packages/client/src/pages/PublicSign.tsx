@@ -285,7 +285,7 @@ export default function PublicSign() {
                         {f.label}{f.required ? ' *' : ''}
                       </label>
                       <input
-                        className="form-input"
+                        className={`form-input ${f.name === 'Signature_es_:signatureblock' ? 'signature-input' : ''}`}
                         value={formValues[f.name] || ''}
                         disabled={f.readOnly}
                         onChange={(e) =>

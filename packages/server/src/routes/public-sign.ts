@@ -9,14 +9,37 @@
 
 import { Router, Request, Response } from 'express';
 import { createHash } from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import jwt from 'jsonwebtoken';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import * as fontkit from '@pdf-lib/fontkit';
 import { getDb } from '../db/database';
 import { readStoredFile, saveUploadedBuffer } from '../lib/storage';
 import { sendTransactionalEmail } from '../lib/email';
 
 const router = Router();
 const DEFAULT_DATE_FIELD_VALUE = () => new Date().toISOString().slice(0, 10);
+const SIGNATURE_FONT_CANDIDATES = [
+  path.resolve(__dirname, '../../node_modules/@fontsource/dancing-script/files/dancing-script-latin-700-normal.woff'),
+  path.resolve(process.cwd(), 'packages/server/node_modules/@fontsource/dancing-script/files/dancing-script-latin-700-normal.woff'),
+];
+let cachedSignatureFontBytes: Buffer | null | undefined;
+
+function getSignatureFontBytes(): Uint8Array | null {
+  if (cachedSignatureFontBytes !== undefined) return cachedSignatureFontBytes ? new Uint8Array(cachedSignatureFontBytes) : null;
+  for (const candidate of SIGNATURE_FONT_CANDIDATES) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      cachedSignatureFontBytes = fs.readFileSync(candidate);
+      return new Uint8Array(cachedSignatureFontBytes);
+    } catch {
+      // Try next candidate path.
+    }
+  }
+  cachedSignatureFontBytes = null;
+  return null;
+}
 
 function getNdaNotifyEmails(): string[] {
   const configured = String(process.env.NDA_SIGN_NOTIFY_EMAILS || '').trim();
@@ -263,7 +286,16 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
     const pdf = await PDFDocument.load(originalBytes as any);
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
-    const signatureFont = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+    let signatureFont = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+    try {
+      const signatureFontBytes = getSignatureFontBytes();
+      if (signatureFontBytes) {
+        pdf.registerFontkit(fontkit);
+        signatureFont = await pdf.embedFont(signatureFontBytes, { subset: true });
+      }
+    } catch {
+      // Fall back to TimesRomanItalic if custom script font fails to load.
+    }
     const form = pdf.getForm();
 
     // Fill AcroForm fields in the original PDF and flatten so they can't be edited after signing.
