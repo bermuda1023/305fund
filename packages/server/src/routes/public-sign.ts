@@ -313,7 +313,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
         if (sig) {
           const widgets = ((signatureField as any)?.acroField?.getWidgets?.() || []) as any[];
           const pages = pdf.getPages();
-          const fallbackPage = pages[1] || pages[pages.length - 1];
+          const fallbackPage = pages[2] || pages[pages.length - 1];
           for (const widget of widgets) {
             const rect = widget?.getRectangle?.();
             if (!rect) continue;

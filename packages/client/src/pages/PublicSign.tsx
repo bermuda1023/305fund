@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFFont, StandardFonts, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import { buildPublicUrl, publicGet, publicPost } from '../lib/publicApi';
+
+const DANCING_SCRIPT_URL = '/fonts/dancing-script-700.woff';
+let cachedDancingScriptBytes: ArrayBuffer | null | undefined;
 
 type SignMeta = {
   document: { id: number; name: string };
@@ -117,7 +121,19 @@ export default function PublicSign() {
           }
           try {
             const font = await pdf.embedFont(StandardFonts.Helvetica);
-            const signatureFont = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+            let signatureFont: PDFFont = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+            try {
+              if (cachedDancingScriptBytes === undefined) {
+                const resp = await fetch(DANCING_SCRIPT_URL);
+                cachedDancingScriptBytes = resp.ok ? await resp.arrayBuffer() : null;
+              }
+              if (cachedDancingScriptBytes) {
+                pdf.registerFontkit(fontkit);
+                signatureFont = await pdf.embedFont(cachedDancingScriptBytes, { subset: true });
+              }
+            } catch {
+              // Fall back to TimesRomanItalic if custom font fails.
+            }
             try {
               const signatureField = form.getTextField('Signature_es_:signatureblock');
               const sigText = valOrSig(previewValues['Signature_es_:signatureblock']);
@@ -127,7 +143,7 @@ export default function PublicSign() {
               if (sigText) {
                 const widgets = ((signatureField as any)?.acroField?.getWidgets?.() || []) as any[];
                 const pages = pdf.getPages();
-                const fallbackPage = pages[1] || pages[pages.length - 1];
+                const fallbackPage = pages[2] || pages[pages.length - 1];
                 for (const widget of widgets) {
                   const rect = widget?.getRectangle?.();
                   if (!rect) continue;
