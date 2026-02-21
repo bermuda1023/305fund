@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { buildPublicUrl, publicGet, publicPost } from '../lib/publicApi';
 
 type SignMeta = {
@@ -123,29 +123,6 @@ export default function PublicSign() {
               signatureField.setText(valOrSig(previewValues['Signature_es_:signatureblock']));
               signatureField.updateAppearances(signatureFont);
               signatureField.setFontSize(18);
-
-              // Some mobile viewers still render field text with default appearance.
-              // Draw an explicit "ink-like" overlay at the signature widget position.
-              const widgets = ((signatureField as any)?.acroField?.getWidgets?.() || []) as any[];
-              const firstWidget = widgets[0];
-              const firstPage = pdf.getPages()[0];
-              if (firstWidget && firstPage) {
-                const rect = firstWidget.getRectangle();
-                const sigText = valOrSig(previewValues['Signature_es_:signatureblock']);
-                if (sigText) {
-                  const size = Math.max(18, Math.min(26, Number(rect?.height || 22) * 0.9));
-                  const x = Number(rect?.x || 80) + 2;
-                  const y = Number(rect?.y || 120) + Math.max(1, (Number(rect?.height || 22) - size) * 0.45);
-                  firstPage.drawText(sigText, {
-                    x,
-                    y,
-                    size,
-                    font: signatureFont,
-                    color: rgb(0.08, 0.2, 0.5),
-                    opacity: 0.95,
-                  });
-                }
-              }
             } catch {
               // Signature field might not exist on all templates.
             }

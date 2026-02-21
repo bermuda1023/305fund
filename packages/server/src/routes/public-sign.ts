@@ -278,25 +278,6 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
         // Render the signature line with a cursive-style font instead of plain sans-serif text.
         signatureField.updateAppearances(signatureFont);
         signatureField.setFontSize(18);
-
-        // Some PDF viewers ignore field appearance updates. Draw a stable ink overlay too.
-        const widgets = ((signatureField as any)?.acroField?.getWidgets?.() || []) as any[];
-        const firstWidget = widgets[0];
-        const firstPage = pdf.getPages()[0];
-        if (firstWidget && firstPage) {
-          const rect = firstWidget.getRectangle();
-          const size = Math.max(18, Math.min(26, Number(rect?.height || 22) * 0.9));
-          const x = Number(rect?.x || 80) + 2;
-          const y = Number(rect?.y || 120) + Math.max(1, (Number(rect?.height || 22) - size) * 0.45);
-          firstPage.drawText(sig, {
-            x,
-            y,
-            size,
-            font: signatureFont,
-            color: rgb(0.08, 0.2, 0.5),
-            opacity: 0.95,
-          });
-        }
       } catch {}
       form.updateFieldAppearances(font);
       try {
