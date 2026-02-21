@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { buildPublicUrl, publicGet, publicPost } from '../lib/publicApi';
 
 type SignMeta = {
@@ -124,6 +124,31 @@ export default function PublicSign() {
               signatureField.setText(sigText);
               signatureField.updateAppearances(signatureFont);
               signatureField.setFontSize(18);
+              if (sigText) {
+                const widgets = ((signatureField as any)?.acroField?.getWidgets?.() || []) as any[];
+                const pages = pdf.getPages();
+                const fallbackPage = pages[1] || pages[pages.length - 1];
+                for (const widget of widgets) {
+                  const rect = widget?.getRectangle?.();
+                  if (!rect) continue;
+                  const widgetPageRef = widget?.getP?.() || widget?.getOrCreateP?.();
+                  const page =
+                    pages.find((p) => String((p as any)?.ref) === String(widgetPageRef)) || fallbackPage;
+                  if (!page) continue;
+                  const fieldHeight = Number(rect.height || 22);
+                  const size = Math.max(16, Math.min(22, fieldHeight * 0.85));
+                  const x = Number(rect.x || 80) + 2;
+                  const y = Number(rect.y || 120) + Math.max(0.5, (fieldHeight - size) * 0.45);
+                  page.drawText(sigText, {
+                    x,
+                    y,
+                    size,
+                    font: signatureFont,
+                    color: rgb(0.12, 0.2, 0.45),
+                    opacity: 0.98,
+                  });
+                }
+              }
             } catch {
               // Signature field might not exist on all templates.
             }
