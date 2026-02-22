@@ -8,12 +8,13 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import jwt from 'jsonwebtoken';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import * as fontkit from '@pdf-lib/fontkit';
+import bcrypt from 'bcryptjs';
 import { getDb } from '../db/database';
 import { readStoredFile, saveUploadedBuffer } from '../lib/storage';
 import { sendTransactionalEmail } from '../lib/email';
@@ -67,6 +68,16 @@ function sha256Hex(input: Buffer | string): string {
 
 function tokenHash(rawToken: string): string {
   return sha256Hex(String(rawToken || '').trim());
+}
+
+function generateInvestorAccessCode(length = 10): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = randomBytes(length);
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    out += alphabet[bytes[i]! % alphabet.length];
+  }
+  return out;
 }
 
 function isExpired(expiresAt: unknown): boolean {
@@ -402,6 +413,8 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
 
     const executedBytes = Buffer.from(await pdf.save());
     const executedHash = sha256Hex(executedBytes);
+    const investorAccessCode = generateInvestorAccessCode(10);
+    const investorAccessCodeHash = bcrypt.hashSync(investorAccessCode, 10);
     const stored = await saveUploadedBuffer(
       executedBytes,
       'signed-documents',
@@ -413,10 +426,11 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       INSERT INTO document_signatures (
         document_id, signing_link_id,
         signer_name, signer_email, signer_company, signer_title, signature_text,
+        investor_gate_password_hash,
         signed_ip, signed_user_agent,
         original_pdf_sha256,
         executed_file_path, executed_pdf_sha256
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const sigResult = insert.run(
       result.doc.id,
@@ -426,6 +440,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       recipient || null,
       fallbackTitle || null,
       sig,
+      investorAccessCodeHash,
       ip || null,
       ua || null,
       originalHash,
@@ -461,14 +476,13 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       };
 
       if (notify.length > 0) {
-        const to = notify[0]!;
-        const bcc = notify.slice(1);
         const subject = `NDA signed: ${result.doc.name}`;
         const text =
           `A new NDA was signed.\n\n` +
           `Recipient (company receiving NDA): ${recipient}\n` +
           `Signer name: ${name}\n` +
           `Signer email: ${email || '(none provided)'}\n` +
+          `Investor access code: ${investorAccessCode}\n` +
           `Date (auto-filled): ${date}\n` +
           `Signed at (UTC): ${signedAtIso}\n\n` +
           `Executed PDF path: ${stored.filePath}\n` +
@@ -477,8 +491,8 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
           `IP: ${ip}\n` +
           `User-Agent: ${ua}\n`;
         const sent = await sendTransactionalEmail({
-          to,
-          bcc: bcc.length > 0 ? bcc : undefined,
+          to: 'info@305opportunityfund.com',
+          bcc: notify,
           subject,
           text,
           attachments: [attachment],
@@ -494,6 +508,8 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
           `Hi ${name},\n\n` +
           `Thank you for signing the NDA for ${recipient}.\n` +
           `Attached is your signed PDF copy for your records.\n\n` +
+          `Your investor access code: ${investorAccessCode}\n` +
+          `Use this code on the investor unlock page.\n\n` +
           `Signed at (UTC): ${signedAtIso}\n` +
           `Date shown on document: ${date}\n\n` +
           `If you have any questions, just reply to this email.\n\n` +

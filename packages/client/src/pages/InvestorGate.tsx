@@ -21,7 +21,7 @@ export default function InvestorGate() {
     <div style={{ maxWidth: 720, margin: '0 auto', padding: '1.25rem' }}>
       <h2 style={{ marginTop: 0 }}>Investor Access</h2>
       <p style={{ color: 'var(--text-muted)', marginTop: 0 }}>
-        Enter the investor password to unlock the hidden content.
+        Enter your unique access code from the NDA email to unlock the hidden content.
       </p>
 
       {!ndaProofToken ? (
@@ -36,18 +36,18 @@ export default function InvestorGate() {
       ) : (
         <div className="card">
           <div className="card-header">
-            <span className="card-title">Password</span>
+            <span className="card-title">Access Code</span>
           </div>
           <div style={{ padding: '1rem' }}>
             <div className="form-row">
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Investor Password</label>
+                <label className="form-label">Investor Access Code</label>
                 <input
                   className="form-input"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password"
+                  placeholder="Enter your access code"
                   autoFocus
                 />
               </div>

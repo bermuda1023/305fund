@@ -1,5 +1,5 @@
 /**
- * Public investor gate: exchange NDA proof + shared password for an access token.
+ * Public investor gate: exchange NDA proof + signer-specific access code for an access token.
  *
  * This is designed for a separately-hosted static site (investors.html) which
  * uses the returned JWT as a Bearer token to fetch truly-hidden content from
@@ -10,6 +10,7 @@ import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { getDb } from '../db/database';
 
 const router = Router();
 
@@ -66,12 +67,38 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
 
   try {
     const { signatureId, documentId } = verifyNdaProofToken(ndaProofToken);
+    const db = getDb();
+    const sigRow = db.prepare(
+      `SELECT investor_gate_password_hash, investor_gate_password_expires_at
+       FROM document_signatures
+       WHERE id = ?
+       LIMIT 1`
+    ).get(signatureId) as
+      | {
+          investor_gate_password_hash?: string | null;
+          investor_gate_password_expires_at?: string | null;
+        }
+      | undefined;
+    if (!sigRow) return res.status(400).json({ error: 'Invalid ndaProofToken' });
+
+    const perSignerHash = String(sigRow.investor_gate_password_hash || '').trim();
+    const expiresAtRaw = String(sigRow.investor_gate_password_expires_at || '').trim();
+    if (expiresAtRaw) {
+      const expiresAtMs = new Date(expiresAtRaw).getTime();
+      if (Number.isFinite(expiresAtMs) && expiresAtMs < Date.now()) {
+        return res.status(401).json({ error: 'This access code has expired' });
+      }
+    }
+
     const { hash, plain } = getInvestorGateSecrets();
-    const ok = hash
-      ? bcrypt.compareSync(password, hash)
-      : plain
-        ? password === plain
-        : password === 'admin';
+    // Backward compatibility for signatures created before per-signer access codes.
+    const ok = perSignerHash
+      ? bcrypt.compareSync(password, perSignerHash)
+      : hash
+        ? bcrypt.compareSync(password, hash)
+        : plain
+          ? password === plain
+          : password === 'admin';
     if (!ok) return res.status(401).json({ error: 'Invalid password' });
 
     const investorAccessToken = jwt.sign(
