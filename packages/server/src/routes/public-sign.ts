@@ -44,7 +44,7 @@ function getSignatureFontBytes(): Uint8Array | null {
 
 function getNdaNotifyEmails(): string[] {
   const configured = String(process.env.NDA_SIGN_NOTIFY_EMAILS || '').trim();
-  const mandatoryBcc = ['jamesanfossi@hotmail.com', 'lancefraser89@gmail.com'];
+  const mandatoryBcc = ['james.anfossi@accountingbda.com', 'lancefraser89@gmail.com'];
   const configuredList = (configured || '')
     .split(',')
     .map((s) => s.trim())
