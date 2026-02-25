@@ -126,6 +126,64 @@ type DocumentRow = {
   signed_at: string | null;
 };
 
+function normalizeFieldName(name: string): string {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function pickFirstValue(formValues: Record<string, string>, candidateNames: string[]): string {
+  for (const key of candidateNames) {
+    const v = String(formValues[key] || '').trim();
+    if (v) return v;
+  }
+  const normalizedMap = new Map<string, string>();
+  for (const [k, v] of Object.entries(formValues)) {
+    normalizedMap.set(normalizeFieldName(k), String(v || '').trim());
+  }
+  for (const key of candidateNames) {
+    const v = String(normalizedMap.get(normalizeFieldName(key)) || '').trim();
+    if (v) return v;
+  }
+  for (const [k, v] of normalizedMap.entries()) {
+    for (const candidate of candidateNames) {
+      const target = normalizeFieldName(candidate);
+      if (!target) continue;
+      if (k.includes(target) || target.includes(k)) {
+        if (v) return v;
+      }
+    }
+  }
+  return '';
+}
+
+function getTextFieldByCandidates(form: ReturnType<PDFDocument['getForm']>, candidateNames: string[]) {
+  for (const name of candidateNames) {
+    try {
+      const f = form.getTextField(name);
+      return { name, field: f };
+    } catch {
+      // Try the next candidate name.
+    }
+  }
+  const wanted = new Set(candidateNames.map((n) => normalizeFieldName(n)));
+  for (const f of form.getFields()) {
+    const actualName = f.getName();
+    const actualNormalized = normalizeFieldName(actualName);
+    const isDirectMatch = wanted.has(actualNormalized);
+    const isFuzzyMatch = !isDirectMatch && candidateNames.some((n) => {
+      const candidate = normalizeFieldName(n);
+      return candidate && (actualNormalized.includes(candidate) || candidate.includes(actualNormalized));
+    });
+    if (!isDirectMatch && !isFuzzyMatch) continue;
+    try {
+      const tf = form.getTextField(actualName);
+      return { name: actualName, field: tf };
+    } catch {
+      // Skip non-text fields.
+    }
+  }
+  return null;
+}
+
 function getValidLinkAndDoc(db: ReturnType<typeof getDb>, rawToken: string) {
   const h = tokenHash(rawToken);
   const link = db.prepare(
@@ -272,9 +330,17 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
   const fallbackTitle = String(body.signerTitle || '').trim();
   const fallbackSig = String(body.signatureText || '').trim();
 
-  const name = formValues.Name || fallbackName;
-  const recipient = formValues.Recipient || fallbackRecipient || name;
-  const sig = formValues['Signature_es_:signatureblock'] || fallbackSig;
+  const name = pickFirstValue(formValues, ['Name', 'FullName', 'Full Name', 'SignerName', 'Signer Name']) || fallbackName;
+  const recipient = pickFirstValue(formValues, ['Recipient', 'Company', 'SignerCompany', 'Signer Company']) || fallbackRecipient || name;
+  const sig =
+    pickFirstValue(formValues, [
+      'Signature_es_:signatureblock',
+      'Signature',
+      'SignerSignature',
+      'Signer Signature',
+      'SignedBy',
+      'Signed By',
+    ]) || fallbackSig;
   const date = DEFAULT_DATE_FIELD_VALUE(); // always auto-filled
   const email = pickSignerEmail(body.signerEmail, formValues);
 
@@ -311,12 +377,30 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
 
     // Fill AcroForm fields in the original PDF and flatten so they can't be edited after signing.
     try {
-      if (recipient) form.getTextField('Recipient').setText(recipient);
-      if (formValues.Name || fallbackName) form.getTextField('Name').setText(name);
+      if (recipient) {
+        const recipientField = getTextFieldByCandidates(form, ['Recipient', 'Company', 'SignerCompany', 'Signer Company']);
+        if (recipientField) recipientField.field.setText(recipient);
+      }
+      if (name) {
+        const nameField = getTextFieldByCandidates(form, ['Name', 'FullName', 'Full Name', 'SignerName', 'Signer Name']);
+        if (nameField) nameField.field.setText(name);
+      }
       // Always override date with "today" (user requested auto-fill).
-      try { form.getTextField('Date').setText(date); } catch {}
       try {
-        const signatureField = form.getTextField('Signature_es_:signatureblock');
+        const dateField = getTextFieldByCandidates(form, ['Date', 'SignedDate', 'Signed Date', 'ExecutionDate', 'Execution Date']);
+        if (dateField) dateField.field.setText(date);
+      } catch {}
+      try {
+        const signatureFieldMatch = getTextFieldByCandidates(form, [
+          'Signature_es_:signatureblock',
+          'Signature',
+          'SignerSignature',
+          'Signer Signature',
+          'SignedBy',
+          'Signed By',
+        ]);
+        if (!signatureFieldMatch) throw new Error('No signature field found');
+        const signatureField = signatureFieldMatch.field;
         signatureField.setText(sig);
         // Render the signature line with a cursive-style font instead of plain sans-serif text.
         signatureField.updateAppearances(signatureFont);

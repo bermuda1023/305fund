@@ -21,6 +21,53 @@ type PdfFormField = {
   defaultValue?: string;
 };
 
+function normalizeFieldName(name: string): string {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function pickFieldName(fields: PdfFormField[], candidates: string[], fallback: string): string {
+  for (const c of candidates) {
+    const exact = fields.find((f) => f.name === c);
+    if (exact) return exact.name;
+  }
+  const wanted = new Set(candidates.map((c) => normalizeFieldName(c)));
+  for (const f of fields) {
+    const n = normalizeFieldName(f.name);
+    const isDirectMatch = wanted.has(n);
+    const isFuzzyMatch = !isDirectMatch && candidates.some((c) => {
+      const cn = normalizeFieldName(c);
+      return cn && (n.includes(cn) || cn.includes(n));
+    });
+    if (isDirectMatch || isFuzzyMatch) return f.name;
+  }
+  return fallback;
+}
+
+function pickValue(values: Record<string, string>, candidates: string[]): string {
+  for (const c of candidates) {
+    const v = String(values[c] || '').trim();
+    if (v) return v;
+  }
+  const normalizedMap = new Map<string, string>();
+  for (const [k, v] of Object.entries(values)) {
+    normalizedMap.set(normalizeFieldName(k), String(v || '').trim());
+  }
+  for (const c of candidates) {
+    const v = String(normalizedMap.get(normalizeFieldName(c)) || '').trim();
+    if (v) return v;
+  }
+  for (const [k, v] of normalizedMap.entries()) {
+    for (const c of candidates) {
+      const cn = normalizeFieldName(c);
+      if (!cn) continue;
+      if (k.includes(cn) || cn.includes(k)) {
+        if (v) return v;
+      }
+    }
+  }
+  return '';
+}
+
 export default function PublicSign() {
   const { token } = useParams();
   const navigate = useNavigate();
@@ -39,6 +86,15 @@ export default function PublicSign() {
 
   const visiblePdfFields = useMemo(
     () => pdfFields.filter((f) => f.name !== 'Recipient'),
+    [pdfFields]
+  );
+  const signatureFieldName = useMemo(
+    () =>
+      pickFieldName(
+        pdfFields,
+        ['Signature_es_:signatureblock', 'Signature', 'SignerSignature', 'Signer Signature', 'SignedBy', 'Signed By'],
+        'Signature_es_:signatureblock'
+      ),
     [pdfFields]
   );
 
@@ -135,8 +191,18 @@ export default function PublicSign() {
               // Fall back to TimesRomanItalic if custom font fails.
             }
             try {
-              const signatureField = form.getTextField('Signature_es_:signatureblock');
-              const sigText = valOrSig(previewValues['Signature_es_:signatureblock']);
+              const signatureField = form.getTextField(signatureFieldName);
+              const sigText = valOrSig(
+                pickValue(previewValues, [
+                  signatureFieldName,
+                  'Signature_es_:signatureblock',
+                  'Signature',
+                  'SignerSignature',
+                  'Signer Signature',
+                  'SignedBy',
+                  'Signed By',
+                ])
+              );
               signatureField.setText(sigText);
               signatureField.updateAppearances(signatureFont);
               signatureField.setFontSize(18);
@@ -195,7 +261,7 @@ export default function PublicSign() {
       cancelled = true;
       window.clearTimeout(debounce);
     };
-  }, [sourcePdfBytes, formValues, pdfFields]);
+  }, [sourcePdfBytes, formValues, pdfFields, signatureFieldName]);
 
   const missingRequired = useMemo(() => {
     const missing: string[] = [];
@@ -206,7 +272,21 @@ export default function PublicSign() {
     }
     return missing;
   }, [visiblePdfFields, formValues]);
-  const signatureValue = String(formValues['Signature_es_:signatureblock'] || '').trim();
+  const signatureValue = useMemo(
+    () =>
+      String(
+        pickValue(formValues, [
+          signatureFieldName,
+          'Signature_es_:signatureblock',
+          'Signature',
+          'SignerSignature',
+          'Signer Signature',
+          'SignedBy',
+          'Signed By',
+        ]) || ''
+      ).trim(),
+    [formValues, signatureFieldName]
+  );
   const hasFullNameSignature = useMemo(() => {
     // Require at least first + last name-like words.
     return /^[A-Za-z][A-Za-z'`.-]*\s+[A-Za-z][A-Za-z'`.-]*(?:\s+[A-Za-z][A-Za-z'`.-]*)*$/.test(signatureValue);
@@ -292,7 +372,7 @@ export default function PublicSign() {
                         {f.label}{f.required ? ' *' : ''}
                       </label>
                       <input
-                        className={`form-input ${f.name === 'Signature_es_:signatureblock' ? 'signature-input' : ''}`}
+                        className={`form-input ${f.name === signatureFieldName ? 'signature-input' : ''}`}
                         value={formValues[f.name] || ''}
                         disabled={f.readOnly}
                         onChange={(e) =>
