@@ -603,7 +603,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       }
 
       if (signerEmail) {
-        const subject = `Your signed NDA copy - ${result.doc.name}`;
+        const subject = `Your signed NDA copy + password - 305 Opportunity Fund`;
         const text =
           `Hi ${name},\n\n` +
           `Thank you for signing the NDA for ${recipient}.\n` +
@@ -612,7 +612,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
           `Use this code on the investor unlock page.\n\n` +
           `Signed at (UTC): ${signedAtIso}\n` +
           `Date shown on document: ${date}\n\n` +
-          `If you have any questions, just reply to this email.\n\n` +
+          `If you have any questions, please email lancefraser89@gmail.com and jamesanfossi@hotmail.com.\n\n` +
           `Best regards,\n` +
           `305 Opportunities Fund Team`;
         const sent = await sendTransactionalEmail({
