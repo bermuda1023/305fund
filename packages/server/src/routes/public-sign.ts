@@ -155,14 +155,10 @@ function pickFirstValue(formValues: Record<string, string>, candidateNames: stri
   return '';
 }
 
-function getTextFieldByCandidates(form: ReturnType<PDFDocument['getForm']>, candidateNames: string[]) {
-  for (const name of candidateNames) {
-    try {
-      const f = form.getTextField(name);
-      return { name, field: f };
-    } catch {
-      // Try the next candidate name.
-    }
+function getFieldByCandidates(form: ReturnType<PDFDocument['getForm']>, candidateNames: string[]) {
+  for (const f of form.getFields()) {
+    const actualName = f.getName();
+    if (candidateNames.includes(actualName)) return { name: actualName, field: f as any };
   }
   const wanted = new Set(candidateNames.map((n) => normalizeFieldName(n)));
   for (const f of form.getFields()) {
@@ -173,12 +169,27 @@ function getTextFieldByCandidates(form: ReturnType<PDFDocument['getForm']>, cand
       const candidate = normalizeFieldName(n);
       return candidate && (actualNormalized.includes(candidate) || candidate.includes(actualNormalized));
     });
-    if (!isDirectMatch && !isFuzzyMatch) continue;
+    if (isDirectMatch || isFuzzyMatch) return { name: actualName, field: f as any };
+  }
+  return null;
+}
+
+function getTextFieldByCandidates(form: ReturnType<PDFDocument['getForm']>, candidateNames: string[]) {
+  for (const name of candidateNames) {
     try {
-      const tf = form.getTextField(actualName);
-      return { name: actualName, field: tf };
+      const f = form.getTextField(name);
+      return { name, field: f };
     } catch {
-      // Skip non-text fields.
+      // Try the next candidate name.
+    }
+  }
+  const matched = getFieldByCandidates(form, candidateNames);
+  if (matched) {
+    try {
+      const tf = form.getTextField(matched.name);
+      return { name: matched.name, field: tf };
+    } catch {
+      // Matched field exists but is not a text field.
     }
   }
   return null;
@@ -391,7 +402,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
         if (dateField) dateField.field.setText(date);
       } catch {}
       try {
-        const signatureFieldMatch = getTextFieldByCandidates(form, [
+        const signatureFieldMatch = getFieldByCandidates(form, [
           'Signature_es_:signatureblock',
           'Signature',
           'SignerSignature',
@@ -400,13 +411,18 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
           'Signed By',
         ]);
         if (!signatureFieldMatch) throw new Error('No signature field found');
-        const signatureField = signatureFieldMatch.field;
-        signatureField.setText(sig);
-        // Render the signature line with a cursive-style font instead of plain sans-serif text.
-        signatureField.updateAppearances(signatureFont);
-        signatureField.setFontSize(18);
+        let signatureTextField: any = null;
+        try {
+          signatureTextField = form.getTextField(signatureFieldMatch.name);
+          signatureTextField.setText(sig);
+          // Render the signature line with a cursive-style font instead of plain sans-serif text.
+          signatureTextField.updateAppearances(signatureFont);
+          signatureTextField.setFontSize(18);
+        } catch {
+          // Signature can be a PDFSignature field; we'll draw visual text directly on its widget rect.
+        }
         if (sig) {
-          const widgets = ((signatureField as any)?.acroField?.getWidgets?.() || []) as any[];
+          const widgets = ((signatureFieldMatch.field as any)?.acroField?.getWidgets?.() || []) as any[];
           const pages = pdf.getPages();
           const fallbackPage = pages[2] || pages[pages.length - 1];
           for (const widget of widgets) {
@@ -428,7 +444,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
               opacity: 0.98,
             });
           }
-          signatureField.setText('');
+          if (signatureTextField) signatureTextField.setText('');
         }
       } catch {}
       form.updateFieldAppearances(font);

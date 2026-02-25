@@ -68,6 +68,24 @@ function pickValue(values: Record<string, string>, candidates: string[]): string
   return '';
 }
 
+function getFieldByCandidates(form: any, candidates: string[]): { name: string; field: any } | null {
+  const fields = form.getFields();
+  for (const f of fields) {
+    const name = String(f.getName() || '');
+    if (candidates.includes(name)) return { name, field: f };
+  }
+  for (const f of fields) {
+    const name = String(f.getName() || '');
+    const normalized = normalizeFieldName(name);
+    const matched = candidates.some((c) => {
+      const cn = normalizeFieldName(c);
+      return cn && (normalized.includes(cn) || cn.includes(normalized));
+    });
+    if (matched) return { name, field: f };
+  }
+  return null;
+}
+
 export default function PublicSign() {
   const { token } = useParams();
   const navigate = useNavigate();
@@ -191,7 +209,6 @@ export default function PublicSign() {
               // Fall back to TimesRomanItalic if custom font fails.
             }
             try {
-              const signatureField = form.getTextField(signatureFieldName);
               const sigText = valOrSig(
                 pickValue(previewValues, [
                   signatureFieldName,
@@ -203,11 +220,27 @@ export default function PublicSign() {
                   'Signed By',
                 ])
               );
-              signatureField.setText(sigText);
-              signatureField.updateAppearances(signatureFont);
-              signatureField.setFontSize(18);
+              const signatureFieldMatch = getFieldByCandidates(form, [
+                signatureFieldName,
+                'Signature_es_:signatureblock',
+                'Signature',
+                'SignerSignature',
+                'Signer Signature',
+                'SignedBy',
+                'Signed By',
+              ]);
+              if (!signatureFieldMatch) throw new Error('No signature field found');
+              let signatureTextField: any = null;
+              try {
+                signatureTextField = form.getTextField(signatureFieldMatch.name);
+                signatureTextField.setText(sigText);
+                signatureTextField.updateAppearances(signatureFont);
+                signatureTextField.setFontSize(18);
+              } catch {
+                // Signature can be a PDFSignature field; draw visual text on widget area.
+              }
               if (sigText) {
-                const widgets = ((signatureField as any)?.acroField?.getWidgets?.() || []) as any[];
+                const widgets = ((signatureFieldMatch.field as any)?.acroField?.getWidgets?.() || []) as any[];
                 const pages = pdf.getPages();
                 const fallbackPage = pages[2] || pages[pages.length - 1];
                 for (const widget of widgets) {
@@ -230,7 +263,7 @@ export default function PublicSign() {
                     opacity: 0.98,
                   });
                 }
-                signatureField.setText('');
+                if (signatureTextField) signatureTextField.setText('');
               }
             } catch {
               // Signature field might not exist on all templates.
