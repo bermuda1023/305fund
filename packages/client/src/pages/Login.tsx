@@ -8,6 +8,7 @@ export default function Login() {
   const [loginRole, setLoginRole] = useState<'gp' | 'lp'>('gp');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showWakeHint, setShowWakeHint] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
 
@@ -21,6 +22,15 @@ export default function Login() {
       // ignore
     }
   }, []);
+
+  useEffect(() => {
+    if (!loading) {
+      setShowWakeHint(false);
+      return;
+    }
+    const t = window.setTimeout(() => setShowWakeHint(true), 2000);
+    return () => window.clearTimeout(t);
+  }, [loading]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -100,6 +110,11 @@ export default function Login() {
           <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: '100%', justifyContent: 'center' }}>
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
+          {loading && showWakeHint ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem', marginTop: '0.55rem' }}>
+              Server may be waking up. This can take a few extra seconds on free hosting.
+            </div>
+          ) : null}
         </form>
       </div>
     </div>

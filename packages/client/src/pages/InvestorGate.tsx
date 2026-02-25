@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { publicPost } from '../lib/publicApi';
 
 function buildRedirectUrl(targetUrl: string, investorAccessToken: string) {
@@ -16,6 +16,16 @@ export default function InvestorGate() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
+  const [showWakeHint, setShowWakeHint] = useState(false);
+
+  useEffect(() => {
+    if (!unlocking) {
+      setShowWakeHint(false);
+      return;
+    }
+    const t = window.setTimeout(() => setShowWakeHint(true), 2000);
+    return () => window.clearTimeout(t);
+  }, [unlocking]);
 
   return (
     <div style={{ maxWidth: 720, margin: '0 auto', padding: '1.25rem' }}>
@@ -82,6 +92,11 @@ export default function InvestorGate() {
             >
               {unlocking ? 'Unlocking...' : 'Unlock and Continue'}
             </button>
+            {unlocking && showWakeHint ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem', marginTop: '0.55rem' }}>
+                Server may be waking up. This can take a few extra seconds on free hosting.
+              </div>
+            ) : null}
           </div>
         </div>
       )}
