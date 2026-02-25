@@ -67,6 +67,16 @@ async function readConfiguredInvestorNda(): Promise<{ bytes: Buffer; filename: s
   return { bytes, filename };
 }
 
+function configuredNdaStorageFilePath(): { filePath: string; filename: string } | null {
+  const storageKey = String(process.env.INVESTOR_NDA_STORAGE_KEY || '').trim();
+  if (!storageKey) return null;
+  return {
+    // Point documents.file_path directly at the configured storage object.
+    filePath: `/api/files/${encodeURIComponent(storageKey)}`,
+    filename: path.basename(storageKey) || 'nda.pdf',
+  };
+}
+
 async function ensureInvestorNdaDocument(db: ReturnType<typeof getDb>) {
   const existing = db.prepare(`
     SELECT id, file_path, file_type, requires_signature
@@ -75,6 +85,39 @@ async function ensureInvestorNdaDocument(db: ReturnType<typeof getDb>) {
     ORDER BY id DESC
     LIMIT 1
   `).get() as any;
+
+  const configuredStorage = configuredNdaStorageFilePath();
+  if (configuredStorage) {
+    if (existing?.id) {
+      db.prepare(`
+        UPDATE documents
+        SET name = ?, file_path = ?, file_type = ?, requires_signature = 1, uploaded_by = ?, signed_at = NULL
+        WHERE id = ?
+      `).run(
+        configuredStorage.filename,
+        configuredStorage.filePath,
+        'application/pdf',
+        'system',
+        Number(existing.id)
+      );
+      return { documentId: Number(existing.id) };
+    }
+
+    const inserted = db.prepare(`
+      INSERT INTO documents (parent_id, parent_type, name, category, file_path, file_type, requires_signature, uploaded_by)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+    `).run(
+      0,
+      'fund',
+      configuredStorage.filename,
+      'nda',
+      configuredStorage.filePath,
+      'application/pdf',
+      'system'
+    );
+    return { documentId: Number(inserted.lastInsertRowid) };
+  }
+
   if (existing?.id && String(existing.file_type || '').includes('pdf') && Number(existing.requires_signature) === 1) {
     return { documentId: Number(existing.id) };
   }
