@@ -38,7 +38,7 @@ interface CapitalCallItem {
 }
 
 interface Performance {
-  fundIRR: number;
+  fundIRR: number | null;
   fundMOIC: number;
   unitsOwned: number;
   ownershipPct: number;
@@ -960,6 +960,7 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
   });
 
   const unfunded = (account?.commitment ?? 0) - (account?.called_capital ?? 0);
+  const canShowIrr = String(account?.status || '').toLowerCase() === 'active' && (account?.called_capital ?? 0) > 0;
 
   const capitalPie = account ? [
     { name: 'Called', value: account.called_capital },
@@ -1036,7 +1037,9 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
           <div className="metrics-grid" style={{ marginBottom: 0 }}>
             <div className="metric-card">
               <div className="metric-label">Fund IRR</div>
-              <div className="metric-value teal">{performance ? `${(performance.fundIRR * 100).toFixed(1)}%` : '—'}</div>
+              <div className="metric-value teal">
+                {canShowIrr && performance?.fundIRR != null ? `${(performance.fundIRR * 100).toFixed(1)}%` : '—'}
+              </div>
             </div>
             <div className="metric-card">
               <div className="metric-label">Fund MOIC</div>
@@ -1231,7 +1234,7 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
         <div className="metrics-grid" style={{ marginBottom: 0 }}>
           <div className="metric-card">
             <div className="metric-label">LP IRR</div>
-            <div className="metric-value teal">{marks?.irr != null ? `${(marks.irr * 100).toFixed(1)}%` : '—'}</div>
+              <div className="metric-value teal">{canShowIrr && marks?.irr != null ? `${(marks.irr * 100).toFixed(1)}%` : '—'}</div>
           </div>
           <div className="metric-card">
             <div className="metric-label">LP MOIC</div>

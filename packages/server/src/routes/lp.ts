@@ -407,6 +407,7 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
     res.status(404).json({ error: 'No LP account found' });
     return;
   }
+  const isActive = String(account.status || '').toLowerCase() === 'active';
 
   const txns = db.prepare(`
     SELECT id, type, amount, date, notes
@@ -460,14 +461,17 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
   const moic = totalContributed > 0 ? totalDistributed / totalContributed : 0;
 
   let irr: number | null = null;
-  try {
-    const hasPos = irrFlows.some((f) => f.amount > 0);
-    const hasNeg = irrFlows.some((f) => f.amount < 0);
-    if (irrFlows.length >= 2 && hasPos && hasNeg) {
-      irr = xirr(irrFlows);
+  const hasFundedCapital = Number(account.called_capital || 0) > 0;
+  if (isActive && hasFundedCapital) {
+    try {
+      const hasPos = irrFlows.some((f) => f.amount > 0);
+      const hasNeg = irrFlows.some((f) => f.amount < 0);
+      if (irrFlows.length >= 2 && hasPos && hasNeg) {
+        irr = xirr(irrFlows);
+      }
+    } catch {
+      irr = null;
     }
-  } catch {
-    irr = null;
   }
 
   // --- FRED-based NAV marks (quarterly + straight-line interpolation) ---
@@ -649,6 +653,17 @@ router.get('/documents/:id/download', requireAuth, requireAnyRole, async (req: R
 router.get('/performance', requireAuth, requireAnyRole, (req: Request, res: Response) => {
   // Return high-level fund metrics (no GP-specific detail)
   const db = getDb();
+  const account = db.prepare(`
+    SELECT id, status, called_capital
+    FROM lp_accounts
+    WHERE user_id = ?
+  `).get(req.user!.userId) as any;
+  if (!account) {
+    res.status(404).json({ error: 'No LP account found' });
+    return;
+  }
+  const isActive = String(account.status || '').toLowerCase() === 'active';
+  const hasFundedCapital = Number(account.called_capital || 0) > 0;
   const portfolio = db.prepare(`
     SELECT
       COUNT(*) as units,
@@ -661,7 +676,7 @@ router.get('/performance', requireAuth, requireAnyRole, (req: Request, res: Resp
   `).get() as any;
 
   let fundMOIC = 0;
-  let fundIRR = 0;
+  let fundIRR: number | null = null;
   let projectedNetProfit = 0;
   let projectedExitEquity = 0;
 
@@ -710,10 +725,12 @@ router.get('/performance', requireAuth, requireAnyRole, (req: Request, res: Resp
         .filter((cf) => Math.abs(cf.netCashFlow || 0) > 0.0001)
         .map((cf) => ({ date: new Date(cf.date), amount: cf.netCashFlow }));
 
-      try {
-        fundIRR = xirr(xirrFlows);
-      } catch {
-        fundIRR = 0;
+      if (isActive && hasFundedCapital) {
+        try {
+          fundIRR = xirr(xirrFlows);
+        } catch {
+          fundIRR = null;
+        }
       }
     }
   }
