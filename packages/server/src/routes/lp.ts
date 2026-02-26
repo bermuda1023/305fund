@@ -753,12 +753,20 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
     return;
   }
 
+  let reactivatingLpId: number | null = null;
+  let reactivatingLpNotes: string | null = null;
   const existingUser = db.prepare('SELECT id, role FROM users WHERE email = ?').get(normalizedEmail) as any;
   if (existingUser) {
-    const existingLp = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(existingUser.id) as any;
+    const existingLp = db.prepare('SELECT id, status, notes FROM lp_accounts WHERE user_id = ? ORDER BY id DESC LIMIT 1').get(existingUser.id) as any;
     if (existingLp) {
-      res.status(409).json({ error: `An LP with email ${normalizedEmail} already exists.` });
-      return;
+      const status = String(existingLp.status || '').toLowerCase();
+      if (status === 'inactive') {
+        reactivatingLpId = Number(existingLp.id);
+        reactivatingLpNotes = existingLp.notes ? String(existingLp.notes) : null;
+      } else {
+        res.status(409).json({ error: `An LP with email ${normalizedEmail} already exists.` });
+        return;
+      }
     }
     if (String(existingUser.role || '').toLowerCase() !== 'lp') {
       res.status(409).json({ error: `Email ${normalizedEmail} already belongs to a non-LP user.` });
@@ -786,17 +794,35 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
       userId = Number(userResult.lastInsertRowid);
     }
 
-    // Calculate ownership pct (stored as fraction, e.g. 0.25 = 25%)
-    const totalCommitment = (db.prepare(
-      "SELECT COALESCE(SUM(commitment), 0) as total FROM lp_accounts WHERE status != 'inactive'"
-    ).get() as any).total + commitmentNum;
-    const ownershipPct = commitmentNum / totalCommitment;
-
-    // Create LP account
-    const lpResult = db.prepare(`
-      INSERT INTO lp_accounts (user_id, name, entity_name, email, phone, commitment, ownership_pct, status, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-    `).run(userId, cleanName, entityName, normalizedEmail, phone, commitmentNum, ownershipPct, notes);
+    let lpId: number;
+    if (reactivatingLpId) {
+      const reactivatedStamp = `[${new Date().toISOString()}] LP reactivated during onboarding`;
+      const mergedNotes = [notes, reactivatingLpNotes, reactivatedStamp].filter(Boolean).join('\n');
+      db.prepare(`
+        UPDATE lp_accounts
+        SET user_id = ?,
+            name = ?,
+            entity_name = ?,
+            email = ?,
+            phone = ?,
+            commitment = ?,
+            status = 'pending',
+            notes = ?
+        WHERE id = ?
+      `).run(userId, cleanName, entityName || null, normalizedEmail, phone || null, commitmentNum, mergedNotes || null, reactivatingLpId);
+      lpId = Number(reactivatingLpId);
+    } else {
+      // Calculate ownership pct (stored as fraction, e.g. 0.25 = 25%)
+      const totalCommitment = (db.prepare(
+        "SELECT COALESCE(SUM(commitment), 0) as total FROM lp_accounts WHERE status != 'inactive'"
+      ).get() as any).total + commitmentNum;
+      const ownershipPct = commitmentNum / totalCommitment;
+      const lpResult = db.prepare(`
+        INSERT INTO lp_accounts (user_id, name, entity_name, email, phone, commitment, ownership_pct, status, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      `).run(userId, cleanName, entityName, normalizedEmail, phone, commitmentNum, ownershipPct, notes);
+      lpId = Number(lpResult.lastInsertRowid);
+    }
 
     // Recalculate all LP ownership percentages (inactive LPs do not dilute active ones)
     recalcLpOwnershipPct(db);
@@ -815,11 +841,12 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
         `If you were not expecting this email, please contact support.`,
     });
 
-    res.status(201).json({
-      id: lpResult.lastInsertRowid,
+    res.status(reactivatingLpId ? 200 : 201).json({
+      id: lpId,
       userId,
       tempPassword, // Return so GP can share with LP
       emailSent,
+      reactivated: !!reactivatingLpId,
     });
   } catch (err: any) {
     if (String(err?.code || '') === 'SQLITE_CONSTRAINT_UNIQUE') {
