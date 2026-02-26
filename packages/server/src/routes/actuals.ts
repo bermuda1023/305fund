@@ -343,9 +343,11 @@ function recalcLpCalledCapital(db: ReturnType<typeof getDb>, lpAccountId: number
   db.prepare(`
     UPDATE lp_accounts
     SET called_capital = COALESCE((
-      SELECT SUM(amount)
-      FROM capital_transactions
-      WHERE lp_account_id = lp_accounts.id AND type = 'call'
+      SELECT SUM(cci.amount)
+      FROM capital_call_items cci
+      JOIN capital_calls cc ON cc.id = cci.capital_call_id
+      WHERE cci.lp_account_id = lp_accounts.id
+        AND cc.status IN ('sent', 'partially_received', 'completed')
     ), 0)
     WHERE id = ?
   `).run(lpAccountId);
@@ -1427,7 +1429,7 @@ router.post('/transactions/:id/split', (req: Request, res: Response) => {
         lp_account_id, capital_call_item_id,
         date, amount, category, description, source_file, statement_ref, receipt_document_id, reconciled
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
       )
     `).run(
       Number(base.bank_transaction_id),

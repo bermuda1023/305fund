@@ -27,10 +27,26 @@ function recalcCalledCapitalForLp(db: ReturnType<typeof getDb>, lpAccountId: num
       FROM capital_call_items cci
       JOIN capital_calls cc ON cc.id = cci.capital_call_id
       WHERE cci.lp_account_id = lp_accounts.id
-        AND cc.status IN ('draft', 'sent', 'partially_received', 'completed')
+        AND cc.status IN ('sent', 'partially_received', 'completed')
     ), 0)
     WHERE id = ?
   `).run(lpAccountId);
+}
+
+function recalcLpOwnershipPct(db: ReturnType<typeof getDb>) {
+  db.prepare(`
+    WITH totals AS (
+      SELECT COALESCE(SUM(commitment), 0) as total_commitment
+      FROM lp_accounts
+      WHERE status != 'inactive'
+    )
+    UPDATE lp_accounts
+    SET ownership_pct = CASE
+      WHEN status = 'inactive' THEN 0
+      WHEN (SELECT total_commitment FROM totals) <= 0 THEN 0
+      ELSE commitment / (SELECT total_commitment FROM totals)
+    END
+  `).run();
 }
 
 function rowToAssumptions(row: any): FundAssumptions {
@@ -151,6 +167,14 @@ function fmtMoney(value: number) {
   });
 }
 
+function storageKeyFromFilePath(filePath: string): string | null {
+  const fp = String(filePath || '').trim();
+  if (!fp) return null;
+  if (fp.startsWith('/api/files/')) return decodeURIComponent(fp.replace('/api/files/', ''));
+  if (fp.startsWith('/uploads/')) return fp.replace('/uploads/', '');
+  return fp;
+}
+
 function renderMergeTemplate(tpl: string, vars: Record<string, string>) {
   let out = tpl;
   for (const [k, v] of Object.entries(vars)) {
@@ -172,7 +196,7 @@ router.get('/account', requireAuth, requireAnyRole, (req: Request, res: Response
         FROM capital_call_items cci
         JOIN capital_calls cc ON cc.id = cci.capital_call_id
         WHERE cci.lp_account_id = lpa.id
-          AND cc.status IN ('draft', 'sent', 'partially_received', 'completed')
+          AND cc.status IN ('sent', 'partially_received', 'completed')
       ), 0) as called_capital
     FROM lp_accounts lpa
     WHERE lpa.user_id = ?
@@ -201,6 +225,97 @@ router.get('/transactions', requireAuth, requireAnyRole, (req: Request, res: Res
     ORDER BY date DESC
   `).all(account.id);
   res.json(transactions);
+});
+
+// GET /api/lp/ledger - Read-only fund ledger with allocation metadata
+router.get('/ledger', requireAuth, requireAnyRole, (req: Request, res: Response) => {
+  const db = getDb();
+  const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
+  if (!account) {
+    res.status(404).json({ error: 'No LP account found' });
+    return;
+  }
+  const limitRaw = Number(req.query.limit ?? 250);
+  const offsetRaw = Number(req.query.offset ?? 0);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(1000, Math.floor(limitRaw))) : 250;
+  const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
+  const category = String(req.query.category || '').trim();
+  const from = String(req.query.from || '').trim();
+  const to = String(req.query.to || '').trim();
+  const search = String(req.query.search || '').trim();
+
+  let sql = `
+    SELECT
+      cfa.id,
+      cfa.date,
+      cfa.amount,
+      cfa.category,
+      cfa.description,
+      cfa.reconciled,
+      cfa.statement_ref,
+      cfa.source_file,
+      cfa.portfolio_unit_id,
+      cfa.entity_id,
+      cfa.unit_renovation_id,
+      cfa.lp_account_id,
+      cfa.capital_call_item_id,
+      bt.bank_upload_id,
+      bupload.filename as upload_filename,
+      bu.unit_number,
+      e.name as entity_name,
+      ur.description as renovation_description,
+      lpa.name as lp_name,
+      cci.capital_call_id,
+      cc.call_number,
+      CASE
+        WHEN cfa.portfolio_unit_id IS NOT NULL THEN 'unit'
+        WHEN cfa.entity_id IS NOT NULL THEN 'entity'
+        WHEN cfa.lp_account_id IS NOT NULL THEN 'lp'
+        ELSE 'fund'
+      END as assignment_scope
+    FROM cash_flow_actuals cfa
+    LEFT JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+    LEFT JOIN bank_uploads bupload ON bupload.id = bt.bank_upload_id
+    LEFT JOIN portfolio_units pu ON pu.id = cfa.portfolio_unit_id
+    LEFT JOIN building_units bu ON bu.id = pu.building_unit_id
+    LEFT JOIN entities e ON e.id = cfa.entity_id
+    LEFT JOIN unit_renovations ur ON ur.id = cfa.unit_renovation_id
+    LEFT JOIN lp_accounts lpa ON lpa.id = cfa.lp_account_id
+    LEFT JOIN capital_call_items cci ON cci.id = cfa.capital_call_item_id
+    LEFT JOIN capital_calls cc ON cc.id = cci.capital_call_id
+    WHERE cfa.reconciled = 1
+      AND (cfa.lp_account_id IS NULL OR cfa.lp_account_id = ?)
+  `;
+  const params: any[] = [Number(account.id)];
+  if (category) {
+    sql += ` AND cfa.category = ?`;
+    params.push(category);
+  }
+  if (from) {
+    sql += ` AND cfa.date >= ?`;
+    params.push(from);
+  }
+  if (to) {
+    sql += ` AND cfa.date <= ?`;
+    params.push(to);
+  }
+  if (search) {
+    sql += ` AND (
+      COALESCE(cfa.description, '') LIKE ? OR
+      COALESCE(bu.unit_number, '') LIKE ? OR
+      COALESCE(e.name, '') LIKE ? OR
+      COALESCE(ur.description, '') LIKE ? OR
+      COALESCE(lpa.name, '') LIKE ?
+    )`;
+    const s = `%${search}%`;
+    params.push(s, s, s, s, s);
+  }
+
+  sql += ` ORDER BY cfa.date DESC, cfa.id DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const rows = db.prepare(sql).all(...params);
+  res.json(rows);
 });
 
 // GET /api/lp/capital-calls - My pending/historical calls
@@ -442,7 +557,7 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
     }
   }
 
-  const ownershipFrac = Number(account.ownership_pct || 0) / 100;
+  const ownershipFrac = Number(account.ownership_pct || 0);
 
   // Recompute cumulative fields across the union so the table is stable even when a month has no cash movement.
   let cumC = 0;
@@ -518,7 +633,9 @@ router.get('/documents/:id/download', requireAuth, requireAnyRole, async (req: R
   }
 
   try {
-    const file = await readStoredFile(String(doc.file_path));
+    const storageKey = storageKeyFromFilePath(String(doc.file_path || ''));
+    if (!storageKey) return res.status(500).json({ error: 'Unsupported document storage path' });
+    const file = await readStoredFile(storageKey);
     res.setHeader('Content-Type', file.contentType || doc.file_type || 'application/octet-stream');
     // Force download; viewing inline is still possible if the browser supports it.
     res.setHeader('Content-Disposition', `attachment; filename="${String(doc.name || 'document').replace(/"/g, '')}"`);
@@ -654,14 +771,24 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
     const bcrypt = require('bcryptjs');
     const tempPassword = Math.random().toString(36).slice(2, 10);
     const hash = bcrypt.hashSync(tempPassword, 10);
+    let userId: number;
+    if (existingUser?.id) {
+      db.prepare(`
+        UPDATE users
+        SET password_hash = ?, role = 'lp', name = ?, must_change_password = 1
+        WHERE id = ?
+      `).run(hash, cleanName, Number(existingUser.id));
+      userId = Number(existingUser.id);
+    } else {
+      const userResult = db.prepare(
+        'INSERT INTO users (email, password_hash, role, name, must_change_password) VALUES (?, ?, ?, ?, 1)'
+      ).run(normalizedEmail, hash, 'lp', cleanName);
+      userId = Number(userResult.lastInsertRowid);
+    }
 
-    const userResult = db.prepare(
-      'INSERT INTO users (email, password_hash, role, name, must_change_password) VALUES (?, ?, ?, ?, 1)'
-    ).run(normalizedEmail, hash, 'lp', cleanName);
-
-    // Calculate ownership pct
+    // Calculate ownership pct (stored as fraction, e.g. 0.25 = 25%)
     const totalCommitment = (db.prepare(
-      'SELECT COALESCE(SUM(commitment), 0) as total FROM lp_accounts'
+      "SELECT COALESCE(SUM(commitment), 0) as total FROM lp_accounts WHERE status != 'inactive'"
     ).get() as any).total + commitmentNum;
     const ownershipPct = commitmentNum / totalCommitment;
 
@@ -669,12 +796,10 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
     const lpResult = db.prepare(`
       INSERT INTO lp_accounts (user_id, name, entity_name, email, phone, commitment, ownership_pct, status, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-    `).run(userResult.lastInsertRowid, cleanName, entityName, normalizedEmail, phone, commitmentNum, ownershipPct, notes);
+    `).run(userId, cleanName, entityName, normalizedEmail, phone, commitmentNum, ownershipPct, notes);
 
-    // Recalculate all LP ownership percentages
-    db.prepare(`
-      UPDATE lp_accounts SET ownership_pct = commitment / (SELECT SUM(commitment) FROM lp_accounts)
-    `).run();
+    // Recalculate all LP ownership percentages (inactive LPs do not dilute active ones)
+    recalcLpOwnershipPct(db);
 
     let emailSent = false;
     const fundName = String(process.env.FUND_NAME || '305 Opportunities Fund');
@@ -692,7 +817,7 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
 
     res.status(201).json({
       id: lpResult.lastInsertRowid,
-      userId: userResult.lastInsertRowid,
+      userId,
       tempPassword, // Return so GP can share with LP
       emailSent,
     });
@@ -716,7 +841,7 @@ router.get('/investors', requireAuth, requireGP, (req: Request, res: Response) =
         FROM capital_call_items cci
         JOIN capital_calls cc ON cc.id = cci.capital_call_id
         WHERE cci.lp_account_id = lpa.id
-          AND cc.status IN ('draft', 'sent', 'partially_received', 'completed')
+          AND cc.status IN ('sent', 'partially_received', 'completed')
       ), 0) as called_capital
     FROM lp_accounts lpa
     ORDER BY
@@ -751,6 +876,7 @@ router.patch('/investors/:id/status', requireAuth, requireGP, (req: Request, res
   }
 
   db.prepare('UPDATE lp_accounts SET status = ? WHERE id = ?').run(status, investorId);
+  recalcLpOwnershipPct(db);
   res.json({ success: true, id: investorId, status });
 });
 
@@ -794,6 +920,7 @@ router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res:
           notes = ?
       WHERE id = ?
     `).run(nextNotes, investorId);
+    recalcLpOwnershipPct(db);
 
     res.json({ success: true, id: investorId, status: 'inactive' });
   } catch (err: any) {
@@ -1055,7 +1182,11 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
 // PUT /api/lp/capital-calls/:callId/items/:itemId/received - Mark as received
 router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, requireGP, (req: Request, res: Response) => {
   const db = getDb();
-  const { callId, itemId } = req.params;
+  const callIdNum = Number(req.params.callId);
+  const itemIdNum = Number(req.params.itemId);
+  if (!Number.isFinite(callIdNum) || callIdNum <= 0 || !Number.isFinite(itemIdNum) || itemIdNum <= 0) {
+    return res.status(400).json({ error: 'Invalid callId or itemId' });
+  }
   const {
     receivedAmount,
     receiptReference,
@@ -1066,28 +1197,51 @@ router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, require
     bankTxnId?: string;
   };
 
-  // Also create a capital transaction
-  const item = db.prepare('SELECT * FROM capital_call_items WHERE id = ?').get(itemId) as any;
-  if (item) {
-    const amount = Number(receivedAmount ?? item.amount);
-    const isPartial = amount < Number(item.amount);
-    db.prepare(`
-      UPDATE capital_call_items
-      SET status = ?,
-          received_at = CURRENT_TIMESTAMP,
-          received_amount = ?,
-          receipt_reference = COALESCE(?, receipt_reference),
-          bank_txn_id = COALESCE(?, bank_txn_id)
-      WHERE id = ?
-    `).run(isPartial ? 'pending' : 'received', amount, receiptReference || null, bankTxnId || null, itemId);
+  const item = db.prepare(`
+    SELECT *
+    FROM capital_call_items
+    WHERE id = ? AND capital_call_id = ?
+  `).get(itemIdNum, callIdNum) as any;
+  if (!item) return res.status(404).json({ error: 'Capital call item not found for this call' });
 
+  const amount = Number(receivedAmount ?? item.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'receivedAmount must be a positive number' });
+  }
+  const expected = Number(item.amount || 0);
+  const isPartial = amount < expected;
+  db.prepare(`
+    UPDATE capital_call_items
+    SET status = ?,
+        received_at = CURRENT_TIMESTAMP,
+        received_amount = ?,
+        receipt_reference = COALESCE(?, receipt_reference),
+        bank_txn_id = COALESCE(?, bank_txn_id)
+    WHERE id = ?
+  `).run(isPartial ? 'pending' : 'received', amount, receiptReference || null, bankTxnId || null, itemIdNum);
+
+  // Idempotent posting: keep a single capital transaction row per call item.
+  const existingTxn = db.prepare(`
+    SELECT id
+    FROM capital_transactions
+    WHERE capital_call_item_id = ? AND type = 'call'
+    ORDER BY id ASC
+    LIMIT 1
+  `).get(itemIdNum) as any;
+  if (existingTxn?.id) {
+    db.prepare(`
+      UPDATE capital_transactions
+      SET amount = ?, date = date('now'), notes = 'Capital call received'
+      WHERE id = ?
+    `).run(amount, Number(existingTxn.id));
+  } else {
     db.prepare(`
       INSERT INTO capital_transactions (lp_account_id, capital_call_item_id, type, amount, date, notes)
       VALUES (?, ?, 'call', ?, date('now'), 'Capital call received')
     `).run(item.lp_account_id, item.id, amount);
-
-    recalcCalledCapitalForLp(db, Number(item.lp_account_id));
   }
+
+  recalcCalledCapitalForLp(db, Number(item.lp_account_id));
 
   const agg = db.prepare(`
     SELECT
@@ -1095,13 +1249,13 @@ router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, require
       COUNT(*) as total_count
     FROM capital_call_items
     WHERE capital_call_id = ?
-  `).get(callId) as any;
+  `).get(callIdNum) as any;
   if (agg) {
     const nextStatus =
       agg.received_count === 0 ? 'sent' :
       agg.received_count < agg.total_count ? 'partially_received' :
       'completed';
-    db.prepare(`UPDATE capital_calls SET status = ? WHERE id = ?`).run(nextStatus, callId);
+    db.prepare(`UPDATE capital_calls SET status = ? WHERE id = ?`).run(nextStatus, callIdNum);
   }
 
   res.json({ success: true });

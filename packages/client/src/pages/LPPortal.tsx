@@ -129,8 +129,26 @@ interface LPMarksResponse {
   };
 }
 
+interface LedgerRow {
+  id: number;
+  date: string;
+  amount: number;
+  category: string;
+  description: string | null;
+  reconciled: number;
+  statement_ref?: string | null;
+  unit_number?: string | null;
+  entity_name?: string | null;
+  renovation_description?: string | null;
+  lp_name?: string | null;
+  call_number?: number | null;
+  assignment_scope: 'unit' | 'entity' | 'lp' | 'fund';
+  upload_filename?: string | null;
+}
+
 const fmt = fmtCurrency;
 const num = fmtNumber;
+const LIVE_REFRESH_MS = 10_000;
 
 function InfoTip({ text }: { text: string }) {
   return (
@@ -175,6 +193,7 @@ function GPInvestorSection() {
   const { data: investors = [] } = useQuery<Investor[]>({
     queryKey: ['gp-investors'],
     queryFn: () => api.get('/lp/investors').then((r) => r.data),
+    refetchInterval: LIVE_REFRESH_MS,
   });
 
   const onboardMutation = useMutation({
@@ -182,6 +201,9 @@ function GPInvestorSection() {
       api.post('/lp/investors', payload).then((r) => r.data),
     onSuccess: (data: { tempPassword?: string }) => {
       queryClient.invalidateQueries({ queryKey: ['gp-investors'] });
+      queryClient.invalidateQueries({ queryKey: ['lp-account'] });
+      queryClient.invalidateQueries({ queryKey: ['lp-marks'] });
+      queryClient.invalidateQueries({ queryKey: ['lp-performance'] });
       if (data.tempPassword) {
         alert(`Investor onboarded successfully!\n\nTemporary password: ${data.tempPassword}\n\nPlease share this securely with the investor.`);
       }
@@ -367,7 +389,7 @@ function GPInvestorSection() {
                     <td>{fmt(inv.commitment)}</td>
                     <td style={{ color: 'var(--teal)' }}>{fmt(inv.called_capital)}</td>
                     <td style={{ color: 'var(--green)' }}>{fmt(inv.distributions)}</td>
-                    <td>{inv.ownership_pct.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</td>
+                    <td>{(inv.ownership_pct * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</td>
                     <td>
                       {inv.status === 'pending' ? (
                         <button
@@ -492,6 +514,7 @@ function GPCapitalCallSection() {
   const { data: capitalCalls = [] } = useQuery<AllCapitalCall[]>({
     queryKey: ['gp-capital-calls-all'],
     queryFn: () => api.get('/lp/capital-calls/all').then((r) => r.data),
+    refetchInterval: LIVE_REFRESH_MS,
   });
 
   const { data: expandedItems = [] } = useQuery<CapitalCallLineItem[]>({
@@ -499,6 +522,7 @@ function GPCapitalCallSection() {
     queryFn: () =>
       api.get(`/lp/capital-calls/${expandedCallId}/items`).then((r) => r.data),
     enabled: expandedCallId !== null,
+    refetchInterval: expandedCallId !== null ? LIVE_REFRESH_MS : false,
   });
 
   const createMutation = useMutation({
@@ -878,40 +902,61 @@ function GPCapitalCallSection() {
 
 export default function LPPortal({ adminMode = false }: { adminMode?: boolean }) {
   const { user } = useAuth();
+  const [ledgerCategory, setLedgerCategory] = useState('');
+  const [ledgerSearch, setLedgerSearch] = useState('');
 
   const { data: account } = useQuery<LPAccount>({
     queryKey: ['lp-account'],
     queryFn: () => api.get('/lp/account').then((r) => r.data),
     enabled: !adminMode,
+    refetchInterval: !adminMode ? LIVE_REFRESH_MS : false,
   });
 
   const { data: transactions = [] } = useQuery<Transaction[]>({
     queryKey: ['lp-transactions'],
     queryFn: () => api.get('/lp/transactions').then((r) => r.data),
     enabled: !adminMode,
+    refetchInterval: !adminMode ? LIVE_REFRESH_MS : false,
   });
 
   const { data: capitalCalls = [] } = useQuery<CapitalCallItem[]>({
     queryKey: ['lp-capital-calls'],
     queryFn: () => api.get('/lp/capital-calls').then((r) => r.data),
     enabled: !adminMode,
+    refetchInterval: !adminMode ? LIVE_REFRESH_MS : false,
   });
 
   const { data: performance } = useQuery<Performance>({
     queryKey: ['lp-performance'],
     queryFn: () => api.get('/lp/performance').then((r) => r.data),
+    refetchInterval: !adminMode ? LIVE_REFRESH_MS : false,
   });
 
   const { data: lpDocuments = [] } = useQuery<LPDocument[]>({
     queryKey: ['lp-documents'],
     queryFn: () => api.get('/lp/documents').then((r) => r.data),
     enabled: !adminMode,
+    refetchInterval: !adminMode ? LIVE_REFRESH_MS : false,
   });
 
   const { data: marks } = useQuery<LPMarksResponse>({
     queryKey: ['lp-marks'],
     queryFn: () => api.get('/lp/marks').then((r) => r.data),
     enabled: !adminMode,
+    refetchInterval: !adminMode ? LIVE_REFRESH_MS : false,
+  });
+  const { data: ledgerRows = [] } = useQuery<LedgerRow[]>({
+    queryKey: ['lp-ledger', ledgerCategory, ledgerSearch],
+    queryFn: () =>
+      api.get('/lp/ledger', {
+        params: {
+          limit: 300,
+          ...(ledgerCategory ? { category: ledgerCategory } : {}),
+          ...(ledgerSearch ? { search: ledgerSearch } : {}),
+        },
+      }).then((r) => r.data),
+    enabled: !adminMode,
+    refetchInterval: !adminMode ? LIVE_REFRESH_MS : false,
   });
 
   const unfunded = (account?.commitment ?? 0) - (account?.called_capital ?? 0);
@@ -979,7 +1024,7 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
             </ResponsiveContainer>
           </div>
           <div style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            Ownership: {(account?.ownership_pct ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+            Ownership: {((account?.ownership_pct ?? 0) * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
           </div>
         </div>
 
@@ -1078,6 +1123,75 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
         ) : (
           <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
             No transactions yet.
+          </div>
+        )}
+      </div>
+
+      {/* Fund Reconciliation Ledger (read-only) */}
+      <div className="card mt-4">
+        <div className="card-header">
+          <span className="card-title">Fund Reconciliation Ledger (Read-Only)</span>
+          <span className="badge badge-blue">{num(ledgerRows.length)} rows</span>
+        </div>
+        <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <input
+            className="form-input"
+            style={{ maxWidth: 260 }}
+            placeholder="Search unit/entity/description..."
+            value={ledgerSearch}
+            onChange={(e) => setLedgerSearch(e.target.value)}
+          />
+          <select
+            className="form-select"
+            style={{ maxWidth: 220 }}
+            value={ledgerCategory}
+            onChange={(e) => setLedgerCategory(e.target.value)}
+          >
+            <option value="">All categories</option>
+            <option value="rent">Rent</option>
+            <option value="hoa">HOA</option>
+            <option value="insurance">Insurance</option>
+            <option value="tax">Tax</option>
+            <option value="repair">Repair</option>
+            <option value="fund_expense">Fund Expense</option>
+            <option value="management_fee">Management Fee</option>
+            <option value="capital_call">Capital Call</option>
+            <option value="distribution">Distribution</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        {ledgerRows.length > 0 ? (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Amount</th>
+                <th>Category</th>
+                <th>Description</th>
+                <th>Assignment</th>
+                <th>Call</th>
+                <th>Reconciled</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ledgerRows.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.date}</td>
+                  <td style={{ color: r.amount >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>{fmt(r.amount)}</td>
+                  <td style={{ textTransform: 'capitalize' }}>{r.category.replaceAll('_', ' ')}</td>
+                  <td style={{ color: 'var(--text-secondary)' }}>{r.description || '—'}</td>
+                  <td style={{ color: 'var(--text-secondary)' }}>
+                    {r.unit_number ? `Unit ${r.unit_number}` : r.entity_name ? `Entity ${r.entity_name}` : r.renovation_description ? `Reno ${r.renovation_description}` : r.lp_name ? 'LP investor' : 'Fund-level'}
+                  </td>
+                  <td>{r.call_number ? `#${r.call_number}` : '—'}</td>
+                  <td>Yes</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-muted)' }}>
+            No ledger rows yet.
           </div>
         )}
       </div>
