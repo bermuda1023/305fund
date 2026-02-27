@@ -87,6 +87,16 @@ const pct = (n: number) => fmtPctRaw(n, 1);
 const num = fmtNumber;
 const asArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 
+function EmptyState({ icon, text, subtext }: { icon: string; text: string; subtext: string }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state-icon">{icon}</div>
+      <div className="empty-state-text">{text}</div>
+      <div className="empty-state-subtext">{subtext}</div>
+    </div>
+  );
+}
+
 /* ── Component ───────────────────────────────────────────────── */
 
 export default function Dashboard() {
@@ -467,9 +477,7 @@ export default function Dashboard() {
             )}
           </div>
           {expiringLeases.length === 0 ? (
-            <div style={{ padding: '1.5rem 1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-              No leases expiring in the next 90 days
-            </div>
+            <EmptyState icon="OK" text="No leases expiring in the next 90 days" subtext="Lease schedule looks stable." />
           ) : (
             <table className="data-table" style={{ width: '100%', fontSize: '0.8rem' }}>
               <thead>
@@ -515,9 +523,7 @@ export default function Dashboard() {
             )}
           </div>
           {(unreconciledTxns ?? []).length === 0 ? (
-            <div style={{ padding: '1.5rem 1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-              All transactions reconciled
-            </div>
+            <EmptyState icon="OK" text="All transactions reconciled" subtext="Nothing requires review right now." />
           ) : (
             <>
               <table className="data-table" style={{ width: '100%', fontSize: '0.8rem' }}>
@@ -564,9 +570,7 @@ export default function Dashboard() {
             )}
           </div>
           {activeCalls.length === 0 ? (
-            <div style={{ padding: '1.5rem 1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-              No pending capital calls
-            </div>
+            <EmptyState icon="OK" text="No pending capital calls" subtext="No active or draft calls at the moment." />
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '0.75rem 1rem' }}>
               {activeCalls.map((call) => {

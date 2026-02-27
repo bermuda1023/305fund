@@ -26,7 +26,7 @@
   --text-primary: #f1f5f9;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
-  --text-dim: #475569;
+  --text-dim: #6b7f99;
 
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
@@ -472,6 +472,41 @@ body {
 .badge-blue { background: var(--accent-dim); color: var(--accent-light); border-color: rgba(99,102,241,0.25); }
 .badge-gray { background: rgba(71,85,105,0.2); color: var(--text-muted); }
 
+/* Empty states */
+.empty-state {
+  padding: 1.25rem 1rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.empty-state-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-tertiary);
+  color: var(--teal-light);
+  font-size: 0.9rem;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px rgba(20, 184, 166, 0.12);
+}
+
+.empty-state-text {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.empty-state-subtext {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
 /* Login */
 .login-page {
   min-height: 100vh;
@@ -772,9 +807,17 @@ body {
     gap: 0.9rem;
   }
 
-  /* Keep wide tables usable on small screens */
+  /* Let tables reflow on mobile instead of forcing horizontal scroll */
   .data-table {
-    min-width: 700px;
+    min-width: 0;
+    table-layout: auto;
+  }
+  .data-table th,
+  .data-table td {
+    white-space: normal;
+    word-break: break-word;
+    padding: 0.55rem 0.5rem;
+    font-size: 0.72rem;
   }
   .building-grid {
     overflow-x: auto;
