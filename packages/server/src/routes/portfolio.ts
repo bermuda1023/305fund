@@ -16,7 +16,42 @@ const usePostgresPortfolio = () => isPostgresPrimaryMode() || usePostgresReads()
 // All portfolio routes require GP auth
 router.use(requireAuth, requireGP);
 
-function syncFundOwnedContractFields(db: ReturnType<typeof getDb>, portfolioUnitId: number) {
+async function syncFundOwnedContractFields(db: ReturnType<typeof getDb>, portfolioUnitId: number) {
+  if (usePostgresPortfolio()) {
+    await withPostgresClient(async (client) => {
+      const rowResult = await client.query(
+        `SELECT
+           pu.id as portfolio_unit_id,
+           pu.building_unit_id,
+           e.name as entity_name,
+           t.name as tenant_name
+         FROM portfolio_units pu
+         LEFT JOIN entities e ON pu.entity_id = e.id
+         LEFT JOIN tenants t ON t.portfolio_unit_id = pu.id AND t.status IN ('active', 'month_to_month')
+         WHERE pu.id = $1
+         ORDER BY t.id DESC
+         LIMIT 1`,
+        [portfolioUnitId]
+      );
+      const row = rowResult.rows[0] as any;
+      if (!row) return;
+      await client.query(
+        `UPDATE building_units
+         SET
+           is_fund_owned = 1,
+           consensus_status = 'signed',
+           listing_agreement = 'signed',
+           resident_name = COALESCE($1, resident_name),
+           resident_type = 'investment',
+           owner_name = COALESCE($2, owner_name),
+           owner_company = COALESCE($3, owner_company)
+         WHERE id = $4`,
+        [row.tenant_name || null, row.entity_name || null, row.entity_name || null, row.building_unit_id]
+      );
+    });
+    return;
+  }
+
   const row = db.prepare(`
     SELECT
       pu.id as portfolio_unit_id,
@@ -316,7 +351,7 @@ router.get('/summary', async (req: Request, res: Response) => {
 });
 
 // POST /api/portfolio/units - Add acquired unit
-router.post('/units', (req: Request, res: Response) => {
+router.post('/units', async (req: Request, res: Response) => {
   const db = getDb();
   const {
     buildingUnitId, entityId, purchaseDate, purchasePrice,
@@ -361,13 +396,13 @@ router.post('/units', (req: Request, res: Response) => {
   );
 
   // Mark building unit as fund-owned and force signed investment posture in contracts view
-  syncFundOwnedContractFields(db, Number(result.lastInsertRowid));
+  await syncFundOwnedContractFields(db, Number(result.lastInsertRowid));
 
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
 // PUT /api/portfolio/units/:id - Update unit
-router.put('/units/:id', (req: Request, res: Response) => {
+router.put('/units/:id', async (req: Request, res: Response) => {
   const db = getDb();
   const { id } = req.params;
   const fields = req.body;
@@ -400,7 +435,7 @@ router.put('/units/:id', (req: Request, res: Response) => {
 
   values.push(id);
   db.prepare(`UPDATE portfolio_units SET ${updates.join(', ')} WHERE id = ?`).run(...values);
-  syncFundOwnedContractFields(db, Number(id));
+  await syncFundOwnedContractFields(db, Number(id));
   res.json({ success: true });
 });
 
@@ -478,7 +513,7 @@ router.get('/units/:id/tenants', (req: Request, res: Response) => {
 });
 
 // POST /api/portfolio/units/:id/tenants
-router.post('/units/:id/tenants', (req: Request, res: Response) => {
+router.post('/units/:id/tenants', async (req: Request, res: Response) => {
   const db = getDb();
   const { name, email, phone, leaseStart, leaseEnd, monthlyRent, securityDeposit = 0, notes, rentDueDay = 1 } = req.body;
 
@@ -487,12 +522,12 @@ router.post('/units/:id/tenants', (req: Request, res: Response) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
   `).run(req.params.id, name, email, phone, leaseStart, leaseEnd, clampDay(Number(rentDueDay || 1)), monthlyRent, securityDeposit, notes);
 
-  syncFundOwnedContractFields(db, Number(req.params.id));
+  await syncFundOwnedContractFields(db, Number(req.params.id));
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
 // PUT /api/portfolio/tenants/:id  (FIXED: was /../tenants/:id)
-router.put('/tenants/:id', (req: Request, res: Response) => {
+router.put('/tenants/:id', async (req: Request, res: Response) => {
   const db = getDb();
   const { id } = req.params;
   const { name, email, phone, leaseStart, leaseEnd, rentDueDay, monthlyRent, securityDeposit, status, notes } = req.body;
@@ -514,18 +549,18 @@ router.put('/tenants/:id', (req: Request, res: Response) => {
   `).run(name, email, phone, leaseStart, leaseEnd, rentDueDay ? clampDay(Number(rentDueDay)) : null, monthlyRent, securityDeposit, status, notes, id);
 
   if (tenantRow?.portfolio_unit_id) {
-    syncFundOwnedContractFields(db, Number(tenantRow.portfolio_unit_id));
+    await syncFundOwnedContractFields(db, Number(tenantRow.portfolio_unit_id));
   }
   res.json({ success: true });
 });
 
 // DELETE /api/portfolio/tenants/:id
-router.delete('/tenants/:id', (req: Request, res: Response) => {
+router.delete('/tenants/:id', async (req: Request, res: Response) => {
   const db = getDb();
   const tenantRow = db.prepare('SELECT portfolio_unit_id FROM tenants WHERE id = ?').get(req.params.id) as any;
   db.prepare('DELETE FROM tenants WHERE id = ?').run(req.params.id);
   if (tenantRow?.portfolio_unit_id) {
-    syncFundOwnedContractFields(db, Number(tenantRow.portfolio_unit_id));
+    await syncFundOwnedContractFields(db, Number(tenantRow.portfolio_unit_id));
   }
   res.json({ success: true });
 });
