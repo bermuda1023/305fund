@@ -264,13 +264,7 @@ router.get('/transactions', requireAuth, requireAnyRole, async (req: Request, re
 });
 
 // GET /api/lp/ledger - Read-only fund ledger with allocation metadata
-router.get('/ledger', requireAuth, requireAnyRole, (req: Request, res: Response) => {
-  const db = getDb();
-  const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
-  if (!account) {
-    res.status(404).json({ error: 'No LP account found' });
-    return;
-  }
+router.get('/ledger', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
   const limitRaw = Number(req.query.limit ?? 250);
   const offsetRaw = Number(req.query.offset ?? 0);
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(1000, Math.floor(limitRaw))) : 250;
@@ -279,6 +273,107 @@ router.get('/ledger', requireAuth, requireAnyRole, (req: Request, res: Response)
   const from = String(req.query.from || '').trim();
   const to = String(req.query.to || '').trim();
   const search = String(req.query.search || '').trim();
+
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    try {
+      const rows = await withPostgresClient(async (client) => {
+        const accountResult = await client.query('SELECT id FROM lp_accounts WHERE user_id = $1 LIMIT 1', [req.user!.userId]);
+        const account = accountResult.rows[0] as any;
+        if (!account) return null;
+
+        let sql = `
+          SELECT
+            cfa.id,
+            cfa.date,
+            cfa.amount,
+            cfa.category,
+            cfa.description,
+            cfa.reconciled,
+            cfa.statement_ref,
+            cfa.source_file,
+            cfa.portfolio_unit_id,
+            cfa.entity_id,
+            cfa.unit_renovation_id,
+            cfa.lp_account_id,
+            cfa.capital_call_item_id,
+            bt.bank_upload_id,
+            bupload.filename as upload_filename,
+            bu.unit_number,
+            e.name as entity_name,
+            ur.description as renovation_description,
+            lpa.name as lp_name,
+            cci.capital_call_id,
+            cc.call_number,
+            CASE
+              WHEN cfa.portfolio_unit_id IS NOT NULL THEN 'unit'
+              WHEN cfa.entity_id IS NOT NULL THEN 'entity'
+              WHEN cfa.lp_account_id IS NOT NULL THEN 'lp'
+              ELSE 'fund'
+            END as assignment_scope
+          FROM cash_flow_actuals cfa
+          LEFT JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+          LEFT JOIN bank_uploads bupload ON bupload.id = bt.bank_upload_id
+          LEFT JOIN portfolio_units pu ON pu.id = cfa.portfolio_unit_id
+          LEFT JOIN building_units bu ON bu.id = pu.building_unit_id
+          LEFT JOIN entities e ON e.id = cfa.entity_id
+          LEFT JOIN unit_renovations ur ON ur.id = cfa.unit_renovation_id
+          LEFT JOIN lp_accounts lpa ON lpa.id = cfa.lp_account_id
+          LEFT JOIN capital_call_items cci ON cci.id = cfa.capital_call_item_id
+          LEFT JOIN capital_calls cc ON cc.id = cci.capital_call_id
+          WHERE cfa.reconciled = true
+            AND (cfa.lp_account_id IS NULL OR cfa.lp_account_id = $1)
+        `;
+        const params: any[] = [Number(account.id)];
+        let paramIndex = 2;
+        if (category) {
+          sql += ` AND cfa.category = $${paramIndex}`;
+          params.push(category);
+          paramIndex++;
+        }
+        if (from) {
+          sql += ` AND cfa.date >= $${paramIndex}`;
+          params.push(from);
+          paramIndex++;
+        }
+        if (to) {
+          sql += ` AND cfa.date <= $${paramIndex}`;
+          params.push(to);
+          paramIndex++;
+        }
+        if (search) {
+          sql += ` AND (
+            COALESCE(cfa.description, '') LIKE $${paramIndex} OR
+            COALESCE(bu.unit_number, '') LIKE $${paramIndex + 1} OR
+            COALESCE(e.name, '') LIKE $${paramIndex + 2} OR
+            COALESCE(ur.description, '') LIKE $${paramIndex + 3} OR
+            COALESCE(lpa.name, '') LIKE $${paramIndex + 4}
+          )`;
+          const s = `%${search}%`;
+          params.push(s, s, s, s, s);
+          paramIndex += 5;
+        }
+        sql += ` ORDER BY cfa.date DESC, cfa.id DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+        params.push(limit, offset);
+        const result = await client.query(sql, params);
+        return result.rows;
+      });
+      if (rows === null) {
+        res.status(404).json({ error: 'No LP account found' });
+        return;
+      }
+      res.json(rows);
+      return;
+    } catch (error) {
+      // Fall back to SQLite below unless fallback has been disabled in runtime.
+    }
+  }
+
+  const db = getDb();
+  const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
+  if (!account) {
+    res.status(404).json({ error: 'No LP account found' });
+    return;
+  }
 
   let sql = `
     SELECT
@@ -452,7 +547,239 @@ function interpolateSeries(points: Array<{ date: string; value: number }>, targe
 }
 
 // GET /api/lp/marks - Monthly LP marks (contrib/distrib, NAV, TVPI, IRR/MOIC)
-router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) => {
+router.get('/marks', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    try {
+      const result = await withPostgresClient(async (client) => {
+        const accountResult = await client.query(`SELECT * FROM lp_accounts WHERE user_id = $1 LIMIT 1`, [req.user!.userId]);
+        const account = accountResult.rows[0] as any;
+        if (!account) return null;
+
+        const isActive = String(account.status || '').toLowerCase() === 'active';
+
+        const txnsResult = await client.query(`
+          SELECT id, type, amount, date, notes
+          FROM capital_transactions
+          WHERE lp_account_id = $1
+          ORDER BY date ASC, id ASC
+        `, [account.id]);
+        const txns = txnsResult.rows as Array<{ id: number; type: 'call' | 'distribution'; amount: number; date: string; notes: string | null }>;
+
+        const byMonth: Record<string, { month: string; contributions: number; distributions: number; net: number; ending_balance: number; cumulative_contributed: number; cumulative_distributed: number }> = {};
+        let cumulativeContrib = 0;
+        let cumulativeDistrib = 0;
+
+        // XIRR flows: calls are negative (LP cash out), distributions positive (cash in).
+        const irrFlows: Array<{ amount: number; date: Date }> = [];
+
+        for (const t of txns) {
+          const m = toMonthKey(t.date);
+          if (!byMonth[m]) {
+            byMonth[m] = {
+              month: m,
+              contributions: 0,
+              distributions: 0,
+              net: 0,
+              ending_balance: 0,
+              cumulative_contributed: 0,
+              cumulative_distributed: 0,
+            };
+          }
+          if (t.type === 'call') {
+            byMonth[m].contributions += Number(t.amount || 0);
+            irrFlows.push({ amount: -Math.abs(Number(t.amount || 0)), date: new Date(t.date) });
+          } else if (t.type === 'distribution') {
+            byMonth[m].distributions += Number(t.amount || 0);
+            irrFlows.push({ amount: Math.abs(Number(t.amount || 0)), date: new Date(t.date) });
+          }
+        }
+
+        const sortedMonths = Object.keys(byMonth).sort();
+        for (const m of sortedMonths) {
+          const row = byMonth[m];
+          row.net = row.distributions - row.contributions;
+          cumulativeContrib += row.contributions;
+          cumulativeDistrib += row.distributions;
+          row.cumulative_contributed = cumulativeContrib;
+          row.cumulative_distributed = cumulativeDistrib;
+          row.ending_balance = cumulativeContrib - cumulativeDistrib;
+        }
+
+        const totalContributed = cumulativeContrib;
+        const totalDistributed = cumulativeDistrib;
+        const moic = totalContributed > 0 ? totalDistributed / totalContributed : 0;
+
+        let irr: number | null = null;
+        const hasFundedCapital = Number(account.called_capital || 0) > 0;
+        if (isActive && hasFundedCapital) {
+          try {
+            const hasPos = irrFlows.some((f) => f.amount > 0);
+            const hasNeg = irrFlows.some((f) => f.amount < 0);
+            if (irrFlows.length >= 2 && hasPos && hasNeg) {
+              irr = xirr(irrFlows);
+            }
+          } catch {
+            irr = null;
+          }
+        }
+
+        // --- FRED-based NAV marks (quarterly + straight-line interpolation) ---
+        const MIAMI_INDEX_SERIES = 'MIXRNSA';
+        const fredResult = await client.query(`
+          SELECT date, value
+          FROM fred_data
+          WHERE series_id = $1
+          ORDER BY date ASC
+        `, [MIAMI_INDEX_SERIES]);
+        const fredRows = fredResult.rows as Array<{ date: string; value: number }>;
+
+        const monthSeries = fredRows
+          .map((r) => ({ date: String(r.date || '').slice(0, 10), value: Number(r.value) }))
+          .filter((p) => !!p.date && Number.isFinite(p.value))
+          .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+        const latestFred = monthSeries.length ? monthSeries[monthSeries.length - 1] : null;
+
+        const unitsResult = await client.query(`
+          SELECT
+            pu.id as unit_id,
+            pu.purchase_date,
+            COALESCE(pu.total_acquisition_cost, pu.purchase_price) as acquisition_basis
+          FROM portfolio_units pu
+          WHERE pu.purchase_date IS NOT NULL
+        `);
+        const units = unitsResult.rows as Array<{ unit_id: number; purchase_date: string; acquisition_basis: number }>;
+
+        // Renovation/repair spend events (reconciled), used to add into basis only after the spend date.
+        // amount convention: statement debits are negative. Basis delta = -amount (so negative -> positive basis add).
+        const repairResult = await client.query(`
+          SELECT portfolio_unit_id as unit_id, date, amount
+          FROM cash_flow_actuals
+          WHERE portfolio_unit_id IS NOT NULL
+            AND reconciled = true
+            AND category = 'repair'
+          ORDER BY date ASC, id ASC
+        `);
+        const repairEvents = repairResult.rows as Array<{ unit_id: number; date: string; amount: number }>;
+
+        const repairsByUnit = new Map<number, Array<{ date: string; delta: number }>>();
+        for (const r of repairEvents) {
+          const unitId = Number(r.unit_id);
+          const date = String(r.date || '').slice(0, 10);
+          if (!unitId || !date) continue;
+          const delta = -Number(r.amount || 0);
+          const list = repairsByUnit.get(unitId) || [];
+          list.push({ date, delta });
+          repairsByUnit.set(unitId, list);
+        }
+
+        const fundNavByMonth: Record<string, number> = {};
+
+        // Build mark months from FRED months + transaction months (so table doesn't jump around).
+        const allMonthKeys = new Set<string>([
+          ...Object.keys(byMonth),
+          ...monthSeries.map((p) => toMonthKey(p.date)),
+        ]);
+        const allSortedMonths = Array.from(allMonthKeys).sort();
+        const markMonths = allSortedMonths
+          .map((m) => ({ month: m, date: monthEndDateFromKey(m) }))
+          .filter((m) => !!m.date) as Array<{ month: string; date: string }>;
+
+        for (const m of markMonths) fundNavByMonth[m.month] = 0;
+
+        for (const u of units) {
+          const purchaseDate = String(u.purchase_date).slice(0, 10);
+          const purchaseIndex = interpolateSeries(monthSeries, purchaseDate);
+          if (!purchaseIndex || purchaseIndex === 0) continue;
+
+          const events = (repairsByUnit.get(Number(u.unit_id)) || []).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+          let i = 0;
+          let cumulativeReno = 0;
+
+          for (const mp of markMonths) {
+            // Only mark units after they exist.
+            if (purchaseDate > mp.date) continue;
+
+            // Add reconciled renovation spend up to this month end.
+            while (i < events.length && events[i].date <= mp.date) {
+              cumulativeReno += events[i].delta;
+              i += 1;
+            }
+
+            const basis = Number(u.acquisition_basis || 0) + cumulativeReno;
+            const indexAtMark = interpolateSeries(monthSeries, mp.date);
+            if (!indexAtMark) continue;
+            fundNavByMonth[mp.month] += basis * (Number(indexAtMark) / purchaseIndex);
+          }
+        }
+
+        const ownershipFrac = Number(account.ownership_pct || 0);
+
+        // Recompute cumulative fields across the union so the table is stable even when a month has no cash movement.
+        let cumC = 0;
+        let cumD = 0;
+        const rows = markMonths.map(({ month }) => {
+          const base = byMonth[month] || {
+            month,
+            contributions: 0,
+            distributions: 0,
+            net: 0,
+            ending_balance: 0,
+            cumulative_contributed: 0,
+            cumulative_distributed: 0,
+          };
+          base.net = base.distributions - base.contributions;
+          cumC += base.contributions;
+          cumD += base.distributions;
+          base.cumulative_contributed = cumC;
+          base.cumulative_distributed = cumD;
+          base.ending_balance = cumC - cumD;
+
+          const fundNav = fundNavByMonth[month] ?? 0;
+          const lpNav = fundNav * ownershipFrac;
+          const totalValue = cumD + lpNav;
+          const tvpi = cumC > 0 ? totalValue / cumC : 0;
+          return {
+            ...base,
+            fund_nav: fundNav,
+            lp_nav: lpNav,
+            tvpi,
+          };
+        });
+
+        return {
+          lp_account_id: account.id,
+          commitment: Number(account.commitment || 0),
+          called_capital: Number(account.called_capital || 0),
+          distributions: Number(account.distributions || 0),
+          unfunded: Number(account.commitment || 0) - Number(account.called_capital || 0),
+          total_contributed: totalContributed,
+          total_distributed: totalDistributed,
+          ending_balance: totalContributed - totalDistributed,
+          moic,
+          irr,
+          monthly: rows,
+          nav: {
+            series_id: MIAMI_INDEX_SERIES,
+            latest_fund_nav: rows.length ? rows[rows.length - 1].fund_nav : 0,
+            latest_lp_nav: rows.length ? rows[rows.length - 1].lp_nav : 0,
+            latest_fred_date: latestFred?.date || null,
+            latest_fred_value: latestFred?.value ?? null,
+            fred_points: monthSeries.length,
+          },
+        };
+      });
+      if (result === null) {
+        res.status(404).json({ error: 'No LP account found' });
+        return;
+      }
+      res.json(result);
+      return;
+    } catch (error) {
+      // Fall back to SQLite below unless fallback has been disabled in runtime.
+    }
+  }
+
   const db = getDb();
   const account = db.prepare(`
     SELECT *
@@ -676,10 +1003,54 @@ router.get('/marks', requireAuth, requireAnyRole, (req: Request, res: Response) 
 
 // GET /api/lp/documents/:id/download - Secure LP doc download
 router.get('/documents/:id/download', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
-  const db = getDb();
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ error: 'Invalid document id' });
 
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    try {
+      const result = await withPostgresClient(async (client) => {
+        const accountResult = await client.query('SELECT id FROM lp_accounts WHERE user_id = $1 LIMIT 1', [req.user!.userId]);
+        const account = accountResult.rows[0] as any;
+        if (!account) return null;
+
+        const docResult = await client.query('SELECT * FROM documents WHERE id = $1', [id]);
+        const doc = docResult.rows[0] as any;
+        if (!doc) return null;
+
+        const isFundDoc = doc.parent_type === 'fund';
+        const isMyLpDoc = doc.parent_type === 'lp' && Number(doc.parent_id) === Number(account.id);
+        if (!isFundDoc && !isMyLpDoc) {
+          return { unauthorized: true };
+        }
+
+        return doc;
+      });
+      if (result === null) {
+        return res.status(404).json({ error: 'No LP account found or document not found' });
+      }
+      if ((result as any).unauthorized) {
+        return res.status(403).json({ error: 'Not authorized to access this document' });
+      }
+      const doc = result as any;
+      try {
+        const storageKey = storageKeyFromFilePath(String(doc.file_path || ''));
+        if (!storageKey) return res.status(500).json({ error: 'Unsupported document storage path' });
+        const file = await readStoredFile(storageKey);
+        res.setHeader('Content-Type', file.contentType || doc.file_type || 'application/octet-stream');
+        // Force download; viewing inline is still possible if the browser supports it.
+        res.setHeader('Content-Disposition', `attachment; filename="${String(doc.name || 'document').replace(/"/g, '')}"`);
+        file.body.pipe(res);
+        return;
+      } catch {
+        res.status(404).json({ error: 'File not found' });
+        return;
+      }
+    } catch (error) {
+      // Fall back to SQLite below unless fallback has been disabled in runtime.
+    }
+  }
+
+  const db = getDb();
   const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
   if (!account) return res.status(404).json({ error: 'No LP account found' });
 
@@ -706,8 +1077,121 @@ router.get('/documents/:id/download', requireAuth, requireAnyRole, async (req: R
 });
 
 // GET /api/lp/performance - Fund performance
-router.get('/performance', requireAuth, requireAnyRole, (req: Request, res: Response) => {
+router.get('/performance', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
   // Return high-level fund metrics (no GP-specific detail)
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    try {
+      const result = await withPostgresClient(async (client) => {
+        const accountResult = await client.query(`
+          SELECT id, status, called_capital
+          FROM lp_accounts
+          WHERE user_id = $1
+          LIMIT 1
+        `, [req.user!.userId]);
+        const account = accountResult.rows[0] as any;
+        if (!account) return null;
+
+        const isActive = String(account.status || '').toLowerCase() === 'active';
+        const hasFundedCapital = Number(account.called_capital || 0) > 0;
+
+        const portfolioResult = await client.query(`
+          SELECT
+            COUNT(*)::int as units,
+            COALESCE(SUM(ut.ownership_pct), 0) as ownership_pct,
+            COALESCE(SUM(pu.total_acquisition_cost), 0) as total_invested,
+            COALESCE(SUM((pu.monthly_rent * 12) - (pu.monthly_hoa * 12) - pu.monthly_insurance - pu.monthly_tax), 0) as annual_noi
+          FROM portfolio_units pu
+          JOIN building_units bu ON pu.building_unit_id = bu.id
+          JOIN unit_types ut ON bu.unit_type_id = ut.id
+        `);
+        const portfolio = portfolioResult.rows[0] as any;
+
+        let fundMOIC = 0;
+        let fundIRR: number | null = null;
+        let projectedNetProfit = 0;
+        let projectedExitEquity = 0;
+
+        const assumptionResult = await client.query(`
+          SELECT *
+          FROM fund_assumptions
+          ORDER BY is_active DESC, id ASC
+          LIMIT 1
+        `);
+        const assumptionRow = assumptionResult.rows[0] as any;
+
+        if (assumptionRow) {
+          const assumptions = rowToAssumptions(assumptionRow);
+          // Note: getPortfolioData uses SQLite db, so we'll use SQLite fallback for this calculation
+          // or we'd need to rewrite getPortfolioData to support Postgres
+          const db = getDb();
+          const portfolioData = getPortfolioData(db);
+
+          const cfInput = portfolioData ? {
+            assumptions,
+            acquisitions: portfolioData.acquisitions,
+            baseMonthlyRent: portfolioData.avgRent,
+            baseMonthlyHOA: portfolioData.avgHOA,
+            baseAnnualInsurance: portfolioData.avgAnnualInsurance,
+            baseAnnualTax: portfolioData.avgAnnualTax,
+            annualFundOpex: portfolioData.annualFundOpex,
+            totalOwnershipPct: portfolioData.totalOwnershipPct,
+          } : {
+            assumptions,
+            acquisitions: generateDefaultAcquisitionSchedule(assumptions),
+            baseMonthlyRent: 2800,
+            baseMonthlyHOA: 1400,
+            baseAnnualInsurance: 2400,
+            baseAnnualTax: 2400,
+            annualFundOpex: 75_000,
+          };
+
+          const cashFlows = projectCashFlows(cfInput);
+          if (cashFlows.length > 0) {
+            const totalCapitalDeployed = cashFlows.reduce((s, cf) => s + (cf.capitalCalls || 0), 0);
+            const totalNOI = cashFlows.reduce((s, cf) => s + (cf.netOperatingIncome || 0), 0);
+            const exitCF = cashFlows[cashFlows.length - 1];
+            const totalDistributions = (exitCF.grossSaleProceeds || 0) + (exitCF.mmLiquidation || 0);
+
+            projectedExitEquity = totalDistributions;
+            projectedNetProfit = totalDistributions + totalNOI - totalCapitalDeployed;
+            fundMOIC = calcMOIC(totalDistributions + totalNOI, totalCapitalDeployed);
+
+            const xirrFlows = cashFlows
+              .filter((cf) => Math.abs(cf.netCashFlow || 0) > 0.0001)
+              .map((cf) => ({ date: new Date(cf.date), amount: cf.netCashFlow }));
+
+            if (isActive && hasFundedCapital) {
+              try {
+                fundIRR = xirr(xirrFlows);
+              } catch {
+                fundIRR = null;
+              }
+            }
+          }
+        }
+
+        return {
+          unitsOwned: portfolio.units || 0,
+          ownershipPct: portfolio.ownership_pct || 0,
+          totalInvested: portfolio.total_invested || 0,
+          annualNOI: portfolio.annual_noi || 0,
+          fundMOIC,
+          fundIRR,
+          projectedNetProfit,
+          projectedExitEquity,
+        };
+      });
+      if (result === null) {
+        res.status(404).json({ error: 'No LP account found' });
+        return;
+      }
+      res.json(result);
+      return;
+    } catch (error) {
+      // Fall back to SQLite below unless fallback has been disabled in runtime.
+    }
+  }
+
   const db = getDb();
   const account = db.prepare(`
     SELECT id, status, called_capital
@@ -807,7 +1291,6 @@ router.get('/performance', requireAuth, requireAnyRole, (req: Request, res: Resp
 
 // POST /api/lp/investors - Onboard new investor (GP only)
 router.post('/investors', requireAuth, requireGP, async (req: Request, res: Response) => {
-  const db = getDb();
   const { name, entityName, email, phone, commitment, notes } = req.body;
   const normalizedEmail = String(email || '').trim().toLowerCase();
   const cleanName = String(name || '').trim();
@@ -826,6 +1309,150 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
     return;
   }
 
+  if (usePostgresLpRoutes()) {
+    try {
+      const result = await withPostgresClient(async (client) => {
+        await client.query('BEGIN');
+        try {
+          let reactivatingLpId: number | null = null;
+          let reactivatingLpNotes: string | null = null;
+          const existingUserResult = await client.query('SELECT id, role FROM users WHERE email = $1', [normalizedEmail]);
+          const existingUser = existingUserResult.rows[0] as any;
+          if (existingUser) {
+            const existingLpResult = await client.query('SELECT id, status, notes FROM lp_accounts WHERE user_id = $1 ORDER BY id DESC LIMIT 1', [existingUser.id]);
+            const existingLp = existingLpResult.rows[0] as any;
+            if (existingLp) {
+              const status = String(existingLp.status || '').toLowerCase();
+              if (status === 'inactive') {
+                reactivatingLpId = Number(existingLp.id);
+                reactivatingLpNotes = existingLp.notes ? String(existingLp.notes) : null;
+              } else {
+                await client.query('ROLLBACK');
+                return { conflict: `An LP with email ${normalizedEmail} already exists.` };
+              }
+            }
+            if (String(existingUser.role || '').toLowerCase() !== 'lp') {
+              await client.query('ROLLBACK');
+              return { conflict: `Email ${normalizedEmail} already belongs to a non-LP user.` };
+            }
+          }
+
+          // Create user account for LP
+          const bcrypt = require('bcryptjs');
+          const tempPassword = Math.random().toString(36).slice(2, 10);
+          const hash = bcrypt.hashSync(tempPassword, 10);
+          let userId: number;
+          if (existingUser?.id) {
+            await client.query(`
+              UPDATE users
+              SET password_hash = $1, role = 'lp', name = $2, must_change_password = true
+              WHERE id = $3
+            `, [hash, cleanName, Number(existingUser.id)]);
+            userId = Number(existingUser.id);
+          } else {
+            const userResult = await client.query(
+              'INSERT INTO users (email, password_hash, role, name, must_change_password) VALUES ($1, $2, $3, $4, true) RETURNING id',
+              [normalizedEmail, hash, 'lp', cleanName]
+            );
+            userId = Number(userResult.rows[0].id);
+          }
+
+          let lpId: number;
+          if (reactivatingLpId) {
+            const reactivatedStamp = `[${new Date().toISOString()}] LP reactivated during onboarding`;
+            const mergedNotes = [notes, reactivatingLpNotes, reactivatedStamp].filter(Boolean).join('\n');
+            await client.query(`
+              UPDATE lp_accounts
+              SET user_id = $1,
+                  name = $2,
+                  entity_name = $3,
+                  email = $4,
+                  phone = $5,
+                  commitment = $6,
+                  status = 'pending',
+                  notes = $7
+              WHERE id = $8
+            `, [userId, cleanName, entityName || null, normalizedEmail, phone || null, commitmentNum, mergedNotes || null, reactivatingLpId]);
+            lpId = Number(reactivatingLpId);
+          } else {
+            // Calculate ownership pct (stored as fraction, e.g. 0.25 = 25%)
+            const totalCommitmentResult = await client.query(
+              "SELECT COALESCE(SUM(commitment), 0) as total FROM lp_accounts WHERE status != 'inactive'"
+            );
+            const totalCommitment = Number(totalCommitmentResult.rows[0].total) + commitmentNum;
+            const ownershipPct = commitmentNum / totalCommitment;
+            const lpResult = await client.query(`
+              INSERT INTO lp_accounts (user_id, name, entity_name, email, phone, commitment, ownership_pct, status, notes)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
+              RETURNING id
+            `, [userId, cleanName, entityName, normalizedEmail, phone, commitmentNum, ownershipPct, notes]);
+            lpId = Number(lpResult.rows[0].id);
+          }
+
+          // Recalculate all LP ownership percentages (inactive LPs do not dilute active ones)
+          await client.query(`
+            WITH totals AS (
+              SELECT COALESCE(SUM(commitment), 0) as total_commitment
+              FROM lp_accounts
+              WHERE status != 'inactive'
+            )
+            UPDATE lp_accounts
+            SET ownership_pct = CASE
+              WHEN status = 'inactive' THEN 0
+              WHEN (SELECT total_commitment FROM totals) <= 0 THEN 0
+              ELSE commitment / (SELECT total_commitment FROM totals)
+            END
+          `);
+
+          await client.query('COMMIT');
+          return { lpId, userId, tempPassword, reactivated: !!reactivatingLpId };
+        } catch (error: any) {
+          await client.query('ROLLBACK');
+          if (error?.code === '23505') { // Postgres unique violation
+            throw { conflict: `Email ${normalizedEmail} already exists.` };
+          }
+          throw error;
+        }
+      });
+      if ((result as any).conflict) {
+        res.status(409).json({ error: (result as any).conflict });
+        return;
+      }
+      const { lpId, userId, tempPassword, reactivated } = result as any;
+
+      let emailSent = false;
+      const fundName = String(process.env.FUND_NAME || '305 Opportunities Fund');
+      emailSent = await sendTransactionalEmail({
+        to: normalizedEmail,
+        subject: `Your ${fundName} investor portal account`,
+        text:
+          `Hi ${cleanName || 'Investor'},\n\n` +
+          `Your investor portal account has been created.\n\n` +
+          `Email: ${normalizedEmail}\n` +
+          `Temporary password: ${tempPassword}\n\n` +
+          `Please log in and change your password immediately. You will be prompted to change it on first login.\n\n` +
+          `If you were not expecting this email, please contact support.`,
+      });
+
+      res.status(reactivated ? 200 : 201).json({
+        id: lpId,
+        userId,
+        tempPassword,
+        emailSent,
+        reactivated: !!reactivated,
+      });
+      return;
+    } catch (err: any) {
+      if ((err as any).conflict) {
+        res.status(409).json({ error: (err as any).conflict });
+        return;
+      }
+      res.status(500).json({ error: err?.message || 'Failed to onboard investor' });
+      return;
+    }
+  }
+
+  const db = getDb();
   let reactivatingLpId: number | null = null;
   let reactivatingLpNotes: string | null = null;
   const existingUser = db.prepare('SELECT id, role FROM users WHERE email = ?').get(normalizedEmail) as any;
@@ -931,9 +1558,8 @@ router.post('/investors', requireAuth, requireGP, async (req: Request, res: Resp
 });
 
 // GET /api/lp/investors - List all investors (GP only)
-router.get('/investors', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
-  const investors = db.prepare(`
+router.get('/investors', requireAuth, requireGP, async (req: Request, res: Response) => {
+  const sql = `
     SELECT
       lpa.*,
       COALESCE((
@@ -951,13 +1577,16 @@ router.get('/investors', requireAuth, requireGP, (req: Request, res: Response) =
         ELSE 2
       END,
       lpa.name
-  `).all();
+  `;
+
+  const investors = (usePostgresReads() || usePostgresLpRoutes())
+    ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
+    : getDb().prepare(sql).all();
   res.json(investors);
 });
 
 // PATCH /api/lp/investors/:id/status - Toggle LP status between pending/active
-router.patch('/investors/:id/status', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
+router.patch('/investors/:id/status', requireAuth, requireGP, async (req: Request, res: Response) => {
   const investorId = Number(req.params.id);
   const status = String(req.body?.status || '').trim().toLowerCase();
   if (!Number.isFinite(investorId) || investorId <= 0) {
@@ -969,6 +1598,41 @@ router.patch('/investors/:id/status', requireAuth, requireGP, (req: Request, res
     return;
   }
 
+  if (usePostgresLpRoutes()) {
+    try {
+      await withPostgresClient(async (client) => {
+        const investorResult = await client.query('SELECT id FROM lp_accounts WHERE id = $1', [investorId]);
+        if (investorResult.rows.length === 0) {
+          throw { notFound: true };
+        }
+        await client.query('UPDATE lp_accounts SET status = $1 WHERE id = $2', [status, investorId]);
+        await client.query(`
+          WITH totals AS (
+            SELECT COALESCE(SUM(commitment), 0) as total_commitment
+            FROM lp_accounts
+            WHERE status != 'inactive'
+          )
+          UPDATE lp_accounts
+          SET ownership_pct = CASE
+            WHEN status = 'inactive' THEN 0
+            WHEN (SELECT total_commitment FROM totals) <= 0 THEN 0
+            ELSE commitment / (SELECT total_commitment FROM totals)
+          END
+        `);
+      });
+      res.json({ success: true, id: investorId, status });
+      return;
+    } catch (error: any) {
+      if ((error as any).notFound) {
+        res.status(404).json({ error: 'Investor not found' });
+        return;
+      }
+      res.status(500).json({ error: error?.message || 'Failed to update investor status' });
+      return;
+    }
+  }
+
+  const db = getDb();
   const investor = db.prepare('SELECT id FROM lp_accounts WHERE id = ?').get(investorId) as any;
   if (!investor) {
     res.status(404).json({ error: 'Investor not found' });
@@ -981,8 +1645,7 @@ router.patch('/investors/:id/status', requireAuth, requireGP, (req: Request, res
 });
 
 // POST /api/lp/investors/:id/remove - guarded soft-remove of LP account
-router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/investors/:id/remove', requireAuth, requireGP, async (req: Request, res: Response) => {
   try {
     const investorId = Number(req.params.id);
     const confirmText = String(req.body?.confirmText || '');
@@ -991,6 +1654,64 @@ router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res:
       return;
     }
 
+    if (usePostgresLpRoutes()) {
+      try {
+        await withPostgresClient(async (client) => {
+          const investorResult = await client.query(`
+            SELECT id, email, status, notes
+            FROM lp_accounts
+            WHERE id = $1
+          `, [investorId]);
+          const investor = investorResult.rows[0] as any;
+          if (!investor) {
+            throw { notFound: true };
+          }
+          if (String(investor.status || '').toLowerCase() === 'inactive') {
+            res.json({ success: true, id: investorId, status: 'inactive' });
+            return;
+          }
+
+          const emailPart = String(investor.email || '').trim().toLowerCase();
+          const expectedPhrase = emailPart ? `REMOVE ${emailPart}` : `REMOVE LP-${investorId}`;
+          if (!expectedPhrase || confirmText.trim().toLowerCase() !== expectedPhrase.toLowerCase()) {
+            res.status(400).json({ error: `Confirmation text mismatch. Type exactly: ${expectedPhrase}` });
+            return;
+          }
+
+          const stampedNote = `[${new Date().toISOString()}] LP soft-removed by GP`;
+          const nextNotes = investor.notes ? `${investor.notes}\n${stampedNote}` : stampedNote;
+          await client.query(`
+            UPDATE lp_accounts
+            SET status = 'inactive',
+                notes = $1
+            WHERE id = $2
+          `, [nextNotes, investorId]);
+          await client.query(`
+            WITH totals AS (
+              SELECT COALESCE(SUM(commitment), 0) as total_commitment
+              FROM lp_accounts
+              WHERE status != 'inactive'
+            )
+            UPDATE lp_accounts
+            SET ownership_pct = CASE
+              WHEN status = 'inactive' THEN 0
+              WHEN (SELECT total_commitment FROM totals) <= 0 THEN 0
+              ELSE commitment / (SELECT total_commitment FROM totals)
+            END
+          `);
+        });
+        res.json({ success: true, id: investorId, status: 'inactive' });
+        return;
+      } catch (error: any) {
+        if ((error as any).notFound) {
+          res.status(404).json({ error: 'Investor not found' });
+          return;
+        }
+        throw error;
+      }
+    }
+
+    const db = getDb();
     const investor = db.prepare(`
       SELECT id, email, status, notes
       FROM lp_accounts
@@ -1031,11 +1752,10 @@ router.post('/investors/:id/remove', requireAuth, requireGP, (req: Request, res:
 // ---- GP-Only: Capital Calls ----
 
 // GET /api/lp/capital-call-items/open - Call items for reconciliation in Actuals (GP)
-router.get('/capital-call-items/open', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/capital-call-items/open', requireAuth, requireGP, async (req: Request, res: Response) => {
   const lpAccountId = req.query.lpAccountId ? Number(req.query.lpAccountId) : null;
 
-  let sql = `
+  const baseSql = `
     SELECT
       cci.id as item_id,
       cci.capital_call_id,
@@ -1054,20 +1774,34 @@ router.get('/capital-call-items/open', requireAuth, requireGP, (req: Request, re
     JOIN lp_accounts lpa ON lpa.id = cci.lp_account_id
     WHERE cc.status IN ('draft', 'sent', 'partially_received', 'completed')
   `;
-  const params: any[] = [];
-  if (lpAccountId) {
-    sql += ' AND cci.lp_account_id = ?';
-    params.push(lpAccountId);
-  }
-  sql += ' ORDER BY cc.call_date DESC, cc.call_number DESC, lpa.name ASC';
-
-  const rows = db.prepare(sql).all(...params);
+  const rows = (usePostgresReads() || usePostgresLpRoutes())
+    ? await withPostgresClient(async (client) => {
+      let sql = baseSql;
+      const params: any[] = [];
+      if (lpAccountId) {
+        sql += ` AND cci.lp_account_id = $${params.length + 1}`;
+        params.push(lpAccountId);
+      }
+      sql += ' ORDER BY cc.call_date DESC, cc.call_number DESC, lpa.name ASC';
+      const result = await client.query(sql, params);
+      return result.rows;
+    })
+    : (() => {
+      const db = getDb();
+      let sql = baseSql;
+      const params: any[] = [];
+      if (lpAccountId) {
+        sql += ' AND cci.lp_account_id = ?';
+        params.push(lpAccountId);
+      }
+      sql += ' ORDER BY cc.call_date DESC, cc.call_number DESC, lpa.name ASC';
+      return db.prepare(sql).all(...params);
+    })();
   res.json(rows);
 });
 
 // POST /api/lp/distributions/create - Create distribution event with LP allocations
-router.post('/distributions/create', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/distributions/create', requireAuth, requireGP, async (req: Request, res: Response) => {
   const totalAmount = Number(req.body?.totalAmount);
   const eventDate = String(req.body?.eventDate || '').trim();
   const purpose = String(req.body?.purpose || '').trim();
@@ -1081,6 +1815,66 @@ router.post('/distributions/create', requireAuth, requireGP, (req: Request, res:
     res.status(400).json({ error: 'eventDate is required' });
     return;
   }
+
+  if (usePostgresLpRoutes()) {
+    try {
+      const result = await withPostgresClient(async (client) => {
+        await client.query('BEGIN');
+        try {
+          const maxEventResult = await client.query(`SELECT COALESCE(MAX(event_number), 0)::int as max_num FROM distribution_events`);
+          const eventNumber = Number(maxEventResult.rows[0]?.max_num || 0) + 1;
+          const lpResult = await client.query(`
+            SELECT id, name, commitment
+            FROM lp_accounts
+            WHERE status IN ('active', 'pending')
+            ORDER BY id
+          `);
+          const lpRows = lpResult.rows as Array<{ id: number; name: string; commitment: number }>;
+          const totalCommitment = lpRows.reduce((sum, lp) => sum + Number(lp.commitment || 0), 0);
+          if (lpRows.length === 0 || totalCommitment <= 0) {
+            throw new Error('No eligible LPs for distribution allocation');
+          }
+
+          const eventResult = await client.query(`
+            INSERT INTO distribution_events (event_number, event_date, total_amount, status, purpose, custom_email_subject, custom_email_body)
+            VALUES ($1, $2, $3, 'draft', $4, $5, $6)
+            RETURNING id
+          `, [eventNumber, eventDate, totalAmount, purpose || null, customEmailSubject, customEmailBody]);
+          const eventId = Number(eventResult.rows[0].id);
+          const items: Array<{ lpId: number; lpName: string; amount: number }> = [];
+          for (const lp of lpRows) {
+            const amount = totalAmount * (Number(lp.commitment || 0) / totalCommitment);
+            await client.query(`
+              INSERT INTO distribution_items (distribution_event_id, lp_account_id, amount, status)
+              VALUES ($1, $2, $3, 'pending')
+            `, [eventId, lp.id, amount]);
+            items.push({ lpId: lp.id, lpName: lp.name, amount });
+          }
+          await client.query('COMMIT');
+          return { eventId, items, eventNumber };
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+      });
+      res.status(201).json({
+        eventId: result.eventId,
+        eventNumber: result.eventNumber,
+        totalAmount,
+        items: result.items,
+      });
+      return;
+    } catch (err: any) {
+      if (err?.message?.includes('No eligible LPs')) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: err?.message || 'Failed to create distribution' });
+      return;
+    }
+  }
+
+  const db = getDb();
   const maxEvent = db.prepare(`SELECT COALESCE(MAX(event_number), 0) as max_num FROM distribution_events`).get() as any;
   const eventNumber = Number(maxEvent?.max_num || 0) + 1;
   const lpRows = db.prepare(`
@@ -1124,7 +1918,29 @@ router.post('/distributions/create', requireAuth, requireGP, (req: Request, res:
 });
 
 // GET /api/lp/distributions/all - list distribution events
-router.get('/distributions/all', requireAuth, requireGP, (req: Request, res: Response) => {
+router.get('/distributions/all', requireAuth, requireGP, async (req: Request, res: Response) => {
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    try {
+      const rows = await withPostgresClient(async (client) => {
+        const result = await client.query(`
+          SELECT
+            de.*,
+            COALESCE(SUM(CASE WHEN di.status = 'paid' THEN 1 ELSE 0 END), 0)::int as paid_count,
+            COALESCE(COUNT(di.id), 0)::int as item_count
+          FROM distribution_events de
+          LEFT JOIN distribution_items di ON di.distribution_event_id = de.id
+          GROUP BY de.id
+          ORDER BY de.event_date DESC, de.id DESC
+        `);
+        return result.rows;
+      });
+      res.json(rows);
+      return;
+    } catch (error) {
+      // Fall back to SQLite below unless fallback has been disabled in runtime.
+    }
+  }
+
   const db = getDb();
   const rows = db.prepare(`
     SELECT
@@ -1141,12 +1957,58 @@ router.get('/distributions/all', requireAuth, requireGP, (req: Request, res: Res
 
 // POST /api/lp/distributions/:eventId/send - mark notices sent
 router.post('/distributions/:eventId/send', requireAuth, requireGP, async (req: Request, res: Response) => {
-  const db = getDb();
   const eventId = Number(req.params.eventId);
   if (!Number.isFinite(eventId) || eventId <= 0) {
     res.status(400).json({ error: 'Invalid event id' });
     return;
   }
+
+  if (usePostgresLpRoutes()) {
+    try {
+      const result = await withPostgresClient(async (client) => {
+        const eventResult = await client.query(`SELECT * FROM distribution_events WHERE id = $1`, [eventId]);
+        const event = eventResult.rows[0] as any;
+        if (!event) {
+          throw { notFound: true };
+        }
+        const itemsResult = await client.query(`
+          SELECT di.*, lpa.name as lp_name, lpa.email as lp_email
+          FROM distribution_items di
+          JOIN lp_accounts lpa ON lpa.id = di.lp_account_id
+          WHERE di.distribution_event_id = $1
+        `, [eventId]);
+        const items = itemsResult.rows as any[];
+        let sentCount = 0;
+        for (const item of items) {
+          const subject = String(event.custom_email_subject || `Distribution #${event.event_number} notice`);
+          const body = String(event.custom_email_body || '')
+            || `Hi ${item.lp_name},\n\nA distribution has been approved.\n\nEvent #${event.event_number}\nAmount: $${fmtMoney(Number(item.amount || 0))}\nDate: ${event.event_date}\nPurpose: ${event.purpose || ''}\n`;
+          const ok = await sendTransactionalEmail({
+            to: String(item.lp_email || ''),
+            subject,
+            text: body,
+          });
+          if (ok) {
+            sentCount += 1;
+            await client.query(`UPDATE distribution_items SET status = 'sent', sent_at = CURRENT_TIMESTAMP, email_sent = true WHERE id = $1`, [item.id]);
+          }
+        }
+        await client.query(`UPDATE distribution_events SET status = 'sent' WHERE id = $1`, [eventId]);
+        return { sentCount, totalItems: items.length };
+      });
+      res.json({ success: true, sentCount: result.sentCount, totalItems: result.totalItems });
+      return;
+    } catch (error: any) {
+      if ((error as any).notFound) {
+        res.status(404).json({ error: 'Distribution event not found' });
+        return;
+      }
+      res.status(500).json({ error: error?.message || 'Failed to send distribution notices' });
+      return;
+    }
+  }
+
+  const db = getDb();
   const event = db.prepare(`SELECT * FROM distribution_events WHERE id = ?`).get(eventId) as any;
   if (!event) {
     res.status(404).json({ error: 'Distribution event not found' });
@@ -1178,8 +2040,7 @@ router.post('/distributions/:eventId/send', requireAuth, requireGP, async (req: 
 });
 
 // PUT /api/lp/distributions/:eventId/items/:itemId/paid - settle LP payment
-router.put('/distributions/:eventId/items/:itemId/paid', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
+router.put('/distributions/:eventId/items/:itemId/paid', requireAuth, requireGP, async (req: Request, res: Response) => {
   const eventId = Number(req.params.eventId);
   const itemId = Number(req.params.itemId);
   const paidAmount = Number(req.body?.paidAmount);
@@ -1187,6 +2048,60 @@ router.put('/distributions/:eventId/items/:itemId/paid', requireAuth, requireGP,
     res.status(400).json({ error: 'Invalid event/item id' });
     return;
   }
+
+  if (usePostgresLpRoutes()) {
+    try {
+      await withPostgresClient(async (client) => {
+        await client.query('BEGIN');
+        try {
+          const itemResult = await client.query(`
+            SELECT di.*, de.event_date
+            FROM distribution_items di
+            JOIN distribution_events de ON de.id = di.distribution_event_id
+            WHERE di.id = $1 AND di.distribution_event_id = $2
+          `, [itemId, eventId]);
+          const item = itemResult.rows[0] as any;
+          if (!item) {
+            throw { notFound: true };
+          }
+          const amount = Number.isFinite(paidAmount) && paidAmount > 0 ? paidAmount : Number(item.amount || 0);
+          const quarter = quarterFromDate(String(item.event_date));
+          await client.query(`UPDATE distribution_items SET status = 'paid', paid_at = CURRENT_TIMESTAMP WHERE id = $1`, [itemId]);
+          await client.query(`
+            INSERT INTO capital_transactions (lp_account_id, capital_call_item_id, type, amount, date, quarter, notes)
+            VALUES ($1, NULL, 'distribution', $2, CURRENT_DATE, $3, $4)
+          `, [item.lp_account_id, amount, quarter, `Distribution event #${eventId} item #${itemId}`]);
+          await client.query(`
+            UPDATE lp_accounts
+            SET distributions = COALESCE(distributions, 0) + $1
+            WHERE id = $2
+          `, [amount, item.lp_account_id]);
+          const openResult = await client.query(`
+            SELECT COUNT(*)::int as c
+            FROM distribution_items
+            WHERE distribution_event_id = $1 AND status != 'paid'
+          `, [eventId]);
+          const openCount = Number(openResult.rows[0]?.c || 0);
+          await client.query(`UPDATE distribution_events SET status = $1 WHERE id = $2`, [openCount > 0 ? 'partially_paid' : 'paid', eventId]);
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+      });
+      res.json({ success: true });
+      return;
+    } catch (error: any) {
+      if ((error as any).notFound) {
+        res.status(404).json({ error: 'Distribution item not found' });
+        return;
+      }
+      res.status(500).json({ error: error?.message || 'Failed to mark distribution item as paid' });
+      return;
+    }
+  }
+
+  const db = getDb();
   const item = db.prepare(`
     SELECT di.*, de.event_date
     FROM distribution_items di
@@ -1222,7 +2137,25 @@ router.put('/distributions/:eventId/items/:itemId/paid', requireAuth, requireGP,
 });
 
 // Side-letter terms
-router.get('/side-letters', requireAuth, requireGP, (req: Request, res: Response) => {
+router.get('/side-letters', requireAuth, requireGP, async (req: Request, res: Response) => {
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    try {
+      const rows = await withPostgresClient(async (client) => {
+        const result = await client.query(`
+          SELECT sl.*, lpa.name as lp_name, lpa.email as lp_email
+          FROM side_letters sl
+          JOIN lp_accounts lpa ON lpa.id = sl.lp_account_id
+          ORDER BY sl.created_at DESC, sl.id DESC
+        `);
+        return result.rows;
+      });
+      res.json(rows);
+      return;
+    } catch (error) {
+      // Fall back to SQLite below unless fallback has been disabled in runtime.
+    }
+  }
+
   const db = getDb();
   const rows = db.prepare(`
     SELECT sl.*, lpa.name as lp_name, lpa.email as lp_email
@@ -1233,13 +2166,43 @@ router.get('/side-letters', requireAuth, requireGP, (req: Request, res: Response
   res.json(rows);
 });
 
-router.post('/side-letters', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/side-letters', requireAuth, requireGP, async (req: Request, res: Response) => {
   const lpAccountId = Number(req.body?.lpAccountId);
   if (!Number.isFinite(lpAccountId) || lpAccountId <= 0) {
     res.status(400).json({ error: 'lpAccountId is required' });
     return;
   }
+
+  if (usePostgresLpRoutes()) {
+    try {
+      const result = await withPostgresClient(async (client) => {
+        const result = await client.query(`
+          INSERT INTO side_letters (
+            lp_account_id, pref_override_pct, carry_override_gp_pct, mgmt_fee_override_pct,
+            notice_days_override, effective_from, effective_to, notes
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id
+        `, [
+          lpAccountId,
+          req.body?.prefOverridePct ?? null,
+          req.body?.carryOverrideGpPct ?? null,
+          req.body?.mgmtFeeOverridePct ?? null,
+          req.body?.noticeDaysOverride ?? null,
+          req.body?.effectiveFrom ?? null,
+          req.body?.effectiveTo ?? null,
+          req.body?.notes ?? null
+        ]);
+        return Number(result.rows[0].id);
+      });
+      res.status(201).json({ id: result });
+      return;
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || 'Failed to create side letter' });
+      return;
+    }
+  }
+
+  const db = getDb();
   const result = db.prepare(`
     INSERT INTO side_letters (
       lp_account_id, pref_override_pct, carry_override_gp_pct, mgmt_fee_override_pct,
@@ -1259,14 +2222,46 @@ router.post('/side-letters', requireAuth, requireGP, (req: Request, res: Respons
 });
 
 // Quarterly LP package export (accountant/tax support baseline)
-router.get('/reports/quarterly/:quarter', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/reports/quarterly/:quarter', requireAuth, requireGP, async (req: Request, res: Response) => {
   const q = String(req.params.quarter || '').trim().toUpperCase();
   const bounds = quarterBounds(q);
   if (!bounds) {
     res.status(400).json({ error: 'Quarter must be YYYY-Q1..Q4' });
     return;
   }
+
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    try {
+      const rows = await withPostgresClient(async (client) => {
+        const result = await client.query(`
+          SELECT
+            lpa.id as lp_account_id,
+            lpa.name as lp_name,
+            lpa.email as lp_email,
+            COALESCE(SUM(CASE WHEN ct.type = 'call' THEN ct.amount ELSE 0 END), 0) as calls,
+            COALESCE(SUM(CASE WHEN ct.type = 'distribution' THEN ct.amount ELSE 0 END), 0) as distributions
+          FROM lp_accounts lpa
+          LEFT JOIN capital_transactions ct
+            ON ct.lp_account_id = lpa.id
+            AND ct.date >= $1
+            AND ct.date <= $2
+          GROUP BY lpa.id
+          ORDER BY lpa.name
+        `, [bounds.from, bounds.to]);
+        return result.rows;
+      });
+      res.json({
+        quarter: q,
+        period: bounds,
+        rows,
+      });
+      return;
+    } catch (error) {
+      // Fall back to SQLite below unless fallback has been disabled in runtime.
+    }
+  }
+
+  const db = getDb();
   const rows = db.prepare(`
     SELECT
       lpa.id as lp_account_id,
@@ -1366,9 +2361,28 @@ router.get('/capital-calls/all', requireAuth, requireGP, async (req: Request, re
 });
 
 // GET /api/lp/capital-calls/:callId/items - List per-LP items for a call (GP)
-router.get('/capital-calls/:callId/items', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/capital-calls/:callId/items', requireAuth, requireGP, async (req: Request, res: Response) => {
   const { callId } = req.params;
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    try {
+      const items = await withPostgresClient(async (client) => {
+        const result = await client.query(`
+          SELECT cci.*, lpa.name as investor_name
+          FROM capital_call_items cci
+          JOIN lp_accounts lpa ON cci.lp_account_id = lpa.id
+          WHERE cci.capital_call_id = $1
+          ORDER BY lpa.name
+        `, [Number(callId)]);
+        return result.rows;
+      });
+      res.json(items);
+      return;
+    } catch (error) {
+      // Fall back to SQLite below unless fallback has been disabled in runtime.
+    }
+  }
+
+  const db = getDb();
   const items = db.prepare(`
     SELECT cci.*, lpa.name as investor_name
     FROM capital_call_items cci
@@ -1381,12 +2395,152 @@ router.get('/capital-calls/:callId/items', requireAuth, requireGP, (req: Request
 
 // POST /api/lp/capital-calls/:callId/send - Bulk send call notices (custom email template supported)
 router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: Request, res: Response) => {
-  const db = getDb();
   const { callId } = req.params;
   const bccMode = req.body?.bccMode !== undefined ? !!req.body.bccMode : true;
   const fundName = String(req.body?.fundName || process.env.FUND_NAME || '305 Opportunities Fund');
   const fromEmail = process.env.FROM_EMAIL || 'info@305opportunityfund.com';
 
+  if (usePostgresLpRoutes()) {
+    try {
+      const result = await withPostgresClient(async (client) => {
+        const callResult = await client.query(`
+          SELECT id, call_number, total_amount, due_date, purpose, custom_email_subject, custom_email_body
+          FROM capital_calls
+          WHERE id = $1
+        `, [callId]);
+        const call = callResult.rows[0] as any;
+        if (!call) {
+          throw { notFound: true };
+        }
+
+        const itemsResult = await client.query(`
+          SELECT
+            cci.id as item_id,
+            cci.amount,
+            cci.status,
+            lpa.id as lp_account_id,
+            lpa.name as investor_name,
+            lpa.email as investor_email
+          FROM capital_call_items cci
+          JOIN lp_accounts lpa ON cci.lp_account_id = lpa.id
+          WHERE cci.capital_call_id = $1
+        `, [Number(callId)]);
+        const items = itemsResult.rows as Array<{
+          item_id: number;
+          amount: number;
+          status: string;
+          lp_account_id: number;
+          investor_name: string;
+          investor_email: string | null;
+        }>;
+        if (items.length === 0) {
+          throw { noItems: true };
+        }
+
+        const baseSubject = String(
+          call.custom_email_subject || 'Capital Call {{call_number}} — {{fund_name}}'
+        );
+        const baseBody = String(
+          call.custom_email_body ||
+            'Hi {{lp_name}},\n\nThis is a capital call notice for {{fund_name}}.\n\nCall #{{call_number}}\nTotal call amount: ${{call_amount}}\nYour amount: ${{lp_amount}}\nDue date: {{due_date}}\nPurpose: {{purpose}}\n\nPlease remit funds by the due date.\n\nThank you.'
+        );
+
+        let sentCount = 0;
+        let failedCount = 0;
+
+        for (const item of items) {
+          if (!item.investor_email || !item.investor_email.trim()) {
+            failedCount += 1;
+            await client.query(`UPDATE capital_call_items SET email_sent = false WHERE id = $1`, [item.item_id]);
+            continue;
+          }
+
+          const mergeVars = {
+            lp_name: item.investor_name,
+            investor_name: item.investor_name,
+            fund_name: fundName,
+            call_number: String(call.call_number),
+            call_amount: fmtMoney(Number(call.total_amount)),
+            lp_amount: fmtMoney(Number(item.amount)),
+            due_date: String(call.due_date || ''),
+            purpose: String(call.purpose || ''),
+          };
+          const subject = renderMergeTemplate(baseSubject, mergeVars);
+          const body = renderMergeTemplate(baseBody, mergeVars);
+
+          const toAddress = item.investor_email.trim();
+          const bcc = bccMode ? [fromEmail] : undefined;
+
+          const ok = await sendTransactionalEmail({
+            to: toAddress,
+            bcc,
+            subject,
+            text: body,
+          });
+
+          if (ok) {
+            sentCount += 1;
+            await client.query(`
+              UPDATE capital_call_items
+              SET status = CASE WHEN status = 'pending' THEN 'sent' ELSE status END,
+                  sent_at = CASE WHEN sent_at IS NULL THEN CURRENT_TIMESTAMP ELSE sent_at END,
+                  email_sent = true
+              WHERE id = $1
+            `, [item.item_id]);
+          } else {
+            failedCount += 1;
+            await client.query(`UPDATE capital_call_items SET email_sent = false WHERE id = $1`, [item.item_id]);
+          }
+        }
+
+        if (sentCount > 0) {
+          await client.query(`
+            UPDATE capital_calls
+            SET status = 'sent'
+            WHERE id = $1 AND status IN ('draft', 'partially_received')
+          `, [callId]);
+        }
+
+        return { sentCount, failedCount, baseSubject, baseBody };
+      });
+      res.json({
+        success: true,
+        callId: Number(callId),
+        bccMode,
+        sentCount: result.sentCount,
+        failedCount: result.failedCount,
+        emailTemplate: {
+          subject: result.baseSubject,
+          body: result.baseBody,
+        },
+        availableMergeTags: [
+          '{{lp_name}}',
+          '{{investor_name}}',
+          '{{fund_name}}',
+          '{{call_number}}',
+          '{{call_amount}}',
+          '{{lp_amount}}',
+          '{{due_date}}',
+          '{{purpose}}',
+        ],
+        message: 'Capital call notices processed with mail merge and per-LP delivery.',
+      });
+      return;
+    } catch (error: any) {
+      if ((error as any).notFound) {
+        res.status(404).json({ error: 'Capital call not found' });
+        return;
+      }
+      if ((error as any).noItems) {
+        res.status(400).json({ error: 'No LP line items found for this call. Create/allocate the call first.' });
+        return;
+      }
+      res.status(500).json({ error: error?.message || 'Failed to send capital call notices' });
+      return;
+    }
+  }
+
+  const db = getDb();
   const call = db.prepare(`
     SELECT id, call_number, total_amount, due_date, purpose, custom_email_subject, custom_email_body
     FROM capital_calls

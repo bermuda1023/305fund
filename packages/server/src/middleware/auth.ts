@@ -5,6 +5,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { getDb } from '../db/database';
+import { withPostgresClient } from '../db/postgres-client';
+import { isPostgresPrimaryMode, usePostgresReads } from '../db/runtime-mode';
 
 export interface AuthPayload {
   userId: number;
@@ -99,22 +101,41 @@ export function requireScope(...scopes: RoleScope[]) {
       next();
       return;
     }
-    try {
-      const db = getDb();
-      const placeholders = scopes.map(() => '?').join(', ');
-      const row = db.prepare(`
-        SELECT COUNT(*) as c
-        FROM user_role_scopes
-        WHERE user_id = ?
-          AND scope IN (${placeholders})
-      `).get(req.user.userId, ...scopes) as { c?: number } | undefined;
-      if (Number(row?.c || 0) > 0) {
-        next();
-        return;
+    (async () => {
+      try {
+        const usePg = isPostgresPrimaryMode() || usePostgresReads();
+        const count = usePg
+          ? await withPostgresClient(async (client) => {
+            const result = await client.query(
+              `
+              SELECT COUNT(*) as c
+              FROM user_role_scopes
+              WHERE user_id = $1
+                AND scope = ANY($2::text[])
+              `,
+              [req.user!.userId, scopes]
+            );
+            return Number(result.rows[0]?.c || 0);
+          })
+          : (() => {
+            const db = getDb();
+            const placeholders = scopes.map(() => '?').join(', ');
+            const row = db.prepare(`
+              SELECT COUNT(*) as c
+              FROM user_role_scopes
+              WHERE user_id = ?
+                AND scope IN (${placeholders})
+            `).get(req.user!.userId, ...scopes) as { c?: number } | undefined;
+            return Number(row?.c || 0);
+          })();
+        if (count > 0) {
+          next();
+          return;
+        }
+        res.status(403).json({ error: 'Insufficient scope' });
+      } catch {
+        res.status(403).json({ error: 'Insufficient scope' });
       }
-      res.status(403).json({ error: 'Insufficient scope' });
-    } catch {
-      res.status(403).json({ error: 'Insufficient scope' });
-    }
+    })();
   };
 }

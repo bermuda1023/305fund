@@ -107,6 +107,18 @@ function assertPeriodOpen(db: ReturnType<typeof getDb>, dateIso: string) {
   }
 }
 
+async function assertPeriodOpenPg(client: any, dateIso: string) {
+  const m = monthKey(dateIso);
+  if (!m) return;
+  const row = await client.query(`SELECT status FROM accounting_periods WHERE month = $1 LIMIT 1`, [m]);
+  const status = String(row.rows[0]?.status || '');
+  if (status === 'closed') {
+    const err: any = new Error(`Accounting period ${m} is closed`);
+    err.statusCode = 409;
+    throw err;
+  }
+}
+
 function autoMapCategory(description: string, existingCategory?: string): string {
   if (existingCategory && existingCategory !== 'other') return existingCategory;
   for (const { pattern, category } of CATEGORY_PATTERNS) {
@@ -436,6 +448,183 @@ function syncCapitalCallFromActual(
   if (previousCallItemId && Number(previousCallItemId) !== Number(row.capital_call_item_id)) {
     const callId = recalcCapitalCallItemFromTransactions(db, Number(previousCallItemId));
     if (callId) recalcCapitalCallStatus(db, callId);
+  }
+}
+
+async function recalcCapitalCallItemFromTransactionsPg(client: any, itemId: number) {
+  const itemResult = await client.query(
+    `
+    SELECT id, capital_call_id, amount
+    FROM capital_call_items
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [itemId]
+  );
+  const item = itemResult.rows[0] as any;
+  if (!item) return null;
+
+  const aggResult = await client.query(
+    `
+    SELECT COALESCE(SUM(amount), 0) as total_received
+    FROM capital_transactions
+    WHERE capital_call_item_id = $1 AND type = 'call'
+    `,
+    [itemId]
+  );
+  const totalReceived = Number(aggResult.rows[0]?.total_received || 0);
+  const itemAmount = Number(item.amount || 0);
+
+  if (totalReceived <= 0) {
+    await client.query(
+      `
+      UPDATE capital_call_items
+      SET status = 'pending',
+          received_amount = NULL,
+          received_at = NULL
+      WHERE id = $1
+      `,
+      [itemId]
+    );
+  } else {
+    const isFullyReceived = totalReceived + 0.0001 >= itemAmount;
+    await client.query(
+      `
+      UPDATE capital_call_items
+      SET status = $1,
+          received_amount = $2,
+          received_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      `,
+      [isFullyReceived ? 'received' : 'pending', totalReceived, itemId]
+    );
+  }
+
+  return Number(item.capital_call_id);
+}
+
+async function recalcCapitalCallStatusPg(client: any, callId: number) {
+  const aggResult = await client.query(
+    `
+    SELECT
+      SUM(CASE WHEN status = 'received' THEN 1 ELSE 0 END) as received_count,
+      COUNT(*) as total_count
+    FROM capital_call_items
+    WHERE capital_call_id = $1
+    `,
+    [callId]
+  );
+  const agg = aggResult.rows[0] as any;
+  if (!agg) return;
+  const nextStatus =
+    Number(agg.received_count || 0) === 0 ? 'sent' :
+    Number(agg.received_count || 0) < Number(agg.total_count || 0) ? 'partially_received' :
+    'completed';
+  await client.query('UPDATE capital_calls SET status = $1 WHERE id = $2', [nextStatus, callId]);
+}
+
+async function recalcLpCalledCapitalPg(client: any, lpAccountId: number) {
+  await client.query(
+    `
+    UPDATE lp_accounts
+    SET called_capital = COALESCE((
+      SELECT SUM(cci.amount)
+      FROM capital_call_items cci
+      JOIN capital_calls cc ON cc.id = cci.capital_call_id
+      WHERE cci.lp_account_id = lp_accounts.id
+        AND cc.status IN ('sent', 'partially_received', 'completed')
+    ), 0)
+    WHERE id = $1
+    `,
+    [lpAccountId]
+  );
+}
+
+async function syncCapitalCallFromActualPg(
+  client: any,
+  row: {
+    id: number;
+    lp_account_id: number | null;
+    capital_call_item_id: number | null;
+    date: string;
+    amount: number;
+    category: string;
+    reconciled?: number;
+  },
+  previousLpId?: number | null,
+  previousCallItemId?: number | null
+) {
+  const note = `Actuals capital call txn #${row.id}`;
+  const existingResult = await client.query(
+    `
+    SELECT id, lp_account_id, capital_call_item_id
+    FROM capital_transactions
+    WHERE notes = $1
+    LIMIT 1
+    `,
+    [note]
+  );
+  const existing = (existingResult.rows[0] || null) as any;
+  const shouldSync = row.category === 'capital_call'
+    && !!row.lp_account_id
+    && !!row.capital_call_item_id
+    && row.amount > 0
+    && Number(row.reconciled || 0) === 1;
+  if (!shouldSync) {
+    if (existing) {
+      await client.query(`DELETE FROM capital_transactions WHERE id = $1`, [existing.id]);
+      await recalcLpCalledCapitalPg(client, Number(existing.lp_account_id));
+      if (existing.capital_call_item_id) {
+        const callId = await recalcCapitalCallItemFromTransactionsPg(client, Number(existing.capital_call_item_id));
+        if (callId) await recalcCapitalCallStatusPg(client, callId);
+      }
+    }
+    if (previousLpId && (!existing || Number(existing.lp_account_id) !== Number(previousLpId))) {
+      await recalcLpCalledCapitalPg(client, Number(previousLpId));
+    }
+    if (previousCallItemId && (!existing || Number(existing.capital_call_item_id) !== Number(previousCallItemId))) {
+      const callId = await recalcCapitalCallItemFromTransactionsPg(client, Number(previousCallItemId));
+      if (callId) await recalcCapitalCallStatusPg(client, callId);
+    }
+    return;
+  }
+  const q = quarterFromDate(row.date);
+  if (existing) {
+    await client.query(
+      `
+      UPDATE capital_transactions
+      SET lp_account_id = $1, capital_call_item_id = $2, type = 'call', amount = $3, date = $4, quarter = $5, notes = $6
+      WHERE id = $7
+      `,
+      [row.lp_account_id, row.capital_call_item_id, row.amount, row.date, q || null, note, existing.id]
+    );
+  } else {
+    await client.query(
+      `
+      INSERT INTO capital_transactions (lp_account_id, capital_call_item_id, type, amount, date, quarter, notes)
+      VALUES ($1, $2, 'call', $3, $4, $5, $6)
+      `,
+      [row.lp_account_id, row.capital_call_item_id, row.amount, row.date, q || null, note]
+    );
+  }
+  await recalcLpCalledCapitalPg(client, Number(row.lp_account_id));
+  if (row.capital_call_item_id) {
+    const callId = await recalcCapitalCallItemFromTransactionsPg(client, Number(row.capital_call_item_id));
+    if (callId) await recalcCapitalCallStatusPg(client, callId);
+  }
+  if (existing && Number(existing.lp_account_id) !== Number(row.lp_account_id)) {
+    await recalcLpCalledCapitalPg(client, Number(existing.lp_account_id));
+  }
+  if (existing && existing.capital_call_item_id && Number(existing.capital_call_item_id) !== Number(row.capital_call_item_id)) {
+    const callId = await recalcCapitalCallItemFromTransactionsPg(client, Number(existing.capital_call_item_id));
+    if (callId) await recalcCapitalCallStatusPg(client, callId);
+  }
+  if (previousLpId && Number(previousLpId) !== Number(row.lp_account_id)) {
+    await recalcLpCalledCapitalPg(client, Number(previousLpId));
+  }
+  if (previousCallItemId && Number(previousCallItemId) !== Number(row.capital_call_item_id)) {
+    const callId = await recalcCapitalCallItemFromTransactionsPg(client, Number(previousCallItemId));
+    if (callId) await recalcCapitalCallStatusPg(client, callId);
   }
 }
 
@@ -850,6 +1039,133 @@ function importTransactions(
   };
 }
 
+async function importTransactionsPg(params: {
+  filename: string;
+  rows: any[];
+  fileType: 'csv' | 'ofx' | 'pdf' | 'manual' | 'xls' | 'xlsx';
+  status?: 'parsed' | 'pending_review';
+  bankAccountId?: number | null;
+  filePath?: string;
+  fileSha256?: string | null;
+  uploadedBy?: string | null;
+}) {
+  const { filename, rows, fileType, status = 'parsed', bankAccountId, filePath, fileSha256, uploadedBy } = params;
+  return withPostgresClient(async (client) => {
+    await client.query('BEGIN');
+    try {
+      const upload = await client.query(
+        `
+        INSERT INTO bank_uploads (filename, upload_date, file_type, row_count, status, bank_account_id, file_path, file_sha256, uploaded_by)
+        VALUES ($1, NOW(), $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+        `,
+        [filename, fileType, rows.length, status, bankAccountId || null, filePath || null, fileSha256 || null, uploadedBy || null]
+      );
+      const uploadId = Number(upload.rows[0]?.id || 0);
+      if (status !== 'parsed') {
+        await client.query('COMMIT');
+        return { upload_id: uploadId, rows_imported: 0, rows_skipped: 0, total_rows: rows.length, rows_invalid: 0 };
+      }
+
+      const unitRows = await client.query(`
+        SELECT pu.id, bu.unit_number
+        FROM portfolio_units pu
+        JOIN building_units bu ON pu.building_unit_id = bu.id
+      `);
+      const unitLookup = new Map<string, number>();
+      for (const u of unitRows.rows as any[]) unitLookup.set(String(u.unit_number || '').toUpperCase(), Number(u.id));
+      const learnedMappingsResult = await client.query(`SELECT description_pattern, portfolio_unit_id, category FROM learned_mappings`);
+      const learnedMappings = learnedMappingsResult.rows as Array<{ description_pattern: string; portfolio_unit_id: number; category: string | null }>;
+
+      let rowsImported = 0;
+      let rowsSkipped = 0;
+      let rowsInvalid = 0;
+
+      for (const row of rows) {
+        const date = parseDateValue(row.date);
+        const amount = parseAmount(row.amount);
+        const desc = String(row.description || '').trim();
+        if (!date || amount === null) {
+          rowsInvalid += 1;
+          continue;
+        }
+        await assertPeriodOpenPg(client, date);
+        const existing = await client.query(
+          `SELECT id FROM bank_transactions WHERE date = $1 AND amount = $2 AND COALESCE(description, '') = $3 LIMIT 1`,
+          [date, amount, desc]
+        );
+        if (existing.rows[0]) {
+          rowsSkipped += 1;
+          continue;
+        }
+        let category = autoMapCategory(desc, row.category ? String(row.category) : undefined);
+        let unitId = row.portfolio_unit_id ?? row.portfolioUnitId ?? null;
+        let lpAccountId = row.lp_account_id ?? row.lpAccountId ?? null;
+        let capitalCallItemId = row.capital_call_item_id ?? row.capitalCallItemId ?? null;
+        if (!unitId && desc) unitId = autoMapUnit(desc, unitLookup);
+        if (category === 'capital_call') {
+          unitId = null;
+          if (!lpAccountId || !capitalCallItemId) {
+            rowsInvalid += 1;
+            continue;
+          }
+          const item = await client.query(`SELECT id, lp_account_id FROM capital_call_items WHERE id = $1 LIMIT 1`, [Number(capitalCallItemId)]);
+          if (!item.rows[0] || Number(item.rows[0].lp_account_id) !== Number(lpAccountId)) {
+            rowsInvalid += 1;
+            continue;
+          }
+        } else {
+          lpAccountId = null;
+          capitalCallItemId = null;
+        }
+        if (desc) {
+          const learned = checkLearnedMappings(desc, learnedMappings);
+          if (!unitId && learned.unitId) unitId = learned.unitId;
+          if (learned.category && category === 'other') category = learned.category;
+        }
+        const rawRef = String(row.statement_ref || row.statementRef || '').trim();
+        const statementRef = rawRef || `upload:${uploadId}:row:${rowsImported + rowsSkipped + rowsInvalid + 1}`;
+        const reconciled = Number(row.reconciled ?? 0) === 1 ? 1 : 0;
+
+        const bankResult = await client.query(
+          `
+          INSERT INTO bank_transactions (
+            bank_upload_id, bank_account_id, date, amount, description, source_file, statement_ref
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING id
+          `,
+          [uploadId, bankAccountId || null, date, amount, desc, filename, statementRef || null]
+        );
+        const bankTransactionId = Number(bankResult.rows[0]?.id || 0);
+        await client.query(
+          `
+          INSERT INTO cash_flow_actuals (
+            bank_transaction_id,
+            portfolio_unit_id, entity_id, unit_renovation_id,
+            lp_account_id, capital_call_item_id,
+            date, amount, category, description, source_file, statement_ref, reconciled
+          ) VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          `,
+          [bankTransactionId, unitId, lpAccountId, capitalCallItemId, date, amount, category, desc, filename, statementRef || null, reconciled]
+        );
+        rowsImported += 1;
+      }
+
+      await client.query('COMMIT');
+      return {
+        upload_id: uploadId,
+        rows_imported: rowsImported,
+        rows_skipped: rowsSkipped,
+        total_rows: rows.length,
+        rows_invalid: rowsInvalid,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  });
+}
+
 /* ── Routes ──────────────────────────────────────────────────── */
 
 // GET /api/actuals/transactions - List imported transactions
@@ -923,7 +1239,7 @@ router.get('/transactions', async (req: Request, res: Response) => {
 });
 
 // POST /api/actuals/upload - Upload bank statement (CSV parsing / manual entry)
-router.post('/upload', (req: Request, res: Response) => {
+router.post('/upload', async (req: Request, res: Response) => {
   const db = getDb();
   const { filename, rows: csvRows, file_type = 'csv', bankAccountId } = req.body;
 
@@ -931,24 +1247,38 @@ router.post('/upload', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'filename and rows array required' });
   }
   const safeType = ['csv', 'manual', 'ofx', 'pdf', 'xls', 'xlsx'].includes(file_type) ? file_type : 'csv';
-  const result = importTransactions(db, {
-    filename,
-    rows: csvRows,
-    fileType: safeType as 'csv' | 'manual' | 'ofx' | 'pdf' | 'xls' | 'xlsx',
-    bankAccountId: bankAccountId ? Number(bankAccountId) : null,
-    uploadedBy: String((req as any).user?.email || '') || null,
-  });
-  const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
-  writeAuditLog({
-    db,
-    req,
-    action: 'import_statement',
-    tableName: 'bank_uploads',
-    recordId: result.upload_id as any,
-    before: null,
-    after: { upload, result },
-  });
-  res.json(result);
+  try {
+    const result = usePostgresActuals()
+      ? await importTransactionsPg({
+        filename,
+        rows: csvRows,
+        fileType: safeType as 'csv' | 'manual' | 'ofx' | 'pdf' | 'xls' | 'xlsx',
+        bankAccountId: bankAccountId ? Number(bankAccountId) : null,
+        uploadedBy: String((req as any).user?.email || '') || null,
+      })
+      : importTransactions(db, {
+        filename,
+        rows: csvRows,
+        fileType: safeType as 'csv' | 'manual' | 'ofx' | 'pdf' | 'xls' | 'xlsx',
+        bankAccountId: bankAccountId ? Number(bankAccountId) : null,
+        uploadedBy: String((req as any).user?.email || '') || null,
+      });
+    if (!usePostgresActuals()) {
+      const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+      writeAuditLog({
+        db,
+        req,
+        action: 'import_statement',
+        tableName: 'bank_uploads',
+        recordId: result.upload_id as any,
+        before: null,
+        after: { upload, result },
+      });
+    }
+    res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message || 'Failed to import transactions' });
+  }
 });
 
 // POST /api/actuals/upload-file - Upload statement files as multipart form data
@@ -980,7 +1310,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
 
   // OFX/QFX is stored for manual review right now.
   if (fileType === 'ofx') {
-    const result = importTransactions(db, {
+    const result = usePostgresActuals()
+      ? await importTransactionsPg({
+        filename: file.originalname,
+        rows: [],
+        fileType: fileType as 'ofx',
+        status: 'pending_review',
+        bankAccountId,
+        filePath: relativePath,
+        fileSha256,
+        uploadedBy,
+      })
+      : importTransactions(db, {
       filename: file.originalname,
       rows: [],
       fileType: fileType as 'ofx',
@@ -990,16 +1331,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       fileSha256,
       uploadedBy,
     });
-    const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
-    writeAuditLog({
-      db,
-      req,
-      action: 'upload_statement_file',
-      tableName: 'bank_uploads',
-      recordId: result.upload_id as any,
-      before: null,
-      after: { upload, result },
-    });
+    if (!usePostgresActuals()) {
+      const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+      writeAuditLog({
+        db,
+        req,
+        action: 'upload_statement_file',
+        tableName: 'bank_uploads',
+        recordId: result.upload_id as any,
+        before: null,
+        after: { upload, result },
+      });
+    }
 
   res.json({
       ...result,
@@ -1025,7 +1368,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       }
 
       const hasRows = rows.length > 0;
-      const result = importTransactions(db, {
+      const result = usePostgresActuals()
+        ? await importTransactionsPg({
+          filename: file.originalname,
+          rows,
+          fileType: 'pdf',
+          status: hasRows ? 'parsed' : 'pending_review',
+          bankAccountId,
+          filePath: relativePath,
+          fileSha256,
+          uploadedBy,
+        })
+        : importTransactions(db, {
         filename: file.originalname,
         rows,
         fileType: 'pdf',
@@ -1035,16 +1389,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
         fileSha256,
         uploadedBy,
       });
-      const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
-      writeAuditLog({
-        db,
-        req,
-        action: 'import_statement_file',
-        tableName: 'bank_uploads',
-        recordId: result.upload_id as any,
-        before: null,
-        after: { upload, result, inferred_rows: rows.length },
-      });
+      if (!usePostgresActuals()) {
+        const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+        writeAuditLog({
+          db,
+          req,
+          action: 'import_statement_file',
+          tableName: 'bank_uploads',
+          recordId: result.upload_id as any,
+          before: null,
+          after: { upload, result, inferred_rows: rows.length },
+        });
+      }
 
       res.json({
         ...result,
@@ -1068,7 +1424,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
     }
 
     const status: 'parsed' | 'pending_review' = fileType === 'xls' ? 'pending_review' : 'parsed';
-    const result = importTransactions(db, {
+    const result = usePostgresActuals()
+      ? await importTransactionsPg({
+        filename: file.originalname,
+        rows,
+        fileType: fileType as 'csv' | 'xls' | 'xlsx',
+        status,
+        bankAccountId,
+        filePath: relativePath,
+        fileSha256,
+        uploadedBy,
+      })
+      : importTransactions(db, {
       filename: file.originalname,
       rows,
       fileType: fileType as 'csv' | 'xls' | 'xlsx',
@@ -1078,16 +1445,18 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       fileSha256,
       uploadedBy,
     });
-    const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
-    writeAuditLog({
-      db,
-      req,
-      action: 'import_statement_file',
-      tableName: 'bank_uploads',
-      recordId: result.upload_id as any,
-      before: null,
-      after: { upload, result, inferred_rows: rows.length },
-    });
+    if (!usePostgresActuals()) {
+      const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+      writeAuditLog({
+        db,
+        req,
+        action: 'import_statement_file',
+        tableName: 'bank_uploads',
+        recordId: result.upload_id as any,
+        before: null,
+        after: { upload, result, inferred_rows: rows.length },
+      });
+    }
 
     res.json({
       ...result,
@@ -1120,12 +1489,23 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
   if (!portfolioUnitId) {
     return res.status(400).json({ error: 'portfolioUnitId is required' });
   }
-  const unit = db.prepare('SELECT id FROM portfolio_units WHERE id = ?').get(portfolioUnitId);
-  if (!unit) {
-    return res.status(404).json({ error: 'Portfolio unit not found' });
-  }
+  const pgMode = usePostgresActuals();
 
   (async () => {
+    if (pgMode) {
+      const unitPg = await withPostgresClient(async (client) => {
+        const result = await client.query('SELECT id FROM portfolio_units WHERE id = $1 LIMIT 1', [portfolioUnitId]);
+        return result.rows[0] || null;
+      });
+      if (!unitPg) {
+        throw new Error('Portfolio unit not found');
+      }
+    } else {
+      const unit = db.prepare('SELECT id FROM portfolio_units WHERE id = ?').get(portfolioUnitId);
+      if (!unit) {
+        throw new Error('Portfolio unit not found');
+      }
+    }
     const stored = await saveUploadedBuffer(
       file.buffer,
       'receipts',
@@ -1134,6 +1514,74 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
     );
     const relativePath = stored.filePath;
     try {
+      if (pgMode) {
+        const result = await withPostgresClient(async (client) => {
+          await client.query('BEGIN');
+          try {
+            const docResult = await client.query(
+              `
+              INSERT INTO documents (parent_id, parent_type, name, category, file_path, file_type, requires_signature, uploaded_by)
+              VALUES ($1, 'unit', $2, 'financial', $3, $4, 0, $5)
+              RETURNING id
+              `,
+              [portfolioUnitId, file.originalname || `receipt-${Date.now()}`, relativePath, file.mimetype, (req as any).user?.email || 'unknown']
+            );
+            const documentId = Number(docResult.rows[0]?.id || 0);
+            const existingTransactionId = req.body.transactionId ? Number(req.body.transactionId) : null;
+            const createExpense = String(req.body.createExpense || '').toLowerCase() === 'true';
+            let transactionId: number | null = null;
+            if (existingTransactionId) {
+              const before = await client.query('SELECT * FROM cash_flow_actuals WHERE id = $1 LIMIT 1', [existingTransactionId]);
+              const beforeRow = before.rows[0] as any;
+              if (!beforeRow) throw new Error('Transaction not found');
+              await assertPeriodOpenPg(client, String(beforeRow.date));
+              await client.query(
+                `
+                UPDATE cash_flow_actuals
+                SET portfolio_unit_id = COALESCE(portfolio_unit_id, $1),
+                    source_file = $2,
+                    receipt_document_id = $3
+                WHERE id = $4
+                `,
+                [portfolioUnitId, relativePath, documentId, existingTransactionId]
+              );
+              transactionId = existingTransactionId;
+            } else if (createExpense) {
+              const date = parseDateValue(req.body.date);
+              const amount = parseAmount(req.body.amount);
+              const category = String(req.body.category || 'other').toLowerCase();
+              const description = String(req.body.description || '').trim() || 'Receipt expense';
+              if (!date || amount === null) throw new Error('Valid date and amount are required to create expense');
+              await assertPeriodOpenPg(client, date);
+              const allowedCats = new Set(['hoa', 'insurance', 'tax', 'repair', 'management_fee', 'fund_expense', 'other']);
+              const safeCategory = allowedCats.has(category) ? category : 'other';
+              const insert = await client.query(
+                `
+                INSERT INTO cash_flow_actuals (
+                  portfolio_unit_id, date, amount, category, description, source_file, receipt_document_id, reconciled
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
+                RETURNING id
+                `,
+                [portfolioUnitId, date, amount, safeCategory, description, relativePath, documentId]
+              );
+              transactionId = Number(insert.rows[0]?.id || 0);
+            }
+            await client.query('COMMIT');
+            return { documentId, transactionId, filePath: relativePath };
+          } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+          }
+        });
+        res.status(201).json({
+          success: true,
+          document_id: result.documentId,
+          transaction_id: result.transactionId,
+          file_path: result.filePath,
+        });
+        return;
+      }
+
       const tx = db.transaction(() => {
         const docResult = db.prepare(`
       INSERT INTO documents (parent_id, parent_type, name, category, file_path, file_type, requires_signature, uploaded_by)
@@ -1224,7 +1672,7 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
 });
 
 // PUT /api/actuals/transactions/:id - Categorize/reconcile a transaction
-router.put('/transactions/:id', (req: Request, res: Response) => {
+router.put('/transactions/:id', async (req: Request, res: Response) => {
   const db = getDb();
   const { id } = req.params;
   const {
@@ -1238,6 +1686,82 @@ router.put('/transactions/:id', (req: Request, res: Response) => {
     description,
     statement_ref
   } = req.body;
+  if (usePostgresActuals()) {
+    try {
+      const before = await withPostgresClient(async (client) => {
+        const result = await client.query('SELECT * FROM cash_flow_actuals WHERE id = $1 LIMIT 1', [Number(id)]);
+        return (result.rows[0] || null) as any;
+      });
+      if (!before) {
+        return res.status(404).json({ error: 'Transaction not found' });
+      }
+      await withPostgresClient(async (client) => {
+        await assertPeriodOpenPg(client, String(before.date));
+      });
+
+      const updates: string[] = [];
+      const params: any[] = [];
+      if (category !== undefined) {
+        updates.push(`category = $${params.length + 1}`);
+        params.push(category);
+      }
+      if (portfolio_unit_id !== undefined) {
+        updates.push(`portfolio_unit_id = $${params.length + 1}`);
+        params.push(portfolio_unit_id || null);
+      }
+      if (entity_id !== undefined) {
+        updates.push(`entity_id = $${params.length + 1}`);
+        params.push(entity_id || null);
+      }
+      if (unit_renovation_id !== undefined) {
+        updates.push(`unit_renovation_id = $${params.length + 1}`);
+        params.push(unit_renovation_id || null);
+      }
+      if (lp_account_id !== undefined) {
+        updates.push(`lp_account_id = $${params.length + 1}`);
+        params.push(lp_account_id || null);
+      }
+      if (capital_call_item_id !== undefined) {
+        updates.push(`capital_call_item_id = $${params.length + 1}`);
+        params.push(capital_call_item_id || null);
+      }
+      if (reconciled !== undefined) {
+        updates.push(`reconciled = $${params.length + 1}`);
+        params.push(reconciled ? 1 : 0);
+      }
+      if (description !== undefined) {
+        updates.push(`description = $${params.length + 1}`);
+        params.push(description);
+      }
+      if (statement_ref !== undefined) {
+        updates.push(`statement_ref = $${params.length + 1}`);
+        params.push(statement_ref || null);
+      }
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'No fields to update' });
+      }
+      params.push(Number(id));
+      await withPostgresClient(async (client) => {
+        await client.query('BEGIN');
+        try {
+          await client.query(`UPDATE cash_flow_actuals SET ${updates.join(', ')} WHERE id = $${params.length}`, params);
+          const rowResult = await client.query('SELECT * FROM cash_flow_actuals WHERE id = $1 LIMIT 1', [Number(id)]);
+          const row = rowResult.rows[0] as any;
+          if (row) {
+            await syncCapitalCallFromActualPg(client, row, before.lp_account_id || null, before.capital_call_item_id || null);
+          }
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+      });
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(error?.statusCode || 500).json({ error: error?.message || 'Failed to update transaction' });
+    }
+  }
+
   const before = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(id)) as any;
   if (!before) {
     return res.status(404).json({ error: 'Transaction not found' });
@@ -1417,10 +1941,80 @@ router.get('/renovations-options', async (req: Request, res: Response) => {
 });
 
 // POST /api/actuals/transactions/:id/split - split one allocation into two
-router.post('/transactions/:id/split', (req: Request, res: Response) => {
+router.post('/transactions/:id/split', async (req: Request, res: Response) => {
   const db = getDb();
   const { id } = req.params;
   const { amount, category, portfolio_unit_id, entity_id, unit_renovation_id, description } = req.body as any;
+
+  if (usePostgresActuals()) {
+    try {
+      const base = await withPostgresClient(async (client) => {
+        const result = await client.query('SELECT * FROM cash_flow_actuals WHERE id = $1 LIMIT 1', [Number(id)]);
+        return (result.rows[0] || null) as any;
+      });
+      if (!base) return res.status(404).json({ error: 'Transaction not found' });
+      await withPostgresClient(async (client) => {
+        await assertPeriodOpenPg(client, String(base.date));
+      });
+      if (!base.bank_transaction_id) return res.status(400).json({ error: 'This transaction cannot be split (missing bank_transaction_id).' });
+
+      const splitAmount = Number(amount);
+      if (!Number.isFinite(splitAmount) || Math.abs(splitAmount) < 0.0001 || splitAmount === 0) {
+        return res.status(400).json({ error: 'Split amount is required.' });
+      }
+      if ((splitAmount > 0) !== (Number(base.amount) > 0)) {
+        return res.status(400).json({ error: 'Split amount must have the same sign as the original amount.' });
+      }
+      if (Math.abs(splitAmount) >= Math.abs(Number(base.amount))) {
+        return res.status(400).json({ error: 'Split amount must be smaller than the original amount.' });
+      }
+
+      const nextBaseAmount = Number(base.amount) - splitAmount;
+      const createdId = await withPostgresClient(async (client) => {
+        await client.query('BEGIN');
+        try {
+          await client.query('UPDATE cash_flow_actuals SET amount = $1, reconciled = 0 WHERE id = $2', [nextBaseAmount, Number(id)]);
+          const created = await client.query(
+            `
+            INSERT INTO cash_flow_actuals (
+              bank_transaction_id,
+              portfolio_unit_id, entity_id, unit_renovation_id,
+              lp_account_id, capital_call_item_id,
+              date, amount, category, description, source_file, statement_ref, receipt_document_id, reconciled
+            ) VALUES (
+              $1, $2, $3, $4, NULL, NULL, $5, $6, $7, $8, $9, $10, NULL, 0
+            )
+            RETURNING id
+            `,
+            [
+              Number(base.bank_transaction_id),
+              portfolio_unit_id ?? null,
+              entity_id ?? null,
+              unit_renovation_id ?? null,
+              String(base.date),
+              splitAmount,
+              String(category || base.category),
+              String(description || base.description || '').trim() || null,
+              String(base.source_file || ''),
+              String(base.statement_ref || ''),
+            ]
+          );
+          await client.query('COMMIT');
+          return Number(created.rows[0]?.id || 0);
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+      });
+      const createdRow = await withPostgresClient(async (client) => {
+        const result = await client.query('SELECT * FROM cash_flow_actuals WHERE id = $1 LIMIT 1', [createdId]);
+        return result.rows[0] || null;
+      });
+      return res.status(201).json({ success: true, id: createdId, row: createdRow });
+    } catch (error: any) {
+      return res.status(error?.statusCode || 500).json({ error: error?.message || 'Failed to split transaction' });
+    }
+  }
 
   const base = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(id)) as any;
   if (!base) return res.status(404).json({ error: 'Transaction not found' });
@@ -1492,9 +2086,25 @@ router.post('/transactions/:id/split', (req: Request, res: Response) => {
 });
 
 // DELETE /api/actuals/transactions/:id - delete one allocation row
-router.delete('/transactions/:id', (req: Request, res: Response) => {
+router.delete('/transactions/:id', async (req: Request, res: Response) => {
   const db = getDb();
   const id = Number(req.params.id);
+  if (usePostgresActuals()) {
+    const before = await withPostgresClient(async (client) => {
+      const result = await client.query('SELECT id, date FROM cash_flow_actuals WHERE id = $1 LIMIT 1', [id]);
+      return (result.rows[0] || null) as any;
+    });
+    if (!before) return res.status(404).json({ error: 'Transaction not found' });
+    try {
+      await withPostgresClient(async (client) => {
+        await assertPeriodOpenPg(client, String(before.date));
+        await client.query('DELETE FROM cash_flow_actuals WHERE id = $1', [id]);
+      });
+    } catch (error: any) {
+      return res.status(error?.statusCode || 409).json({ error: error?.message || 'Accounting period is closed' });
+    }
+    return res.json({ success: true });
+  }
   const before = db.prepare('SELECT id, date FROM cash_flow_actuals WHERE id = ?').get(id) as any;
   if (!before) return res.status(404).json({ error: 'Transaction not found' });
   try {
@@ -1517,13 +2127,19 @@ router.delete('/transactions/:id', (req: Request, res: Response) => {
 });
 
 // POST /api/actuals/transactions/bulk-reconcile
-router.post('/transactions/bulk-reconcile', (req: Request, res: Response) => {
+router.post('/transactions/bulk-reconcile', async (req: Request, res: Response) => {
   const db = getDb();
   const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v: any) => Number(v)).filter((n: number) => Number.isFinite(n) && n > 0) : [];
   const reconciled = req.body?.reconciled === undefined ? 1 : (req.body.reconciled ? 1 : 0);
   if (!ids.length) {
     res.status(400).json({ error: 'ids[] is required' });
     return;
+  }
+  if (usePostgresActuals()) {
+    await withPostgresClient(async (client) => {
+      await client.query(`UPDATE cash_flow_actuals SET reconciled = $1 WHERE id = ANY($2::bigint[])`, [reconciled, ids]);
+    });
+    return res.json({ success: true, count: ids.length, reconciled });
   }
   const placeholders = ids.map(() => '?').join(', ');
   const tx = db.transaction(() => {
@@ -1546,7 +2162,7 @@ router.post('/transactions/bulk-reconcile', (req: Request, res: Response) => {
 });
 
 // POST /api/actuals/transactions/bulk-assign
-router.post('/transactions/bulk-assign', (req: Request, res: Response) => {
+router.post('/transactions/bulk-assign', async (req: Request, res: Response) => {
   const db = getDb();
   const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v: any) => Number(v)).filter((n: number) => Number.isFinite(n) && n > 0) : [];
   const portfolioUnitId = req.body?.portfolioUnitId !== undefined ? Number(req.body.portfolioUnitId) || null : undefined;
@@ -1574,84 +2190,170 @@ router.post('/transactions/bulk-assign', (req: Request, res: Response) => {
     res.status(400).json({ error: 'No assignment fields provided' });
     return;
   }
+  if (usePostgresActuals()) {
+    const sets: string[] = [];
+    const params: any[] = [];
+    if (portfolioUnitId !== undefined) {
+      sets.push(`portfolio_unit_id = $${params.length + 1}`);
+      params.push(portfolioUnitId);
+    }
+    if (entityId !== undefined) {
+      sets.push(`entity_id = $${params.length + 1}`);
+      params.push(entityId);
+    }
+    if (category !== undefined) {
+      sets.push(`category = $${params.length + 1}`);
+      params.push(category);
+    }
+    params.push(ids);
+    await withPostgresClient(async (client) => {
+      await client.query(`UPDATE cash_flow_actuals SET ${sets.join(', ')} WHERE id = ANY($${params.length}::bigint[])`, params);
+    });
+    return res.json({ success: true, count: ids.length });
+  }
   const placeholders = ids.map(() => '?').join(', ');
   db.prepare(`UPDATE cash_flow_actuals SET ${updates.join(', ')} WHERE id IN (${placeholders})`).run(...vals, ...ids);
   res.json({ success: true, count: ids.length });
 });
 
 // GET /api/actuals/bank-lines - bank transactions with allocations and delta
-router.get('/bank-lines', (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/bank-lines', async (req: Request, res: Response) => {
   const { upload_id, month, limit = 200, offset = 0 } = req.query as any;
+  const bankLines = usePostgresActuals()
+    ? await withPostgresClient(async (client) => {
+      let where = 'WHERE 1=1';
+      const params: any[] = [];
+      if (upload_id) {
+        where += ` AND bt.bank_upload_id = $${params.length + 1}`;
+        params.push(Number(upload_id));
+      }
+      if (month) {
+        const m = String(month);
+        where += ` AND bt.date >= $${params.length + 1} AND bt.date <= $${params.length + 2}`;
+        params.push(`${m}-01`, `${m}-31`);
+      }
+      const bankRowsResult = await client.query(`
+        SELECT
+          bt.*,
+          COALESCE(SUM(cfa.amount), 0) as allocated_total,
+          (bt.amount - COALESCE(SUM(cfa.amount), 0)) as delta,
+          COALESCE(SUM(CASE WHEN cfa.reconciled = 1 THEN 1 ELSE 0 END), 0) as reconciled_alloc_count,
+          COALESCE(COUNT(cfa.id), 0) as alloc_count
+        FROM bank_transactions bt
+        LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+        ${where}
+        GROUP BY bt.id
+        ORDER BY bt.date DESC, bt.id DESC
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+      `, [...params, Number(limit), Number(offset)]);
+      const bankRows = bankRowsResult.rows as any[];
+      const ids = bankRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n));
+      if (ids.length === 0) return [];
 
-  let where = 'WHERE 1=1';
-  const params: any[] = [];
-  if (upload_id) {
-    where += ' AND bt.bank_upload_id = ?';
-    params.push(Number(upload_id));
-  }
-  if (month) {
-    const m = String(month);
-    where += ` AND bt.date >= ? AND bt.date <= ?`;
-    params.push(`${m}-01`, `${m}-31`);
-  }
+      const allocationsResult = await client.query(`
+        SELECT
+          cfa.*,
+          bu.unit_number,
+          e.name as entity_name,
+          ur.description as renovation_description
+        FROM cash_flow_actuals cfa
+        LEFT JOIN portfolio_units pu ON cfa.portfolio_unit_id = pu.id
+        LEFT JOIN building_units bu ON pu.building_unit_id = bu.id
+        LEFT JOIN entities e ON cfa.entity_id = e.id
+        LEFT JOIN unit_renovations ur ON cfa.unit_renovation_id = ur.id
+        WHERE cfa.bank_transaction_id = ANY($1::bigint[])
+        ORDER BY cfa.bank_transaction_id, cfa.id
+      `, [ids]);
+      const allocations = allocationsResult.rows as any[];
+      const byBank = new Map<number, any[]>();
+      for (const a of allocations) {
+        const k = Number(a.bank_transaction_id);
+        byBank.set(k, [...(byBank.get(k) || []), a]);
+      }
+      return bankRows.map((b) => ({
+        ...b,
+        allocations: byBank.get(Number(b.id)) || [],
+      }));
+    })
+    : (() => {
+      const db = getDb();
+      let where = 'WHERE 1=1';
+      const params: any[] = [];
+      if (upload_id) {
+        where += ' AND bt.bank_upload_id = ?';
+        params.push(Number(upload_id));
+      }
+      if (month) {
+        const m = String(month);
+        where += ` AND bt.date >= ? AND bt.date <= ?`;
+        params.push(`${m}-01`, `${m}-31`);
+      }
 
-  const bankRows = db.prepare(`
-    SELECT
-      bt.*,
-      COALESCE(SUM(cfa.amount), 0) as allocated_total,
-      (bt.amount - COALESCE(SUM(cfa.amount), 0)) as delta,
-      COALESCE(SUM(CASE WHEN cfa.reconciled = 1 THEN 1 ELSE 0 END), 0) as reconciled_alloc_count,
-      COALESCE(COUNT(cfa.id), 0) as alloc_count
-    FROM bank_transactions bt
-    LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
-    ${where}
-    GROUP BY bt.id
-    ORDER BY bt.date DESC, bt.id DESC
-    LIMIT ? OFFSET ?
-  `).all(...params, Number(limit), Number(offset)) as any[];
+      const bankRows = db.prepare(`
+        SELECT
+          bt.*,
+          COALESCE(SUM(cfa.amount), 0) as allocated_total,
+          (bt.amount - COALESCE(SUM(cfa.amount), 0)) as delta,
+          COALESCE(SUM(CASE WHEN cfa.reconciled = 1 THEN 1 ELSE 0 END), 0) as reconciled_alloc_count,
+          COALESCE(COUNT(cfa.id), 0) as alloc_count
+        FROM bank_transactions bt
+        LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+        ${where}
+        GROUP BY bt.id
+        ORDER BY bt.date DESC, bt.id DESC
+        LIMIT ? OFFSET ?
+      `).all(...params, Number(limit), Number(offset)) as any[];
 
-  const ids = bankRows.map((r) => r.id);
-  if (ids.length === 0) return res.json([]);
-  const ph = ids.map(() => '?').join(', ');
-  const allocations = db.prepare(`
-    SELECT
-      cfa.*,
-      bu.unit_number,
-      e.name as entity_name,
-      ur.description as renovation_description
-    FROM cash_flow_actuals cfa
-    LEFT JOIN portfolio_units pu ON cfa.portfolio_unit_id = pu.id
-    LEFT JOIN building_units bu ON pu.building_unit_id = bu.id
-    LEFT JOIN entities e ON cfa.entity_id = e.id
-    LEFT JOIN unit_renovations ur ON cfa.unit_renovation_id = ur.id
-    WHERE cfa.bank_transaction_id IN (${ph})
-    ORDER BY cfa.bank_transaction_id, cfa.id
-  `).all(...ids) as any[];
+      const ids = bankRows.map((r) => r.id);
+      if (ids.length === 0) return [];
+      const ph = ids.map(() => '?').join(', ');
+      const allocations = db.prepare(`
+        SELECT
+          cfa.*,
+          bu.unit_number,
+          e.name as entity_name,
+          ur.description as renovation_description
+        FROM cash_flow_actuals cfa
+        LEFT JOIN portfolio_units pu ON cfa.portfolio_unit_id = pu.id
+        LEFT JOIN building_units bu ON pu.building_unit_id = bu.id
+        LEFT JOIN entities e ON cfa.entity_id = e.id
+        LEFT JOIN unit_renovations ur ON cfa.unit_renovation_id = ur.id
+        WHERE cfa.bank_transaction_id IN (${ph})
+        ORDER BY cfa.bank_transaction_id, cfa.id
+      `).all(...ids) as any[];
 
-  const byBank = new Map<number, any[]>();
-  for (const a of allocations) {
-    const k = Number(a.bank_transaction_id);
-    byBank.set(k, [...(byBank.get(k) || []), a]);
-  }
-
-  res.json(bankRows.map((b) => ({
-    ...b,
-    allocations: byBank.get(Number(b.id)) || [],
-  })));
+      const byBank = new Map<number, any[]>();
+      for (const a of allocations) {
+        const k = Number(a.bank_transaction_id);
+        byBank.set(k, [...(byBank.get(k) || []), a]);
+      }
+      return bankRows.map((b) => ({
+        ...b,
+        allocations: byBank.get(Number(b.id)) || [],
+      }));
+    })();
+  res.json(bankLines);
 });
 
 // POST /api/actuals/bank-lines/:id/allocations - add a new allocation row under one bank line
-router.post('/bank-lines/:id/allocations', (req: Request, res: Response) => {
+router.post('/bank-lines/:id/allocations', async (req: Request, res: Response) => {
   const db = getDb();
   const bankId = Number(req.params.id);
   if (!bankId) return res.status(400).json({ error: 'Invalid bank transaction id' });
-
-  const bank = db.prepare(`SELECT * FROM bank_transactions WHERE id = ?`).get(bankId) as any;
+  const bank = usePostgresActuals()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(`SELECT * FROM bank_transactions WHERE id = $1 LIMIT 1`, [bankId]);
+      return (result.rows[0] || null) as any;
+    })
+    : (db.prepare(`SELECT * FROM bank_transactions WHERE id = ?`).get(bankId) as any);
   if (!bank) return res.status(404).json({ error: 'Bank transaction not found' });
 
   try {
-    assertPeriodOpen(db, String(bank.date));
+    if (usePostgresActuals()) {
+      await withPostgresClient(async (client) => assertPeriodOpenPg(client, String(bank.date)));
+    } else {
+      assertPeriodOpen(db, String(bank.date));
+    }
   } catch (error: any) {
     return res.status(error?.statusCode || 409).json({ error: error?.message || 'Accounting period is closed' });
   }
@@ -1704,7 +2406,12 @@ router.post('/bank-lines/:id/allocations', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Renovation assignment requires a Unit.' });
   }
   if (renoId && unitId) {
-    const reno = db.prepare(`SELECT id, portfolio_unit_id FROM unit_renovations WHERE id = ?`).get(renoId) as any;
+    const reno = usePostgresActuals()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(`SELECT id, portfolio_unit_id FROM unit_renovations WHERE id = $1 LIMIT 1`, [renoId]);
+        return (result.rows[0] || null) as any;
+      })
+      : (db.prepare(`SELECT id, portfolio_unit_id FROM unit_renovations WHERE id = ?`).get(renoId) as any);
     if (!reno) return res.status(400).json({ error: 'Renovation not found.' });
     if (Number(reno.portfolio_unit_id) !== Number(unitId)) {
       return res.status(400).json({ error: 'Renovation does not belong to selected Unit.' });
@@ -1719,7 +2426,12 @@ router.post('/bank-lines/:id/allocations', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'capital_call allocations must include lp_account_id and capital_call_item_id' });
     }
     // Verify call item belongs to LP
-    const item = db.prepare(`SELECT id, lp_account_id FROM capital_call_items WHERE id = ?`).get(callItemId) as any;
+    const item = usePostgresActuals()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(`SELECT id, lp_account_id FROM capital_call_items WHERE id = $1 LIMIT 1`, [callItemId]);
+        return (result.rows[0] || null) as any;
+      })
+      : (db.prepare(`SELECT id, lp_account_id FROM capital_call_items WHERE id = ?`).get(callItemId) as any);
     if (!item || Number(item.lp_account_id) !== Number(lpId)) {
       return res.status(400).json({ error: 'Selected capital call item does not belong to selected LP.' });
     }
@@ -1729,7 +2441,36 @@ router.post('/bank-lines/:id/allocations', (req: Request, res: Response) => {
   }
 
   const rowDesc = String(description || bank.description || '').trim() || null;
-  const result = db.prepare(`
+  const result = usePostgresActuals()
+    ? await withPostgresClient(async (client) => {
+      const created = await client.query(
+        `
+        INSERT INTO cash_flow_actuals (
+          bank_transaction_id,
+          portfolio_unit_id, entity_id, unit_renovation_id,
+          lp_account_id, capital_call_item_id,
+          date, amount, category, description, source_file, statement_ref, reconciled
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0)
+        RETURNING id
+        `,
+        [
+          bankId,
+          unitId,
+          entityId,
+          renoId,
+          lpId,
+          callItemId,
+          String(bank.date),
+          allocAmount,
+          cat,
+          rowDesc,
+          String(bank.source_file || ''),
+          String(bank.statement_ref || ''),
+        ]
+      );
+      return { lastInsertRowid: Number(created.rows[0]?.id || 0) };
+    })
+    : db.prepare(`
     INSERT INTO cash_flow_actuals (
       bank_transaction_id,
       portfolio_unit_id, entity_id, unit_renovation_id,
@@ -1751,7 +2492,12 @@ router.post('/bank-lines/:id/allocations', (req: Request, res: Response) => {
     String(bank.statement_ref || ''),
   );
 
-  const created = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(result.lastInsertRowid));
+  const created = usePostgresActuals()
+    ? await withPostgresClient(async (client) => {
+      const row = await client.query('SELECT * FROM cash_flow_actuals WHERE id = $1 LIMIT 1', [Number(result.lastInsertRowid)]);
+      return row.rows[0] || null;
+    })
+    : db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(result.lastInsertRowid));
   writeAuditLog({
     db,
     req,
@@ -1773,12 +2519,66 @@ router.get('/periods', async (req: Request, res: Response) => {
 });
 
 // POST /api/actuals/periods/:month/close - close a month (all bank lines must be allocated/balanced/reconciled)
-router.post('/periods/:month/close', (req: Request, res: Response) => {
+router.post('/periods/:month/close', async (req: Request, res: Response) => {
   const db = getDb();
   const m = String(req.params.month || '').trim();
   if (!/^\d{4}-\d{2}$/.test(m)) return res.status(400).json({ error: 'Month must be YYYY-MM' });
   const from = `${m}-01`;
   const to = `${m}-31`;
+  if (usePostgresActuals()) {
+    const check = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        SELECT
+          (SELECT COUNT(*) FROM bank_transactions bt WHERE bt.date >= $1 AND bt.date <= $2) as bank_rows,
+          (SELECT COUNT(*) FROM (
+            SELECT bt.id
+            FROM bank_transactions bt
+            LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+            WHERE bt.date >= $1 AND bt.date <= $2
+            GROUP BY bt.id
+            HAVING COALESCE(SUM(cfa.amount), 0) = 0
+          ) t) as unallocated_lines,
+          (SELECT COUNT(*) FROM (
+            SELECT bt.id
+            FROM bank_transactions bt
+            LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+            WHERE bt.date >= $1 AND bt.date <= $2
+            GROUP BY bt.id, bt.amount
+            HAVING ABS(bt.amount - COALESCE(SUM(cfa.amount), 0)) > 0.005
+          ) t) as out_of_balance_lines,
+          (SELECT COUNT(*) FROM cash_flow_actuals cfa
+            JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+            WHERE bt.date >= $1 AND bt.date <= $2 AND cfa.reconciled = 0
+          ) as unreconciled_allocs
+        `,
+        [from, to]
+      );
+      return result.rows[0] as any;
+    });
+    const bankRows = Number(check?.bank_rows || 0);
+    const unallocated = Number(check?.unallocated_lines || 0);
+    const outOfBalance = Number(check?.out_of_balance_lines || 0);
+    const unreconciledAllocs = Number(check?.unreconciled_allocs || 0);
+    if (bankRows > 0 && (unallocated > 0 || outOfBalance > 0 || unreconciledAllocs > 0)) {
+      return res.status(400).json({
+        error: 'Month is not fully reconciled.',
+        details: { month: m, bankRows, unallocated, outOfBalance, unreconciledAllocs },
+      });
+    }
+    const userEmail = String((req as any).user?.email || '');
+    await withPostgresClient(async (client) => {
+      await client.query(
+        `
+        INSERT INTO accounting_periods (month, status, closed_at, closed_by)
+        VALUES ($1, 'closed', NOW(), $2)
+        ON CONFLICT(month) DO UPDATE SET status='closed', closed_at=NOW(), closed_by=EXCLUDED.closed_by
+        `,
+        [m, userEmail || null]
+      );
+    });
+    return res.json({ success: true });
+  }
 
   const check = db.prepare(`
     SELECT
@@ -1970,14 +2770,29 @@ router.get('/bank-accounts', async (req: Request, res: Response) => {
   res.json(rows);
 });
 
-router.post('/bank-accounts', (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/bank-accounts', async (req: Request, res: Response) => {
   const name = String(req.body?.name || '').trim();
   const accountType = String(req.body?.accountType || '').trim() || 'operating';
   if (!name) {
     res.status(400).json({ error: 'name is required' });
     return;
   }
+  if (usePostgresActuals()) {
+    const row = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        INSERT INTO bank_accounts (name, account_type, institution_name, account_mask, is_active)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+        `,
+        [name, accountType, req.body?.institutionName || null, req.body?.accountMask || null, req.body?.isActive === false ? 0 : 1]
+      );
+      return result.rows[0];
+    });
+    res.status(201).json({ id: Number(row?.id || 0) });
+    return;
+  }
+  const db = getDb();
   const result = db.prepare(`
     INSERT INTO bank_accounts (name, account_type, institution_name, account_mask, is_active)
     VALUES (?, ?, ?, ?, ?)
@@ -2001,8 +2816,7 @@ router.get('/recurring-expenses', async (req: Request, res: Response) => {
   res.json(rows);
 });
 
-router.post('/recurring-expenses', (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/recurring-expenses', async (req: Request, res: Response) => {
   const amount = Number(req.body?.amount);
   const category = String(req.body?.category || '').trim();
   const startsOn = String(req.body?.startsOn || '').trim();
@@ -2010,6 +2824,33 @@ router.post('/recurring-expenses', (req: Request, res: Response) => {
     res.status(400).json({ error: 'amount, category, startsOn are required' });
     return;
   }
+  if (usePostgresActuals()) {
+    const row = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        INSERT INTO recurring_expenses (
+          portfolio_unit_id, entity_id, category, amount, day_of_month, starts_on, ends_on, memo, is_active
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id
+        `,
+        [
+          req.body?.portfolioUnitId || null,
+          req.body?.entityId || null,
+          category,
+          amount,
+          Math.max(1, Math.min(31, Number(req.body?.dayOfMonth || 1))),
+          startsOn,
+          req.body?.endsOn || null,
+          req.body?.memo || null,
+          req.body?.isActive === false ? 0 : 1,
+        ]
+      );
+      return result.rows[0];
+    });
+    res.status(201).json({ id: Number(row?.id || 0) });
+    return;
+  }
+  const db = getDb();
   const result = db.prepare(`
     INSERT INTO recurring_expenses (
       portfolio_unit_id, entity_id, category, amount, day_of_month, starts_on, ends_on, memo, is_active
@@ -2028,14 +2869,67 @@ router.post('/recurring-expenses', (req: Request, res: Response) => {
   res.status(201).json({ id: Number(result.lastInsertRowid) });
 });
 
-router.post('/recurring-expenses/run', (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/recurring-expenses/run', async (req: Request, res: Response) => {
   const month = String(req.body?.month || new Date().toISOString().slice(0, 7));
   if (!/^\d{4}-\d{2}$/.test(month)) {
     res.status(400).json({ error: 'month must be YYYY-MM' });
     return;
   }
   const runDate = `${month}-01`;
+  if (usePostgresActuals()) {
+    const rows = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        SELECT *
+        FROM recurring_expenses
+        WHERE is_active = 1
+          AND starts_on <= $1
+          AND (ends_on IS NULL OR ends_on >= $2)
+        `,
+        [runDate, runDate]
+      );
+      return result.rows as any[];
+    });
+    let generated = 0;
+    await withPostgresClient(async (client) => {
+      await client.query('BEGIN');
+      try {
+        for (const r of rows) {
+          const entryDate = `${month}-${String(Math.max(1, Math.min(28, Number(r.day_of_month || 1)))).padStart(2, '0')}`;
+          const existsResult = await client.query(
+            `
+            SELECT id FROM cash_flow_actuals
+            WHERE category = $1
+              AND date = $2
+              AND COALESCE(description, '') = COALESCE($3, '')
+              AND COALESCE(portfolio_unit_id, 0) = COALESCE($4, 0)
+              AND COALESCE(entity_id, 0) = COALESCE($5, 0)
+            LIMIT 1
+            `,
+            [r.category, entryDate, r.memo || null, r.portfolio_unit_id || null, r.entity_id || null]
+          );
+          if (existsResult.rows[0]) continue;
+          await client.query(
+            `
+            INSERT INTO cash_flow_actuals (
+              portfolio_unit_id, entity_id, date, amount, category, description, source_file, statement_ref, reconciled
+            ) VALUES ($1, $2, $3, $4, $5, $6, 'recurring_template', NULL, 0)
+            `,
+            [r.portfolio_unit_id || null, r.entity_id || null, entryDate, -Math.abs(Number(r.amount || 0)), r.category, r.memo || 'Recurring expense']
+          );
+          await client.query(`UPDATE recurring_expenses SET last_generated_on = $1 WHERE id = $2`, [entryDate, r.id]);
+          generated += 1;
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    });
+    res.json({ success: true, month, generated });
+    return;
+  }
+  const db = getDb();
   const rows = db.prepare(`
     SELECT *
     FROM recurring_expenses
@@ -2072,14 +2966,64 @@ router.post('/recurring-expenses/run', (req: Request, res: Response) => {
 });
 
 // POST /api/actuals/uploads/:id/close - mark a statement upload reconciled
-router.post('/uploads/:id/close', (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/uploads/:id/close', async (req: Request, res: Response) => {
   const uploadId = Number(req.params.id);
   if (!uploadId) return res.status(400).json({ error: 'Invalid upload id' });
+  if (usePostgresActuals()) {
+    const row = await withPostgresClient(async (client) => {
+      const result = await client.query(`SELECT id, status FROM bank_uploads WHERE id = $1 LIMIT 1`, [uploadId]);
+      return result.rows[0] || null;
+    });
+    if (!row) return res.status(404).json({ error: 'Upload not found' });
 
+    const check = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        SELECT
+          (SELECT COUNT(*) FROM bank_transactions bt WHERE bt.bank_upload_id = $1) as bank_rows,
+          (SELECT COUNT(*) FROM cash_flow_actuals cfa JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id WHERE bt.bank_upload_id = $1 AND cfa.reconciled = 0) as unreconciled_allocs,
+          (SELECT COUNT(*) FROM (
+            SELECT bt.id
+            FROM bank_transactions bt
+            LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+            WHERE bt.bank_upload_id = $1
+            GROUP BY bt.id
+            HAVING COALESCE(SUM(cfa.amount), 0) = 0
+          ) t) as unallocated_lines,
+          (SELECT COUNT(*) FROM (
+            SELECT bt.id
+            FROM bank_transactions bt
+            LEFT JOIN cash_flow_actuals cfa ON cfa.bank_transaction_id = bt.id
+            WHERE bt.bank_upload_id = $1
+            GROUP BY bt.id, bt.amount
+            HAVING ABS(bt.amount - COALESCE(SUM(cfa.amount), 0)) > 0.005
+          ) t) as out_of_balance_lines
+        `,
+        [uploadId]
+      );
+      return result.rows[0] as any;
+    });
+
+    const bankRows = Number(check?.bank_rows || 0);
+    const unreconciledAllocs = Number(check?.unreconciled_allocs || 0);
+    const unallocated = Number(check?.unallocated_lines || 0);
+    const outOfBalance = Number(check?.out_of_balance_lines || 0);
+    if (bankRows === 0) return res.status(400).json({ error: 'This upload has no bank transactions.' });
+    if (unallocated > 0 || outOfBalance > 0 || unreconciledAllocs > 0) {
+      return res.status(400).json({
+        error: 'Upload is not fully reconciled.',
+        details: { bankRows, unallocated, outOfBalance, unreconciledAllocs },
+      });
+    }
+    await withPostgresClient(async (client) => {
+      await client.query(`UPDATE bank_uploads SET status = 'reconciled' WHERE id = $1`, [uploadId]);
+    });
+    return res.json({ success: true });
+  }
+
+  const db = getDb();
   const row = db.prepare(`SELECT id, status FROM bank_uploads WHERE id = ?`).get(uploadId) as any;
   if (!row) return res.status(404).json({ error: 'Upload not found' });
-
   const check = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM bank_transactions bt WHERE bt.bank_upload_id = ?) as bank_rows,
@@ -2097,22 +3041,17 @@ router.post('/uploads/:id/close', (req: Request, res: Response) => {
         HAVING ABS(bt.amount - COALESCE(SUM(cfa.amount), 0)) > 0.005
       ) as out_of_balance_lines
   `).get(uploadId, uploadId, uploadId, uploadId) as any;
-
   const bankRows = Number(check?.bank_rows || 0);
   const unreconciledAllocs = Number(check?.unreconciled_allocs || 0);
   const unallocated = Number(check?.unallocated_lines || 0);
   const outOfBalance = Number(check?.out_of_balance_lines || 0);
-
-  if (bankRows === 0) {
-    return res.status(400).json({ error: 'This upload has no bank transactions.' });
-  }
+  if (bankRows === 0) return res.status(400).json({ error: 'This upload has no bank transactions.' });
   if (unallocated > 0 || outOfBalance > 0 || unreconciledAllocs > 0) {
     return res.status(400).json({
       error: 'Upload is not fully reconciled.',
       details: { bankRows, unallocated, outOfBalance, unreconciledAllocs },
     });
   }
-
   const before = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(uploadId) as any;
   db.prepare(`UPDATE bank_uploads SET status = 'reconciled' WHERE id = ?`).run(uploadId);
   const after = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(uploadId) as any;
@@ -2125,7 +3064,7 @@ router.post('/uploads/:id/close', (req: Request, res: Response) => {
     before,
     after,
   });
-  res.json({ success: true });
+  return res.json({ success: true });
 });
 
 function csvEscape(v: any): string {
@@ -2147,8 +3086,7 @@ function asMonthRange(month: string): { from: string; toExclusive: string } | nu
 }
 
 // GET /api/actuals/exports/month/:month?type=allocations|bank_lines|quickbooks_bank|quickbooks_details
-router.get('/exports/month/:month', (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/exports/month/:month', async (req: Request, res: Response) => {
   const month = String(req.params.month || '');
   const type = String(req.query.type || 'allocations');
   const range = asMonthRange(month);
@@ -2157,19 +3095,42 @@ router.get('/exports/month/:month', (req: Request, res: Response) => {
   const { from, toExclusive } = range;
 
   if (type === 'bank_lines' || type === 'quickbooks_bank') {
-    const rows = db.prepare(`
-      SELECT
-        bt.id as bank_transaction_id,
-        bt.date,
-        bt.amount,
-        bt.description,
-        bt.statement_ref,
-        bu.filename as upload_filename
-      FROM bank_transactions bt
-      LEFT JOIN bank_uploads bu ON bu.id = bt.bank_upload_id
-      WHERE bt.date >= ? AND bt.date < ?
-      ORDER BY bt.date ASC, bt.id ASC
-    `).all(from, toExclusive) as any[];
+    const rows = usePostgresActuals()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(
+          `
+          SELECT
+            bt.id as bank_transaction_id,
+            bt.date,
+            bt.amount,
+            bt.description,
+            bt.statement_ref,
+            bu.filename as upload_filename
+          FROM bank_transactions bt
+          LEFT JOIN bank_uploads bu ON bu.id = bt.bank_upload_id
+          WHERE bt.date >= $1 AND bt.date < $2
+          ORDER BY bt.date ASC, bt.id ASC
+          `,
+          [from, toExclusive]
+        );
+        return result.rows as any[];
+      })
+      : (() => {
+        const db = getDb();
+        return db.prepare(`
+          SELECT
+            bt.id as bank_transaction_id,
+            bt.date,
+            bt.amount,
+            bt.description,
+            bt.statement_ref,
+            bu.filename as upload_filename
+          FROM bank_transactions bt
+          LEFT JOIN bank_uploads bu ON bu.id = bt.bank_upload_id
+          WHERE bt.date >= ? AND bt.date < ?
+          ORDER BY bt.date ASC, bt.id ASC
+        `).all(from, toExclusive) as any[];
+      })();
 
     const header = type === 'quickbooks_bank'
       ? ['Date', 'Description', 'Amount']
@@ -2196,26 +3157,56 @@ router.get('/exports/month/:month', (req: Request, res: Response) => {
   }
 
   // allocations / quickbooks_details (both are allocation-level exports, with different columns)
-  const allocations = db.prepare(`
-    SELECT
-      cfa.*,
-      bt.amount as bank_amount,
-      bt.description as bank_description,
-      bt.statement_ref,
-      bu.filename as upload_filename,
-      e.name as entity_name,
-      ur.description as renovation_description,
-      bu2.unit_number
-    FROM cash_flow_actuals cfa
-    LEFT JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
-    LEFT JOIN bank_uploads bu ON bu.id = bt.bank_upload_id
-    LEFT JOIN portfolio_units pu ON pu.id = cfa.portfolio_unit_id
-    LEFT JOIN building_units bu2 ON bu2.id = pu.building_unit_id
-    LEFT JOIN entities e ON e.id = cfa.entity_id
-    LEFT JOIN unit_renovations ur ON ur.id = cfa.unit_renovation_id
-    WHERE cfa.date >= ? AND cfa.date < ?
-    ORDER BY cfa.date ASC, cfa.id ASC
-  `).all(from, toExclusive) as any[];
+  const allocations = usePostgresActuals()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        SELECT
+          cfa.*,
+          bt.amount as bank_amount,
+          bt.description as bank_description,
+          bt.statement_ref,
+          bu.filename as upload_filename,
+          e.name as entity_name,
+          ur.description as renovation_description,
+          bu2.unit_number
+        FROM cash_flow_actuals cfa
+        LEFT JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+        LEFT JOIN bank_uploads bu ON bu.id = bt.bank_upload_id
+        LEFT JOIN portfolio_units pu ON pu.id = cfa.portfolio_unit_id
+        LEFT JOIN building_units bu2 ON bu2.id = pu.building_unit_id
+        LEFT JOIN entities e ON e.id = cfa.entity_id
+        LEFT JOIN unit_renovations ur ON ur.id = cfa.unit_renovation_id
+        WHERE cfa.date >= $1 AND cfa.date < $2
+        ORDER BY cfa.date ASC, cfa.id ASC
+        `,
+        [from, toExclusive]
+      );
+      return result.rows as any[];
+    })
+    : (() => {
+      const db = getDb();
+      return db.prepare(`
+        SELECT
+          cfa.*,
+          bt.amount as bank_amount,
+          bt.description as bank_description,
+          bt.statement_ref,
+          bu.filename as upload_filename,
+          e.name as entity_name,
+          ur.description as renovation_description,
+          bu2.unit_number
+        FROM cash_flow_actuals cfa
+        LEFT JOIN bank_transactions bt ON bt.id = cfa.bank_transaction_id
+        LEFT JOIN bank_uploads bu ON bu.id = bt.bank_upload_id
+        LEFT JOIN portfolio_units pu ON pu.id = cfa.portfolio_unit_id
+        LEFT JOIN building_units bu2 ON bu2.id = pu.building_unit_id
+        LEFT JOIN entities e ON e.id = cfa.entity_id
+        LEFT JOIN unit_renovations ur ON ur.id = cfa.unit_renovation_id
+        WHERE cfa.date >= ? AND cfa.date < ?
+        ORDER BY cfa.date ASC, cfa.id ASC
+      `).all(from, toExclusive) as any[];
+    })();
 
   const header = type === 'quickbooks_details'
     ? [
@@ -2300,14 +3291,37 @@ router.get('/mappings', async (req: Request, res: Response) => {
 });
 
 // POST /api/actuals/mappings - Create a new mapping
-router.post('/mappings', (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/mappings', async (req: Request, res: Response) => {
   const { pattern, portfolioUnitId, category } = req.body;
 
   if (!pattern || !portfolioUnitId) {
     return res.status(400).json({ error: 'pattern and portfolioUnitId are required' });
   }
+  if (usePostgresActuals()) {
+    const existing = await withPostgresClient(async (client) => {
+      const result = await client.query(`SELECT id FROM learned_mappings WHERE description_pattern = $1 LIMIT 1`, [pattern]);
+      return result.rows[0] || null;
+    });
+    if (existing) {
+      await withPostgresClient(async (client) => {
+        await client.query(
+          `UPDATE learned_mappings SET portfolio_unit_id = $1, category = $2 WHERE description_pattern = $3`,
+          [portfolioUnitId, category || null, pattern]
+        );
+      });
+      return res.json({ success: true, updated: true });
+    }
+    const created = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `INSERT INTO learned_mappings (description_pattern, portfolio_unit_id, category) VALUES ($1, $2, $3) RETURNING id`,
+        [pattern, portfolioUnitId, category || null]
+      );
+      return result.rows[0];
+    });
+    return res.json({ id: created?.id, success: true });
+  }
 
+  const db = getDb();
   // Check for duplicate pattern
   const existing = db.prepare(
     `SELECT id FROM learned_mappings WHERE description_pattern = ?`
@@ -2352,10 +3366,21 @@ router.post('/mappings', (req: Request, res: Response) => {
 });
 
 // DELETE /api/actuals/mappings/:id - Delete a mapping
-router.delete('/mappings/:id', (req: Request, res: Response) => {
-  const db = getDb();
+router.delete('/mappings/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
+  if (usePostgresActuals()) {
+    const before = await withPostgresClient(async (client) => {
+      const result = await client.query(`SELECT * FROM learned_mappings WHERE id = $1 LIMIT 1`, [Number(id)]);
+      return result.rows[0] || null;
+    });
+    if (!before) return res.status(404).json({ error: 'Mapping not found' });
+    await withPostgresClient(async (client) => {
+      await client.query(`DELETE FROM learned_mappings WHERE id = $1`, [Number(id)]);
+    });
+    return res.json({ success: true });
+  }
 
+  const db = getDb();
   const before = db.prepare(`SELECT * FROM learned_mappings WHERE id = ?`).get(Number(id));
   const result = db.prepare(`DELETE FROM learned_mappings WHERE id = ?`).run(Number(id));
 

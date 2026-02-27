@@ -360,7 +360,12 @@ router.post('/import-master-list', importUpload.single('file'), async (req: Requ
     const dataRows = rows.slice(1).filter((row) => row[3]); // column D = unit
 
     // Build unit_number lookup: DB unit_number → id
-    const allUnits = db.prepare('SELECT id, unit_number, floor FROM building_units').all() as any[];
+    const allUnits = usePostgresContracts()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query('SELECT id, unit_number, floor FROM building_units');
+        return result.rows as any[];
+      })
+      : (db.prepare('SELECT id, unit_number, floor FROM building_units').all() as any[]);
     const unitMap = new Map<string, number>();
     for (const u of allUnits) {
       unitMap.set(u.unit_number.toUpperCase(), u.id);
@@ -407,92 +412,126 @@ router.post('/import-master-list', importUpload.single('file'), async (req: Requ
       return unit;
     }
 
-    const update = db.prepare(`
-      UPDATE building_units SET
-        consensus_status = ?,
-        listing_agreement = ?,
-        resident_name = ?,
-        resident_type = ?,
-        owner_name = ?,
-        owner_email = ?,
-        owner_phone = ?,
-        owner_company = ?,
-        notes = COALESCE(?, notes)
-      WHERE id = ?
-    `);
-
     let matched = 0;
     let skipped = 0;
     const unmatched: string[] = [];
-
-    const importAll = db.transaction(() => {
-      for (const row of dataRows) {
-        const excelUnit = String(row[3] || '').trim();
-        if (!excelUnit) continue;
-
-        const dbUnit = normalizeUnit(excelUnit);
-        const unitId = unitMap.get(dbUnit);
-        if (!unitId) {
-          unmatched.push(`${excelUnit} → ${dbUnit}`);
-          skipped++;
-          continue;
-        }
-
-        const name = String(row[1] || '').trim();
-        const company = String(row[2] || '').trim() || null;
-        const phone = [row[4], row[5]].filter(Boolean).map(String).join(' / ').trim() || null;
-        const email = String(row[6] || '').trim() || null;
-
-        // Determine resident type
-        const isResidential = String(row[7] || '').trim().toUpperCase().startsWith('X');
-        const isInvestment = String(row[8] || '').trim().toUpperCase().startsWith('X');
-        const residentType = isResidential ? 'residential' : isInvestment ? 'investment' : null;
-
-        // Consensus: column J has 'X' if consensus obtained
-        const hasConsensus = String(row[9] || '').trim().toUpperCase() === 'X';
-        // Sent: column K has 'X' if agreement was sent
-        const wasSent = String(row[10] || '').trim().toUpperCase() === 'X';
-        // Signed: column L has 'S' if listing agreement signed
-        const hasSigned = String(row[11] || '').trim().toUpperCase() === 'S';
-
-        // Map to DB status values
-        let consensusStatus: string;
-        if (hasConsensus) {
-          consensusStatus = 'signed';
-        } else if (wasSent) {
-          consensusStatus = 'unsigned'; // was sent but didn't sign consensus
-        } else {
-          consensusStatus = 'unknown';
-        }
-
-        let listingAgreement: string;
-        if (hasSigned) {
-          listingAgreement = 'signed';
-        } else if (wasSent) {
-          listingAgreement = 'unsigned'; // was sent but not signed
-        } else {
-          listingAgreement = 'unknown';
-        }
-
-        const notes = String(row[12] || '').trim() || null;
-
-        update.run(
-          consensusStatus,
-          listingAgreement,
-          name || null,
-          residentType,
-          name || null,
-          email,
-          phone,
-          company,
-          notes,
-          unitId,
-        );
-        matched++;
-      }
+    const transformed = dataRows.map((row) => {
+      const excelUnit = String(row[3] || '').trim();
+      const dbUnit = excelUnit ? normalizeUnit(excelUnit) : '';
+      const unitId = dbUnit ? unitMap.get(dbUnit) : null;
+      const name = String(row[1] || '').trim();
+      const company = String(row[2] || '').trim() || null;
+      const phone = [row[4], row[5]].filter(Boolean).map(String).join(' / ').trim() || null;
+      const email = String(row[6] || '').trim() || null;
+      const isResidential = String(row[7] || '').trim().toUpperCase().startsWith('X');
+      const isInvestment = String(row[8] || '').trim().toUpperCase().startsWith('X');
+      const residentType = isResidential ? 'residential' : isInvestment ? 'investment' : null;
+      const hasConsensus = String(row[9] || '').trim().toUpperCase() === 'X';
+      const wasSent = String(row[10] || '').trim().toUpperCase() === 'X';
+      const hasSigned = String(row[11] || '').trim().toUpperCase() === 'S';
+      const consensusStatus = hasConsensus ? 'signed' : wasSent ? 'unsigned' : 'unknown';
+      const listingAgreement = hasSigned ? 'signed' : wasSent ? 'unsigned' : 'unknown';
+      const notes = String(row[12] || '').trim() || null;
+      return {
+        excelUnit,
+        dbUnit,
+        unitId,
+        name,
+        company,
+        phone,
+        email,
+        residentType,
+        consensusStatus,
+        listingAgreement,
+        notes,
+      };
     });
 
-    importAll();
+    if (usePostgresContracts()) {
+      await withPostgresClient(async (client) => {
+        await client.query('BEGIN');
+        try {
+          for (const row of transformed) {
+            if (!row.excelUnit) continue;
+            if (!row.unitId) {
+              unmatched.push(`${row.excelUnit} → ${row.dbUnit}`);
+              skipped += 1;
+              continue;
+            }
+            await client.query(
+              `
+              UPDATE building_units SET
+                consensus_status = $1,
+                listing_agreement = $2,
+                resident_name = $3,
+                resident_type = $4,
+                owner_name = $5,
+                owner_email = $6,
+                owner_phone = $7,
+                owner_company = $8,
+                notes = COALESCE($9, notes)
+              WHERE id = $10
+              `,
+              [
+                row.consensusStatus,
+                row.listingAgreement,
+                row.name || null,
+                row.residentType,
+                row.name || null,
+                row.email,
+                row.phone,
+                row.company,
+                row.notes,
+                row.unitId,
+              ]
+            );
+            matched += 1;
+          }
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+      });
+    } else {
+      const update = db.prepare(`
+        UPDATE building_units SET
+          consensus_status = ?,
+          listing_agreement = ?,
+          resident_name = ?,
+          resident_type = ?,
+          owner_name = ?,
+          owner_email = ?,
+          owner_phone = ?,
+          owner_company = ?,
+          notes = COALESCE(?, notes)
+        WHERE id = ?
+      `);
+      const importAll = db.transaction(() => {
+        for (const row of transformed) {
+          if (!row.excelUnit) continue;
+          if (!row.unitId) {
+            unmatched.push(`${row.excelUnit} → ${row.dbUnit}`);
+            skipped += 1;
+            continue;
+          }
+          update.run(
+            row.consensusStatus,
+            row.listingAgreement,
+            row.name || null,
+            row.residentType,
+            row.name || null,
+            row.email,
+            row.phone,
+            row.company,
+            row.notes,
+            row.unitId,
+          );
+          matched += 1;
+        }
+      });
+      importAll();
+    }
 
     res.json({
       success: true,

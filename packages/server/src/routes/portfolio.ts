@@ -254,6 +254,153 @@ function runRentReminderSweepCore(db: ReturnType<typeof getDb>) {
   return { checked, alerts, skipped, month: month.key };
 }
 
+async function runRentReminderSweepCorePg() {
+  const now = new Date();
+  const month = monthWindow(now);
+  const settings = await withPostgresClient(async (client) => {
+    const result = await client.query(
+      'SELECT enabled, days_late_threshold, subject_template, body_template FROM rent_reminder_settings WHERE id = 1 LIMIT 1'
+    );
+    return (result.rows[0] || null) as RentReminderSettings | null;
+  });
+  if (!settings || !settings.enabled) {
+    return { checked: 0, alerts: 0, skipped: 0, month: month.key };
+  }
+  const tenants = await withPostgresClient(async (client) => {
+    const result = await client.query(`
+      SELECT
+        t.id, t.name, t.email, t.rent_due_day, t.monthly_rent, t.status,
+        pu.id as portfolio_unit_id,
+        bu.unit_number
+      FROM tenants t
+      JOIN portfolio_units pu ON t.portfolio_unit_id = pu.id
+      JOIN building_units bu ON pu.building_unit_id = bu.id
+      WHERE t.status IN ('active', 'month_to_month')
+        AND t.email IS NOT NULL
+        AND TRIM(t.email) <> ''
+        AND t.monthly_rent > 0
+    `);
+    return result.rows as Array<{
+      id: number;
+      name: string;
+      email: string;
+      rent_due_day: number;
+      monthly_rent: number;
+      status: string;
+      portfolio_unit_id: number;
+      unit_number: string;
+    }>;
+  });
+
+  let checked = 0;
+  let alerts = 0;
+  let skipped = 0;
+  for (const t of tenants) {
+    checked += 1;
+    const dueDay = clampDay(Number(t.rent_due_day || 1));
+    const dueDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), dueDay));
+    const msLate = now.getTime() - dueDate.getTime();
+    const daysLate = Math.floor(msLate / (24 * 60 * 60 * 1000));
+    if (daysLate < Number(settings.days_late_threshold || 0)) {
+      skipped += 1;
+      continue;
+    }
+    const paid = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        SELECT COALESCE(SUM(amount), 0) as paid
+        FROM cash_flow_actuals
+        WHERE portfolio_unit_id = $1
+          AND category = 'rent'
+          AND amount > 0
+          AND date >= $2
+          AND date <= $3
+        `,
+        [t.portfolio_unit_id, month.startIso, month.endIso]
+      );
+      return Number(result.rows[0]?.paid || 0);
+    });
+    const outstanding = Math.max(0, Number(t.monthly_rent) - paid);
+    if (outstanding <= 0.009) {
+      skipped += 1;
+      continue;
+    }
+    const templateName = `rent_reminder:${month.key}`;
+    const existing = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        SELECT id
+        FROM tenant_communications
+        WHERE tenant_id = $1
+          AND template_name = $2
+        LIMIT 1
+        `,
+        [t.id, templateName]
+      );
+      return result.rows[0] || null;
+    });
+    if (existing) {
+      skipped += 1;
+      continue;
+    }
+
+    const subject = renderTemplate(settings.subject_template, {
+      tenant_name: t.name,
+      unit_number: t.unit_number,
+      days_late: String(daysLate),
+      period_label: month.periodLabel,
+      amount_due: fmtDollars(Number(t.monthly_rent)),
+      amount_paid: fmtDollars(paid),
+      amount_outstanding: fmtDollars(outstanding),
+    });
+    const body = renderTemplate(settings.body_template, {
+      tenant_name: t.name,
+      unit_number: t.unit_number,
+      days_late: String(daysLate),
+      period_label: month.periodLabel,
+      amount_due: fmtDollars(Number(t.monthly_rent)),
+      amount_paid: fmtDollars(paid),
+      amount_outstanding: fmtDollars(outstanding),
+    });
+    const commId = await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `
+        INSERT INTO tenant_communications (tenant_id, type, subject, body, status, template_name, sent_at)
+        VALUES ($1, 'email', $2, $3, 'draft', $4, CURRENT_TIMESTAMP)
+        RETURNING id
+        `,
+        [t.id, subject, body, templateName]
+      );
+      return Number(result.rows[0]?.id || 0);
+    });
+    void sendTransactionalEmail({ to: t.email, subject, text: body })
+      .then(async (sent) => {
+        await withPostgresClient(async (client) => {
+          await client.query(
+            `UPDATE tenant_communications SET status = $1, sent_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            [sent ? 'sent' : 'failed', commId]
+          );
+        });
+      })
+      .catch(async () => {
+        await withPostgresClient(async (client) => {
+          await client.query(`UPDATE tenant_communications SET status = 'failed', sent_at = CURRENT_TIMESTAMP WHERE id = $1`, [commId]);
+        });
+      });
+    alerts += 1;
+  }
+  await withPostgresClient(async (client) => {
+    await client.query(
+      `
+      INSERT INTO rent_reminder_runs (checked_count, alert_count, skipped_count, notes)
+      VALUES ($1, $2, $3, $4)
+      `,
+      [checked, alerts, skipped, `period=${month.key}`]
+    );
+  });
+  return { checked, alerts, skipped, month: month.key };
+}
+
 // GET /api/portfolio - All fund-owned units with aggregates
 router.get('/', async (req: Request, res: Response) => {
   const sql = `
@@ -1079,9 +1226,10 @@ router.put('/rent-reminder-settings', async (req: Request, res: Response) => {
 });
 
 // POST /api/portfolio/rent-reminders/run
-router.post('/rent-reminders/run', (req: Request, res: Response) => {
-  const db = getDb();
-  const result = runRentReminderSweepCore(db);
+router.post('/rent-reminders/run', async (req: Request, res: Response) => {
+  const result = usePostgresPortfolio()
+    ? await runRentReminderSweepCorePg()
+    : runRentReminderSweepCore(getDb());
   res.json(result);
 });
 

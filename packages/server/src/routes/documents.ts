@@ -9,7 +9,9 @@ import { requireAuth, requireGP } from '../middleware/auth';
 import { getDb } from '../db/database';
 import multer from 'multer';
 import { deleteStoredFile, saveUploadedBuffer } from '../lib/storage';
-import { writeAuditLog } from '../lib/audit';
+import { writeAuditLogAuto } from '../lib/audit';
+import { withPostgresClient } from '../db/postgres-client';
+import { isPostgresPrimaryMode, usePostgresDocumentsRoutes, usePostgresReads } from '../db/runtime-mode';
 import {
   createDocument,
   createSigningLink,
@@ -20,6 +22,7 @@ import {
 
 const router = Router();
 router.use(requireAuth, requireGP);
+const usePostgresDocuments = () => isPostgresPrimaryMode() || usePostgresReads() || usePostgresDocumentsRoutes();
 
 const ALLOWED_TYPES = [
   'application/pdf',
@@ -85,16 +88,36 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
     });
 
     if (replacesDocumentId && Number.isFinite(replacesDocumentId) && replacesDocumentId > 0) {
-      const db = getDb();
-      db.prepare(`
-        INSERT INTO document_versions (document_id, replaces_document_id, version_label)
-        VALUES (?, ?, ?)
-      `).run(id, replacesDocumentId, req.body?.versionLabel || null);
-      db.prepare(`
-        UPDATE documents
-        SET superseded_by_document_id = ?
-        WHERE id = ?
-      `).run(id, replacesDocumentId);
+      if (usePostgresDocuments()) {
+        await withPostgresClient(async (client) => {
+          await client.query(
+            `
+            INSERT INTO document_versions (document_id, replaces_document_id, version_label)
+            VALUES ($1, $2, $3)
+            `,
+            [id, replacesDocumentId, req.body?.versionLabel || null]
+          );
+          await client.query(
+            `
+            UPDATE documents
+            SET superseded_by_document_id = $1
+            WHERE id = $2
+            `,
+            [id, replacesDocumentId]
+          );
+        });
+      } else {
+        const db = getDb();
+        db.prepare(`
+          INSERT INTO document_versions (document_id, replaces_document_id, version_label)
+          VALUES (?, ?, ?)
+        `).run(id, replacesDocumentId, req.body?.versionLabel || null);
+        db.prepare(`
+          UPDATE documents
+          SET superseded_by_document_id = ?
+          WHERE id = ?
+        `).run(id, replacesDocumentId);
+      }
     }
 
     res.status(201).json({
@@ -103,8 +126,8 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       filePath: stored.filePath,
       fileType: file.mimetype,
     });
-    writeAuditLog({
-      db: getDb(),
+    await writeAuditLogAuto({
+      db: usePostgresDocuments() ? undefined : getDb(),
       req,
       action: 'create',
       tableName: 'documents',
@@ -182,17 +205,37 @@ router.get('/:parentType/:parentId', async (req: Request, res: Response) => {
   const { parentType, parentId } = req.params;
   const docs = await listDocumentsByParent(String(parentType), Number(parentId));
   try {
-    const db = getDb();
-    const enriched = docs.map((d: any) => {
-      const version = db.prepare(`
-        SELECT replaces_document_id, version_label, created_at
-        FROM document_versions
-        WHERE document_id = ?
-        ORDER BY id DESC
-        LIMIT 1
-      `).get(Number(d.id)) as any;
-      return { ...d, version };
-    });
+    const enriched = usePostgresDocuments()
+      ? await withPostgresClient(async (client) => {
+        const out: any[] = [];
+        for (const d of docs as any[]) {
+          const result = await client.query(
+            `
+            SELECT replaces_document_id, version_label, created_at
+            FROM document_versions
+            WHERE document_id = $1
+            ORDER BY id DESC
+            LIMIT 1
+            `,
+            [Number(d.id)]
+          );
+          out.push({ ...d, version: result.rows[0] || null });
+        }
+        return out;
+      })
+      : (() => {
+        const db = getDb();
+        return docs.map((d: any) => {
+          const version = db.prepare(`
+            SELECT replaces_document_id, version_label, created_at
+            FROM document_versions
+            WHERE document_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+          `).get(Number(d.id)) as any;
+          return { ...d, version };
+        });
+      })();
     res.json(enriched);
   } catch {
     res.json(docs);
@@ -211,8 +254,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
   try {
     await deleteStoredFile(doc.file_path);
     await deleteDocumentById(Number(id));
-    writeAuditLog({
-      db: getDb(),
+    await writeAuditLogAuto({
+      db: usePostgresDocuments() ? undefined : getDb(),
       req,
       action: 'delete',
       tableName: 'documents',
