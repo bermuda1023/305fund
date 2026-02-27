@@ -24,6 +24,10 @@ export function usePostgresActualsRoutes(): boolean {
   return normalizeBool(process.env.USE_POSTGRES_ACTUALS, isPostgresPrimaryMode());
 }
 
+export function usePostgresDocumentsRoutes(): boolean {
+  return normalizeBool(process.env.USE_POSTGRES_DOCUMENTS, isPostgresPrimaryMode());
+}
+
 export function usePostgresReads(): boolean {
   return normalizeBool(process.env.USE_POSTGRES_READ, isPostgresPrimaryMode());
 }
@@ -33,6 +37,7 @@ export function dualWriteEnabled(): boolean {
 }
 
 export function sqliteFallbackEnabled(): boolean {
-  return normalizeBool(process.env.SQLITE_FALLBACK_ENABLED, true);
+  // Emergency-only fallback by default once Postgres-primary mode is enabled.
+  return normalizeBool(process.env.SQLITE_FALLBACK_ENABLED, false);
 }
 

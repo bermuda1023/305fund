@@ -15,9 +15,14 @@ import jwt from 'jsonwebtoken';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import * as fontkit from '@pdf-lib/fontkit';
 import bcrypt from 'bcryptjs';
-import { getDb } from '../db/database';
 import { readStoredFile, saveUploadedBuffer } from '../lib/storage';
 import { sendTransactionalEmail } from '../lib/email';
+import {
+  getDocumentById,
+  getSigningLinkByTokenHash,
+  insertDocumentSignature,
+  markDocumentAndLinkUsed,
+} from '../db/repositories/documents-repository';
 
 const router = Router();
 const DEFAULT_DATE_FIELD_VALUE = () => new Date().toISOString().slice(0, 10);
@@ -195,19 +200,14 @@ function getTextFieldByCandidates(form: ReturnType<PDFDocument['getForm']>, cand
   return null;
 }
 
-function getValidLinkAndDoc(db: ReturnType<typeof getDb>, rawToken: string) {
+async function getValidLinkAndDoc(rawToken: string) {
   const h = tokenHash(rawToken);
-  const link = db.prepare(
-    `SELECT * FROM document_signing_links WHERE token_hash = ? LIMIT 1`
-  ).get(h) as SigningLinkRow | undefined;
+  const link = (await getSigningLinkByTokenHash(h)) as SigningLinkRow | null;
   if (!link) return { error: 'Invalid or expired link' as const };
   if (link.expires_at && isExpired(link.expires_at)) return { error: 'Invalid or expired link' as const };
   if (link.is_single_use && link.used_at) return { error: 'This link has already been used' as const };
 
-  const doc = db.prepare(
-    `SELECT id, name, file_path, file_type, requires_signature, signed_at
-     FROM documents WHERE id = ? LIMIT 1`
-  ).get(link.document_id) as DocumentRow | undefined;
+  const doc = (await getDocumentById(link.document_id)) as DocumentRow | null;
   if (!doc) return { error: 'Document not found' as const };
   if (!doc.file_type?.includes('pdf')) return { error: 'Only PDF documents can be signed' as const };
   if (!doc.requires_signature) return { error: 'This document does not require a signature' as const };
@@ -245,12 +245,11 @@ function isFullName(value: string): boolean {
 }
 
 // GET /api/public/sign/:token - metadata for signing page
-router.get('/:token', (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/:token', async (req: Request, res: Response) => {
   const token = String(req.params.token || '').trim();
   if (!token) return res.status(400).json({ error: 'Missing token' });
 
-  const result = getValidLinkAndDoc(db, token);
+  const result = await getValidLinkAndDoc(token);
   if ('error' in result) return res.status(400).json({ error: result.error });
 
   res.json({
@@ -264,11 +263,10 @@ router.get('/:token', (req: Request, res: Response) => {
 
 // GET /api/public/sign/:token/form-fields - list PDF form fields (for dynamic UI)
 router.get('/:token/form-fields', async (req: Request, res: Response) => {
-  const db = getDb();
   const token = String(req.params.token || '').trim();
   if (!token) return res.status(400).json({ error: 'Missing token' });
 
-  const result = getValidLinkAndDoc(db, token);
+  const result = await getValidLinkAndDoc(token);
   if ('error' in result) return res.status(400).json({ error: result.error });
 
   const storageKey = storageKeyFromFilePath(result.doc.file_path);
@@ -301,11 +299,10 @@ router.get('/:token/form-fields', async (req: Request, res: Response) => {
 
 // GET /api/public/sign/:token/document - stream original PDF
 router.get('/:token/document', async (req: Request, res: Response) => {
-  const db = getDb();
   const token = String(req.params.token || '').trim();
   if (!token) return res.status(400).json({ error: 'Missing token' });
 
-  const result = getValidLinkAndDoc(db, token);
+  const result = await getValidLinkAndDoc(token);
   if ('error' in result) return res.status(400).json({ error: result.error });
 
   const storageKey = storageKeyFromFilePath(result.doc.file_path);
@@ -324,7 +321,6 @@ router.get('/:token/document', async (req: Request, res: Response) => {
 
 // POST /api/public/sign/:token/submit - submit signature and return ndaProofToken
 router.post('/:token/submit', async (req: Request, res: Response) => {
-  const db = getDb();
   const token = String(req.params.token || '').trim();
   if (!token) return res.status(400).json({ error: 'Missing token' });
 
@@ -359,7 +355,7 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
   if (!sig) return res.status(400).json({ error: 'Signature is required' });
   if (!isFullName(sig)) return res.status(400).json({ error: 'Signature must be full name (first and last)' });
 
-  const result = getValidLinkAndDoc(db, token);
+  const result = await getValidLinkAndDoc(token);
   if ('error' in result) return res.status(400).json({ error: result.error });
 
   const storageKey = storageKeyFromFilePath(result.doc.file_path);
@@ -522,40 +518,28 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       'application/pdf'
     );
 
-    const insert = db.prepare(`
-      INSERT INTO document_signatures (
-        document_id, signing_link_id,
-        signer_name, signer_email, signer_company, signer_title, signature_text,
-        investor_gate_password_hash,
-        signed_ip, signed_user_agent,
-        original_pdf_sha256,
-        executed_file_path, executed_pdf_sha256
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const sigResult = insert.run(
-      result.doc.id,
-      result.link.id,
-      name,
-      email || null,
-      recipient || null,
-      fallbackTitle || null,
-      sig,
-      investorAccessCodeHash,
-      ip || null,
-      ua || null,
-      originalHash,
-      stored.filePath,
-      executedHash
-    );
+    const signatureId = await insertDocumentSignature({
+      documentId: result.doc.id,
+      signingLinkId: result.link.id,
+      signerName: name,
+      signerEmail: email || null,
+      signerCompany: recipient || null,
+      signerTitle: fallbackTitle || null,
+      signatureText: sig,
+      investorGatePasswordHash: investorAccessCodeHash,
+      signedIp: ip || null,
+      signedUserAgent: ua || null,
+      originalPdfSha256: originalHash,
+      executedFilePath: stored.filePath,
+      executedPdfSha256: executedHash,
+    });
 
     // For reusable links (e.g., NDA signed by many visitors), don't mark the underlying
     // document row as "signed" globally. Keep `signed_at` for single-use workflows only.
     if (result.link.is_single_use) {
-      db.prepare(`UPDATE documents SET signed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(result.doc.id);
-      db.prepare(`UPDATE document_signing_links SET used_at = CURRENT_TIMESTAMP WHERE id = ?`).run(result.link.id);
+      await markDocumentAndLinkUsed(result.doc.id, result.link.id);
     }
 
-    const signatureId = Number(sigResult.lastInsertRowid);
     const ndaProofToken = jwt.sign(
       { typ: 'nda_proof', signatureId, documentId: result.doc.id },
       getJwtSecret(),

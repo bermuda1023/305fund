@@ -5,10 +5,16 @@
 
 import { Router, Request, Response } from 'express';
 import { createHash, randomBytes } from 'crypto';
-import { getDb } from '../db/database';
 import { requireAuth, requireGP } from '../middleware/auth';
 import multer from 'multer';
 import { deleteStoredFile, saveUploadedBuffer } from '../lib/storage';
+import {
+  createDocument,
+  createSigningLink,
+  deleteDocumentById,
+  getDocumentById,
+  listDocumentsByParent,
+} from '../db/repositories/documents-repository';
 
 const router = Router();
 router.use(requireAuth, requireGP);
@@ -37,7 +43,7 @@ const upload = multer({
 });
 
 // POST /api/documents/upload — Upload a document
-router.post('/upload', upload.single('file'), (req: Request, res: Response) => {
+router.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
   const file = req.file;
   if (!file) {
     res.status(400).json({ error: 'No file uploaded' });
@@ -57,37 +63,33 @@ router.post('/upload', upload.single('file'), (req: Request, res: Response) => {
     return;
   }
 
-  const db = getDb();
-  (async () => {
+  try {
     const stored = await saveUploadedBuffer(
       file.buffer,
       'documents',
       file.originalname,
       file.mimetype
     );
-    const result = db.prepare(`
-      INSERT INTO documents (parent_id, parent_type, name, category, file_path, file_type, requires_signature, uploaded_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      parentId,
-      parentType,
-      file.originalname,
-      category,
-      stored.filePath,
-      file.mimetype,
-      requiresSignature ? 1 : 0,
-      (req as any).user?.email || 'unknown'
-    );
+    const id = await createDocument({
+      parentId: Number(parentId),
+      parentType: String(parentType),
+      name: file.originalname,
+      category: String(category),
+      filePath: stored.filePath,
+      fileType: file.mimetype,
+      requiresSignature: String(requiresSignature).trim().toLowerCase() === 'true' || String(requiresSignature).trim() === '1',
+      uploadedBy: (req as any).user?.email || 'unknown',
+    });
 
     res.status(201).json({
-      id: result.lastInsertRowid,
+      id,
       name: file.originalname,
       filePath: stored.filePath,
       fileType: file.mimetype,
     });
-  })().catch((error: any) => {
+  } catch (error: any) {
     res.status(500).json({ error: error?.message || 'Failed to store document' });
-  });
+  }
 });
 
 function sha256Hex(input: Buffer | string): string {
@@ -102,8 +104,7 @@ function buildSigningUrl(token: string) {
 }
 
 // POST /api/documents/:id/signing-link — Create a public signing link (GP only)
-router.post('/:id/signing-link', (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/:id/signing-link', async (req: Request, res: Response) => {
   const { id } = req.params;
   const documentId = Number(id);
   if (!Number.isFinite(documentId) || documentId <= 0) {
@@ -119,9 +120,7 @@ router.post('/:id/signing-link', (req: Request, res: Response) => {
     return;
   }
 
-  const doc = db.prepare(
-    `SELECT id, name, file_type, requires_signature FROM documents WHERE id = ? LIMIT 1`
-  ).get(documentId) as any;
+  const doc = await getDocumentById(documentId);
   if (!doc) {
     res.status(404).json({ error: 'Document not found' });
     return;
@@ -138,16 +137,13 @@ router.post('/:id/signing-link', (req: Request, res: Response) => {
   const rawToken = randomBytes(32).toString('hex');
   const tokenHash = sha256Hex(rawToken);
   const expiresAtIso = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toISOString();
-  db.prepare(`
-    INSERT INTO document_signing_links (document_id, token_hash, is_single_use, expires_at, created_by)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(
+  await createSigningLink({
     documentId,
     tokenHash,
     isSingleUse,
     expiresAtIso,
-    (req as any).user?.email || 'unknown'
-  );
+    createdBy: (req as any).user?.email || 'unknown',
+  });
 
   res.json({
     url: buildSigningUrl(rawToken),
@@ -157,35 +153,28 @@ router.post('/:id/signing-link', (req: Request, res: Response) => {
 });
 
 // GET /api/documents/:parentType/:parentId — List documents for a parent
-router.get('/:parentType/:parentId', (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/:parentType/:parentId', async (req: Request, res: Response) => {
   const { parentType, parentId } = req.params;
-
-  const docs = db.prepare(
-    'SELECT * FROM documents WHERE parent_type = ? AND parent_id = ? ORDER BY uploaded_at DESC'
-  ).all(parentType, parentId);
-
+  const docs = await listDocumentsByParent(String(parentType), Number(parentId));
   res.json(docs);
 });
 
 // DELETE /api/documents/:id — Remove document
-router.delete('/:id', (req: Request, res: Response) => {
-  const db = getDb();
+router.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
-
-  const doc = db.prepare('SELECT file_path FROM documents WHERE id = ?').get(id) as any;
+  const doc = await getDocumentById(Number(id));
   if (!doc) {
     res.status(404).json({ error: 'Document not found' });
     return;
   }
 
-  (async () => {
+  try {
     await deleteStoredFile(doc.file_path);
-    db.prepare('DELETE FROM documents WHERE id = ?').run(id);
+    await deleteDocumentById(Number(id));
     res.json({ success: true });
-  })().catch((error: any) => {
+  } catch (error: any) {
     res.status(500).json({ error: error?.message || 'Failed to delete document file' });
-  });
+  }
 });
 
 export default router;
