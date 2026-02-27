@@ -284,7 +284,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip TEXT,
   before_json TEXT,
   after_json TEXT
-
+);
 CREATE TABLE IF NOT EXISTS document_signing_links (
   id BIGSERIAL PRIMARY KEY,
   document_id BIGINT NOT NULL REFERENCES documents(id),

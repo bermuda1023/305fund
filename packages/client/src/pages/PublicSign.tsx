@@ -86,6 +86,13 @@ function getFieldByCandidates(form: any, candidates: string[]): { name: string; 
   return null;
 }
 
+function getLinkedNameFieldNames(fields: PdfFormField[]): string[] {
+  const wanted = new Set(['name1', 'name 1', 'name_1', 'namecopy'].map((n) => normalizeFieldName(n)));
+  return fields
+    .map((f) => f.name)
+    .filter((name) => wanted.has(normalizeFieldName(name)));
+}
+
 export default function PublicSign() {
   const { token } = useParams();
   const navigate = useNavigate();
@@ -115,6 +122,7 @@ export default function PublicSign() {
       ),
     [pdfFields]
   );
+  const linkedNameFields = useMemo(() => getLinkedNameFieldNames(pdfFields), [pdfFields]);
 
   const docEndpoint = useMemo(() => {
     if (!token) return null;
@@ -412,7 +420,11 @@ export default function PublicSign() {
                           setFormValues((prev) => {
                             const nextVal = e.target.value;
                             if (f.name === 'Name') {
-                              return { ...prev, Name: nextVal, Recipient: nextVal };
+                              const next: Record<string, string> = { ...prev, Name: nextVal, Recipient: nextVal };
+                              for (const linkedFieldName of linkedNameFields) {
+                                next[linkedFieldName] = nextVal;
+                              }
+                              return next;
                             }
                             return { ...prev, [f.name]: nextVal };
                           })
@@ -469,6 +481,9 @@ export default function PublicSign() {
                       ...formValues,
                       Recipient: String(formValues.Recipient || formValues.Name || '').trim(),
                     };
+                    for (const linkedFieldName of linkedNameFields) {
+                      payloadFormValues[linkedFieldName] = String(formValues.Name || '').trim();
+                    }
                     const resp = await publicPost<{ success: boolean; ndaProofToken: string }>(
                       `/public/sign/${encodeURIComponent(token)}/submit`,
                       { signerEmail, formValues: payloadFormValues }

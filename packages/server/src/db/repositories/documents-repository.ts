@@ -4,6 +4,44 @@ import { dualWriteEnabled, sqliteFallbackEnabled, usePostgresDocumentsRoutes, us
 
 type AnyObj = Record<string, any>;
 
+async function ensurePostgresSigningTables(): Promise<void> {
+  await withPostgresClient(async (client) => {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS document_signing_links (
+        id BIGSERIAL PRIMARY KEY,
+        document_id BIGINT NOT NULL REFERENCES documents(id),
+        token_hash TEXT NOT NULL UNIQUE,
+        is_single_use INTEGER NOT NULL DEFAULT 1,
+        expires_at TIMESTAMPTZ,
+        used_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        created_by TEXT
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS document_signatures (
+        id BIGSERIAL PRIMARY KEY,
+        document_id BIGINT NOT NULL REFERENCES documents(id),
+        signing_link_id BIGINT REFERENCES document_signing_links(id),
+        signer_name TEXT NOT NULL,
+        signer_email TEXT,
+        signer_company TEXT,
+        signer_title TEXT,
+        signature_text TEXT NOT NULL,
+        investor_gate_password_hash TEXT,
+        investor_gate_password_expires_at TIMESTAMPTZ,
+        investor_gate_password_used_at TIMESTAMPTZ,
+        signed_at TIMESTAMPTZ DEFAULT NOW(),
+        signed_ip TEXT,
+        signed_user_agent TEXT,
+        original_pdf_sha256 TEXT NOT NULL,
+        executed_file_path TEXT,
+        executed_pdf_sha256 TEXT
+      )
+    `);
+  });
+}
+
 function shouldUsePgWrite() {
   return usePostgresDocumentsRoutes();
 }
@@ -147,6 +185,7 @@ export async function createSigningLink(input: {
     sqliteFlow();
     return;
   }
+  await ensurePostgresSigningTables();
   await withPostgresClient(async (client) => {
     await client.query(
       `
@@ -168,6 +207,7 @@ export async function createSigningLink(input: {
 export async function getSigningLinkByTokenHash(tokenHash: string): Promise<AnyObj | null> {
   if (shouldUsePgRead()) {
     try {
+      await ensurePostgresSigningTables();
       return await withPostgresClient(async (client) => {
         const r = await client.query(`SELECT * FROM document_signing_links WHERE token_hash = $1 LIMIT 1`, [tokenHash]);
         return (r.rows[0] as AnyObj) || null;
@@ -228,6 +268,7 @@ export async function insertDocumentSignature(input: {
     return Number(r.lastInsertRowid);
   };
   if (!shouldUsePgWrite()) return sqliteFlow();
+  await ensurePostgresSigningTables();
   const pgId = await withPostgresClient(async (client) => {
     const r = await client.query(
       `

@@ -221,6 +221,11 @@ function labelForFieldName(fieldName: string) {
   return n;
 }
 
+function isLinkedNameField(fieldName: string): boolean {
+  const n = normalizeFieldName(fieldName);
+  return n === 'name1' || n === 'namecopy' || n === 'name_1';
+}
+
 function pickSignerEmail(explicitEmail: unknown, formValues: Record<string, string>): string {
   const direct = String(explicitEmail || '').trim();
   if (direct && direct.includes('@')) return direct;
@@ -281,13 +286,14 @@ router.get('/:token/form-fields', async (req: Request, res: Response) => {
       const name = f.getName();
       const isDate = name.toLowerCase() === 'date';
       const isRecipient = name.toLowerCase() === 'recipient';
-      const required = !isDate && !isRecipient; // recipient is auto-populated from signer name
+      const isNameCopy = isLinkedNameField(name);
+      const required = !isDate && !isRecipient && !isNameCopy; // auto-populated fields are not required
       return {
         name,
         label: labelForFieldName(name),
         type: 'text' as const,
         required,
-        readOnly: isDate || isRecipient,
+        readOnly: isDate || isRecipient || isNameCopy,
         defaultValue: isDate ? DEFAULT_DATE_FIELD_VALUE() : '',
       };
     });
@@ -391,6 +397,8 @@ router.post('/:token/submit', async (req: Request, res: Response) => {
       if (name) {
         const nameField = getTextFieldByCandidates(form, ['Name', 'FullName', 'Full Name', 'SignerName', 'Signer Name']);
         if (nameField) nameField.field.setText(name);
+        const nameCopyField = getTextFieldByCandidates(form, ['Name1', 'Name 1', 'Name_1']);
+        if (nameCopyField) nameCopyField.field.setText(name);
       }
       // Always override date with "today" (user requested auto-fill).
       try {
