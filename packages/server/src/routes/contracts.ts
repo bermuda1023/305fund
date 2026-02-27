@@ -8,9 +8,12 @@ import { requireAuth, requireGP } from '../middleware/auth';
 import { BUILDING } from '@brickell/shared';
 import ExcelJS from 'exceljs';
 import multer from 'multer';
+import { withPostgresClient } from '../db/postgres-client';
+import { isPostgresPrimaryMode, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
 router.use(requireAuth, requireGP);
+const usePostgresContracts = () => isPostgresPrimaryMode() || usePostgresReads();
 const importUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 },
@@ -26,9 +29,8 @@ function worksheetToMatrix(worksheet: ExcelJS.Worksheet): unknown[][] {
 }
 
 // GET /api/contracts - All units with consensus/agreement status
-router.get('/', (req: Request, res: Response) => {
-  const db = getDb();
-  const units = db.prepare(`
+router.get('/', async (req: Request, res: Response) => {
+  const sql = `
     WITH normalized_units AS (
       SELECT
         bu.*,
@@ -68,13 +70,18 @@ router.get('/', (req: Request, res: Response) => {
       LIMIT 1
     )
     ORDER BY bu.floor, bu.unit_letter
-  `).all();
+  `;
+  const units = usePostgresContracts()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(sql);
+      return result.rows;
+    })
+    : getDb().prepare(sql).all();
   res.json(units);
 });
 
 // PUT /api/contracts/:id - Update unit status
-router.put('/:id', (req: Request, res: Response) => {
-  const db = getDb();
+router.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   const {
     consensusStatus,
@@ -88,40 +95,70 @@ router.put('/:id', (req: Request, res: Response) => {
     notes,
   } = req.body;
 
-  db.prepare(`
-    UPDATE building_units SET
-      consensus_status = COALESCE(?, consensus_status),
-      listing_agreement = COALESCE(?, listing_agreement),
-      resident_name = COALESCE(?, resident_name),
-      resident_type = COALESCE(?, resident_type),
-      owner_name = COALESCE(?, owner_name),
-      owner_email = COALESCE(?, owner_email),
-      owner_phone = COALESCE(?, owner_phone),
-      owner_company = COALESCE(?, owner_company),
-      notes = COALESCE(?, notes)
-    WHERE id = ?
-  `).run(
-    consensusStatus,
-    listingAgreement,
-    residentName,
-    residentType,
-    ownerName,
-    ownerEmail,
-    ownerPhone,
-    ownerCompany,
-    notes,
-    id
-  );
+  if (usePostgresContracts()) {
+    await withPostgresClient(async (client) => {
+      await client.query(
+        `UPDATE building_units SET
+           consensus_status = COALESCE($1, consensus_status),
+           listing_agreement = COALESCE($2, listing_agreement),
+           resident_name = COALESCE($3, resident_name),
+           resident_type = COALESCE($4, resident_type),
+           owner_name = COALESCE($5, owner_name),
+           owner_email = COALESCE($6, owner_email),
+           owner_phone = COALESCE($7, owner_phone),
+           owner_company = COALESCE($8, owner_company),
+           notes = COALESCE($9, notes)
+         WHERE id = $10`,
+        [
+          consensusStatus,
+          listingAgreement,
+          residentName,
+          residentType,
+          ownerName,
+          ownerEmail,
+          ownerPhone,
+          ownerCompany,
+          notes,
+          id,
+        ]
+      );
+    });
+  } else {
+    const db = getDb();
+    db.prepare(`
+      UPDATE building_units SET
+        consensus_status = COALESCE(?, consensus_status),
+        listing_agreement = COALESCE(?, listing_agreement),
+        resident_name = COALESCE(?, resident_name),
+        resident_type = COALESCE(?, resident_type),
+        owner_name = COALESCE(?, owner_name),
+        owner_email = COALESCE(?, owner_email),
+        owner_phone = COALESCE(?, owner_phone),
+        owner_company = COALESCE(?, owner_company),
+        notes = COALESCE(?, notes)
+      WHERE id = ?
+    `).run(
+      consensusStatus,
+      listingAgreement,
+      residentName,
+      residentType,
+      ownerName,
+      ownerEmail,
+      ownerPhone,
+      ownerCompany,
+      notes,
+      id
+    );
+  }
 
   res.json({ success: true });
 });
 
 // GET /api/contracts/progress - Vote progress
-router.get('/progress', (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/progress', async (req: Request, res: Response) => {
 
   // Unit-count based stats
-  const stats = db.prepare(`
+  const statsSql = `
     WITH normalized_units AS (
       SELECT
         bu.*,
@@ -164,10 +201,10 @@ router.get('/progress', (req: Request, res: Response) => {
       ) as unknown,
       SUM(CASE WHEN is_owned = 1 THEN 1 ELSE 0 END) as fund_owned
     FROM normalized_units
-  `).get() as any;
+  `;
 
   // Ownership-weighted stats (join unit_types for ownership_pct)
-  const weighted = db.prepare(`
+  const weightedSql = `
     WITH normalized_units AS (
       SELECT
         bu.*,
@@ -196,7 +233,25 @@ router.get('/progress', (req: Request, res: Response) => {
       COALESCE(SUM(CASE WHEN bu.is_owned = 1 THEN COALESCE(ut.ownership_pct, 0) ELSE 0 END), 0) as fund_ownership
     FROM normalized_units bu
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
-  `).get() as any;
+  `;
+  const { stats, weighted } = usePostgresContracts()
+    ? await withPostgresClient(async (client) => {
+      const [statsResult, weightedResult] = await Promise.all([
+        client.query(statsSql),
+        client.query(weightedSql),
+      ]);
+      return {
+        stats: (statsResult.rows[0] || {}) as any,
+        weighted: (weightedResult.rows[0] || {}) as any,
+      };
+    })
+    : (() => {
+      const db = getDb();
+      return {
+        stats: db.prepare(statsSql).get() as any,
+        weighted: db.prepare(weightedSql).get() as any,
+      };
+    })();
 
   const total = stats.total || BUILDING.totalUnits;
   const neededFor80 = Math.ceil(total * 0.80);
@@ -246,9 +301,8 @@ router.get('/progress', (req: Request, res: Response) => {
 });
 
 // GET /api/contracts/flagged - Unsigned holdouts
-router.get('/flagged', (req: Request, res: Response) => {
-  const db = getDb();
-  const flagged = db.prepare(`
+router.get('/flagged', async (req: Request, res: Response) => {
+  const sql = `
     WITH normalized_units AS (
       SELECT
         bu.*,
@@ -265,7 +319,13 @@ router.get('/flagged', (req: Request, res: Response) => {
     WHERE (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END) = 'signed'
       AND (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'unsigned'
     ORDER BY bu.floor, bu.unit_letter
-  `).all();
+  `;
+  const flagged = usePostgresContracts()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(sql);
+      return result.rows;
+    })
+    : getDb().prepare(sql).all();
   res.json(flagged);
 });
 

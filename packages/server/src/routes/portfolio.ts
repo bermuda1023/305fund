@@ -7,8 +7,11 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/database';
 import { requireAuth, requireGP } from '../middleware/auth';
 import { sendTransactionalEmail } from '../lib/email';
+import { withPostgresClient } from '../db/postgres-client';
+import { isPostgresPrimaryMode, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
+const usePostgresPortfolio = () => isPostgresPrimaryMode() || usePostgresReads();
 
 // All portfolio routes require GP auth
 router.use(requireAuth, requireGP);
@@ -217,9 +220,8 @@ function runRentReminderSweepCore(db: ReturnType<typeof getDb>) {
 }
 
 // GET /api/portfolio - All fund-owned units with aggregates
-router.get('/', (req: Request, res: Response) => {
-  const db = getDb();
-  const units = db.prepare(`
+router.get('/', async (req: Request, res: Response) => {
+  const sql = `
     SELECT
       pu.*,
       bu.floor, bu.unit_number, bu.unit_letter,
@@ -233,15 +235,20 @@ router.get('/', (req: Request, res: Response) => {
     LEFT JOIN entities e ON pu.entity_id = e.id
     LEFT JOIN tenants t ON t.portfolio_unit_id = pu.id AND t.status IN ('active', 'month_to_month')
     ORDER BY bu.floor, bu.unit_letter
-  `).all();
+  `;
+  const units = usePostgresPortfolio()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(sql);
+      return result.rows;
+    })
+    : getDb().prepare(sql).all();
 
   res.json(units);
 });
 
 // GET /api/portfolio/summary - Aggregate stats
-router.get('/summary', (req: Request, res: Response) => {
-  const db = getDb();
-  const summary = db.prepare(`
+router.get('/summary', async (req: Request, res: Response) => {
+  const summarySql = `
     SELECT
       COUNT(*) as total_units_owned,
       COALESCE(SUM(ut.ownership_pct), 0) as total_ownership_pct,
@@ -253,20 +260,41 @@ router.get('/summary', (req: Request, res: Response) => {
     FROM portfolio_units pu
     JOIN building_units bu ON pu.building_unit_id = bu.id
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
-  `).get() as any;
+  `;
 
-  const renoSpend = db.prepare(`
+  const renoSql = `
     SELECT COALESCE(SUM(COALESCE(actual_cost, estimated_cost)), 0) as total
     FROM unit_renovations
-  `).get() as any;
+  `;
 
-  const tenantStats = db.prepare(`
+  const tenantSql = `
     SELECT
       COUNT(CASE WHEN t.status IN ('active', 'month_to_month') THEN 1 END) as active_tenants,
       COUNT(DISTINCT pu.id) - COUNT(CASE WHEN t.status IN ('active', 'month_to_month') THEN 1 END) as vacant_units
     FROM portfolio_units pu
     LEFT JOIN tenants t ON t.portfolio_unit_id = pu.id AND t.status IN ('active', 'month_to_month')
-  `).get() as any;
+  `;
+  const { summary, renoSpend, tenantStats } = usePostgresPortfolio()
+    ? await withPostgresClient(async (client) => {
+      const [summaryResult, renoResult, tenantResult] = await Promise.all([
+        client.query(summarySql),
+        client.query(renoSql),
+        client.query(tenantSql),
+      ]);
+      return {
+        summary: (summaryResult.rows[0] || {}) as any,
+        renoSpend: (renoResult.rows[0] || {}) as any,
+        tenantStats: (tenantResult.rows[0] || {}) as any,
+      };
+    })
+    : (() => {
+      const db = getDb();
+      return {
+        summary: db.prepare(summarySql).get() as any,
+        renoSpend: db.prepare(renoSql).get() as any,
+        tenantStats: db.prepare(tenantSql).get() as any,
+      };
+    })();
 
   const totalInvested = summary.total_invested || 0;
   const annualNOI = (summary.total_monthly_noi || 0) * 12;

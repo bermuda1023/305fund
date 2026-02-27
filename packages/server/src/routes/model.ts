@@ -7,6 +7,8 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/database';
 import { requireAuth, requireGP } from '../middleware/auth';
+import { withPostgresClient } from '../db/postgres-client';
+import { isPostgresPrimaryMode, usePostgresReads } from '../db/runtime-mode';
 import {
   projectCashFlows,
   generateDefaultAcquisitionSchedule,
@@ -23,6 +25,7 @@ import type { AcquisitionSchedule } from '@brickell/engine';
 
 const router = Router();
 router.use(requireAuth, requireGP);
+const usePostgresModel = () => isPostgresPrimaryMode() || usePostgresReads();
 
 /**
  * Map a DB row to a FundAssumptions object.
@@ -938,19 +941,31 @@ function getScenarioAssumptions(db: ReturnType<typeof getDb>, scenarioId?: numbe
   return row ? rowToAssumptions(row) : null;
 }
 
+async function getScenarioAssumptionsPg(scenarioId?: number): Promise<FundAssumptions | null> {
+  return withPostgresClient(async (client) => {
+    const result = await client.query('SELECT * FROM fund_assumptions WHERE id = $1 LIMIT 1', [scenarioId || 1]);
+    const row = result.rows[0] as any;
+    return row ? rowToAssumptions(row) : null;
+  });
+}
+
 // GET /api/model/scenarios
-router.get('/scenarios', (req: Request, res: Response) => {
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM fund_assumptions ORDER BY is_active DESC, created_at DESC').all();
+router.get('/scenarios', async (req: Request, res: Response) => {
+  const rows = usePostgresModel()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query('SELECT * FROM fund_assumptions ORDER BY is_active DESC, created_at DESC');
+      return result.rows;
+    })
+    : getDb().prepare('SELECT * FROM fund_assumptions ORDER BY is_active DESC, created_at DESC').all();
   res.json(rows.map(rowToAssumptions));
 });
 
 // POST /api/model/scenarios — Create new scenario
-router.post('/scenarios', (req: Request, res: Response) => {
-  const db = getDb();
+router.post('/scenarios', async (req: Request, res: Response) => {
   const a = req.body as FundAssumptions;
 
-  const result = db.prepare(`
+  const params = assumptionsToRow(a);
+  const sql = `
     INSERT INTO fund_assumptions (
       name, is_active, fund_size, fund_term_years, investment_period_years,
       gp_coinvest_pct, mgmt_fee_invest_pct, mgmt_fee_post_pct, mgmt_fee_waiver,
@@ -965,64 +980,137 @@ router.post('/scenarios', (req: Request, res: Response) => {
       mm_rate, excess_cash_mode, building_valuation,
       bonus_irr_threshold, bonus_max_years, bonus_yield_threshold
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(...assumptionsToRow(a));
-
-  res.status(201).json({ id: result.lastInsertRowid });
+  `;
+  const insertedId = usePostgresModel()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `INSERT INTO fund_assumptions (
+          name, is_active, fund_size, fund_term_years, investment_period_years,
+          gp_coinvest_pct, mgmt_fee_invest_pct, mgmt_fee_post_pct, mgmt_fee_waiver,
+          pref_return_pct, catchup_pct,
+          tier1_split_lp, tier1_split_gp, tier2_hurdle_irr, tier2_split_lp, tier2_split_gp,
+          tier3_hurdle_irr, tier3_split_lp, tier3_split_gp,
+          refi_enabled, refi_year, refi_ltv, refi_rate, refi_term_years, refi_cost_pct,
+          rent_growth_pct, hoa_growth_pct, tax_growth_pct, vacancy_pct,
+          annual_fund_opex_mode, annual_fund_opex_fixed, annual_fund_opex_threshold_pct, annual_fund_opex_adjust_pct,
+          present_day_land_value,
+          land_value_total, land_growth_pct, land_psf,
+          mm_rate, excess_cash_mode, building_valuation,
+          bonus_irr_threshold, bonus_max_years, bonus_yield_threshold
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          $6, $7, $8, $9,
+          $10, $11,
+          $12, $13, $14, $15, $16,
+          $17, $18, $19,
+          $20, $21, $22, $23, $24, $25,
+          $26, $27, $28, $29,
+          $30, $31, $32, $33,
+          $34,
+          $35, $36, $37,
+          $38, $39, $40,
+          $41, $42, $43
+        ) RETURNING id`,
+        params
+      );
+      return Number(result.rows[0]?.id || 0);
+    })
+    : Number(getDb().prepare(sql).run(...params).lastInsertRowid);
+  res.status(201).json({ id: insertedId });
 });
 
 // PUT /api/model/scenarios/:id — Update existing scenario
-router.put('/scenarios/:id', (req: Request, res: Response) => {
-  const db = getDb();
+router.put('/scenarios/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
   const a = req.body as FundAssumptions;
 
-  const existing = db.prepare('SELECT id FROM fund_assumptions WHERE id = ?').get(id);
+  const existing = usePostgresModel()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query('SELECT id FROM fund_assumptions WHERE id = $1 LIMIT 1', [id]);
+      return result.rows[0] || null;
+    })
+    : getDb().prepare('SELECT id FROM fund_assumptions WHERE id = ?').get(id);
   if (!existing) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
   }
 
-  db.prepare(`
-    UPDATE fund_assumptions SET
-      name = ?, is_active = ?, fund_size = ?, fund_term_years = ?, investment_period_years = ?,
-      gp_coinvest_pct = ?, mgmt_fee_invest_pct = ?, mgmt_fee_post_pct = ?, mgmt_fee_waiver = ?,
-      pref_return_pct = ?, catchup_pct = ?,
-      tier1_split_lp = ?, tier1_split_gp = ?, tier2_hurdle_irr = ?, tier2_split_lp = ?, tier2_split_gp = ?,
-      tier3_hurdle_irr = ?, tier3_split_lp = ?, tier3_split_gp = ?,
-      refi_enabled = ?, refi_year = ?, refi_ltv = ?, refi_rate = ?, refi_term_years = ?, refi_cost_pct = ?,
-      rent_growth_pct = ?, hoa_growth_pct = ?, tax_growth_pct = ?, vacancy_pct = ?,
-      annual_fund_opex_mode = ?, annual_fund_opex_fixed = ?, annual_fund_opex_threshold_pct = ?, annual_fund_opex_adjust_pct = ?,
-      present_day_land_value = ?,
-      land_value_total = ?, land_growth_pct = ?, land_psf = ?,
-      mm_rate = ?, excess_cash_mode = ?, building_valuation = ?,
-      bonus_irr_threshold = ?, bonus_max_years = ?, bonus_yield_threshold = ?
-    WHERE id = ?
-  `).run(...assumptionsToRow(a), id);
+  const params = [...assumptionsToRow(a), id];
+  if (usePostgresModel()) {
+    await withPostgresClient(async (client) => {
+      await client.query(
+        `UPDATE fund_assumptions SET
+           name = $1, is_active = $2, fund_size = $3, fund_term_years = $4, investment_period_years = $5,
+           gp_coinvest_pct = $6, mgmt_fee_invest_pct = $7, mgmt_fee_post_pct = $8, mgmt_fee_waiver = $9,
+           pref_return_pct = $10, catchup_pct = $11,
+           tier1_split_lp = $12, tier1_split_gp = $13, tier2_hurdle_irr = $14, tier2_split_lp = $15, tier2_split_gp = $16,
+           tier3_hurdle_irr = $17, tier3_split_lp = $18, tier3_split_gp = $19,
+           refi_enabled = $20, refi_year = $21, refi_ltv = $22, refi_rate = $23, refi_term_years = $24, refi_cost_pct = $25,
+           rent_growth_pct = $26, hoa_growth_pct = $27, tax_growth_pct = $28, vacancy_pct = $29,
+           annual_fund_opex_mode = $30, annual_fund_opex_fixed = $31, annual_fund_opex_threshold_pct = $32, annual_fund_opex_adjust_pct = $33,
+           present_day_land_value = $34,
+           land_value_total = $35, land_growth_pct = $36, land_psf = $37,
+           mm_rate = $38, excess_cash_mode = $39, building_valuation = $40,
+           bonus_irr_threshold = $41, bonus_max_years = $42, bonus_yield_threshold = $43
+         WHERE id = $44`,
+        params
+      );
+    });
+  } else {
+    getDb().prepare(`
+      UPDATE fund_assumptions SET
+        name = ?, is_active = ?, fund_size = ?, fund_term_years = ?, investment_period_years = ?,
+        gp_coinvest_pct = ?, mgmt_fee_invest_pct = ?, mgmt_fee_post_pct = ?, mgmt_fee_waiver = ?,
+        pref_return_pct = ?, catchup_pct = ?,
+        tier1_split_lp = ?, tier1_split_gp = ?, tier2_hurdle_irr = ?, tier2_split_lp = ?, tier2_split_gp = ?,
+        tier3_hurdle_irr = ?, tier3_split_lp = ?, tier3_split_gp = ?,
+        refi_enabled = ?, refi_year = ?, refi_ltv = ?, refi_rate = ?, refi_term_years = ?, refi_cost_pct = ?,
+        rent_growth_pct = ?, hoa_growth_pct = ?, tax_growth_pct = ?, vacancy_pct = ?,
+        annual_fund_opex_mode = ?, annual_fund_opex_fixed = ?, annual_fund_opex_threshold_pct = ?, annual_fund_opex_adjust_pct = ?,
+        present_day_land_value = ?,
+        land_value_total = ?, land_growth_pct = ?, land_psf = ?,
+        mm_rate = ?, excess_cash_mode = ?, building_valuation = ?,
+        bonus_irr_threshold = ?, bonus_max_years = ?, bonus_yield_threshold = ?
+      WHERE id = ?
+    `).run(...params);
+  }
 
   res.json({ success: true });
 });
 
 // DELETE /api/model/scenarios/:id
-router.delete('/scenarios/:id', (req: Request, res: Response) => {
-  const db = getDb();
+router.delete('/scenarios/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
 
-  const existing = db.prepare('SELECT id FROM fund_assumptions WHERE id = ?').get(id);
+  const existing = usePostgresModel()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query('SELECT id FROM fund_assumptions WHERE id = $1 LIMIT 1', [id]);
+      return result.rows[0] || null;
+    })
+    : getDb().prepare('SELECT id FROM fund_assumptions WHERE id = ?').get(id);
   if (!existing) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
   }
 
-  db.prepare('DELETE FROM fund_assumptions WHERE id = ?').run(id);
+  if (usePostgresModel()) {
+    await withPostgresClient(async (client) => {
+      await client.query('DELETE FROM fund_assumptions WHERE id = $1', [id]);
+    });
+  } else {
+    getDb().prepare('DELETE FROM fund_assumptions WHERE id = ?').run(id);
+  }
   res.json({ success: true });
 });
 
 // POST /api/model/run - Run full projection (uses real portfolio data when available)
-router.post('/run', (req: Request, res: Response) => {
+router.post('/run', async (req: Request, res: Response) => {
   const db = getDb();
   const { scenarioId, dataMode } = req.body as { scenarioId?: number; dataMode?: ModelDataMode };
 
-  const assumptions = getScenarioAssumptions(db, scenarioId);
+  const assumptions = usePostgresModel()
+    ? await getScenarioAssumptionsPg(scenarioId)
+    : getScenarioAssumptions(db, scenarioId);
   if (!assumptions) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
@@ -1033,11 +1121,13 @@ router.post('/run', (req: Request, res: Response) => {
 });
 
 // POST /api/model/sensitivity
-router.post('/sensitivity', (req: Request, res: Response) => {
+router.post('/sensitivity', async (req: Request, res: Response) => {
   const db = getDb();
   const { scenarioId, preset } = req.body;
 
-  const assumptions = getScenarioAssumptions(db, scenarioId);
+  const assumptions = usePostgresModel()
+    ? await getScenarioAssumptionsPg(scenarioId)
+    : getScenarioAssumptions(db, scenarioId);
   if (!assumptions) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
@@ -1058,7 +1148,7 @@ router.post('/sensitivity', (req: Request, res: Response) => {
 });
 
 // POST /api/model/sensitivity-stress
-router.post('/sensitivity-stress', (req: Request, res: Response) => {
+router.post('/sensitivity-stress', async (req: Request, res: Response) => {
   const db = getDb();
   const { scenarioId, enabledKeys, rowKey, colKey } = req.body as {
     scenarioId?: number;
@@ -1067,7 +1157,9 @@ router.post('/sensitivity-stress', (req: Request, res: Response) => {
     colKey?: StressKey;
   };
 
-  const assumptions = getScenarioAssumptions(db, scenarioId);
+  const assumptions = usePostgresModel()
+    ? await getScenarioAssumptionsPg(scenarioId)
+    : getScenarioAssumptions(db, scenarioId);
   if (!assumptions) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
