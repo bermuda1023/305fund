@@ -9,7 +9,8 @@ function normalizeBool(value: string | undefined, fallback = false): boolean {
 
 export function getDbRuntimeMode(): DbRuntimeMode {
   const raw = String(process.env.DB_RUNTIME_MODE || '').trim().toLowerCase();
-  return raw === 'postgres-primary' ? 'postgres-primary' : 'sqlite-bridge';
+  if (raw === 'sqlite-bridge') return 'sqlite-bridge';
+  return 'postgres-primary';
 }
 
 export function isPostgresPrimaryMode(): boolean {

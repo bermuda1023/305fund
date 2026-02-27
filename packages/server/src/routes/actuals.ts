@@ -8,10 +8,10 @@ import { parse as parseCsvSync } from 'csv-parse/sync';
 import { PDFParse } from 'pdf-parse';
 import { deleteStoredFile, saveUploadedBuffer } from '../lib/storage';
 import { createHash } from 'crypto';
-import { writeAuditLog } from '../lib/audit';
+import { writeAuditLog, writeAuditLogAuto } from '../lib/audit';
 import { listActualTransactions } from '../db/repositories/actuals-repository';
 import { withPostgresClient } from '../db/postgres-client';
-import { isPostgresPrimaryMode, usePostgresActualsRoutes, usePostgresReads } from '../db/runtime-mode';
+import { isPostgresPrimaryMode, sqliteFallbackEnabled, usePostgresActualsRoutes, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
 router.use(requireAuth, requireGP);
@@ -1170,7 +1170,6 @@ async function importTransactionsPg(params: {
 
 // GET /api/actuals/transactions - List imported transactions
 router.get('/transactions', async (req: Request, res: Response) => {
-  const db = getDb();
   const { unit_id, entity_id, category, reconciled, upload_id, limit = 100, offset = 0 } = req.query;
   try {
     const rows = await listActualTransactions({
@@ -1184,10 +1183,15 @@ router.get('/transactions', async (req: Request, res: Response) => {
     });
     res.json(rows);
     return;
-  } catch {
-    // Fall through to existing SQLite query path.
+  } catch (error: any) {
+    if (usePostgresActuals() && !sqliteFallbackEnabled()) {
+      res.status(502).json({ error: error?.message || 'Postgres read failed and SQLite fallback is disabled' });
+      return;
+    }
+    // Fall through to existing SQLite query path when fallback is enabled.
   }
 
+  const db = getDb();
   let sql = `SELECT
       cfa.*,
       bt.amount as bank_amount,
@@ -1240,7 +1244,7 @@ router.get('/transactions', async (req: Request, res: Response) => {
 
 // POST /api/actuals/upload - Upload bank statement (CSV parsing / manual entry)
 router.post('/upload', async (req: Request, res: Response) => {
-  const db = getDb();
+  const db = usePostgresActuals() ? null : getDb();
   const { filename, rows: csvRows, file_type = 'csv', bankAccountId } = req.body;
 
   if (!filename || !csvRows || !Array.isArray(csvRows)) {
@@ -1256,7 +1260,7 @@ router.post('/upload', async (req: Request, res: Response) => {
         bankAccountId: bankAccountId ? Number(bankAccountId) : null,
         uploadedBy: String((req as any).user?.email || '') || null,
       })
-      : importTransactions(db, {
+      : importTransactions(db!, {
         filename,
         rows: csvRows,
         fileType: safeType as 'csv' | 'manual' | 'ofx' | 'pdf' | 'xls' | 'xlsx',
@@ -1264,9 +1268,9 @@ router.post('/upload', async (req: Request, res: Response) => {
         uploadedBy: String((req as any).user?.email || '') || null,
       });
     if (!usePostgresActuals()) {
-      const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+      const upload = db!.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
       writeAuditLog({
-        db,
+        db: db!,
         req,
         action: 'import_statement',
         tableName: 'bank_uploads',
@@ -1283,7 +1287,7 @@ router.post('/upload', async (req: Request, res: Response) => {
 
 // POST /api/actuals/upload-file - Upload statement files as multipart form data
 router.post('/upload-file', fileUpload.single('file'), async (req: Request, res: Response) => {
-  const db = getDb();
+  const db = usePostgresActuals() ? null : getDb();
   const file = (req as any).file;
 
   if (!file) {
@@ -1321,7 +1325,7 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
         fileSha256,
         uploadedBy,
       })
-      : importTransactions(db, {
+      : importTransactions(db!, {
       filename: file.originalname,
       rows: [],
       fileType: fileType as 'ofx',
@@ -1332,9 +1336,9 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       uploadedBy,
     });
     if (!usePostgresActuals()) {
-      const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+      const upload = db!.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
       writeAuditLog({
-        db,
+        db: db!,
         req,
         action: 'upload_statement_file',
         tableName: 'bank_uploads',
@@ -1379,7 +1383,7 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
           fileSha256,
           uploadedBy,
         })
-        : importTransactions(db, {
+        : importTransactions(db!, {
         filename: file.originalname,
         rows,
         fileType: 'pdf',
@@ -1390,9 +1394,9 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
         uploadedBy,
       });
       if (!usePostgresActuals()) {
-        const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+        const upload = db!.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
         writeAuditLog({
-          db,
+          db: db!,
           req,
           action: 'import_statement_file',
           tableName: 'bank_uploads',
@@ -1435,20 +1439,24 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
         fileSha256,
         uploadedBy,
       })
-      : importTransactions(db, {
-      filename: file.originalname,
-      rows,
-      fileType: fileType as 'csv' | 'xls' | 'xlsx',
-      status,
-      bankAccountId,
-      filePath: relativePath,
-      fileSha256,
-      uploadedBy,
-    });
+      : (() => {
+        const sqliteDb = getDb();
+        return importTransactions(sqliteDb, {
+          filename: file.originalname,
+          rows,
+          fileType: fileType as 'csv' | 'xls' | 'xlsx',
+          status,
+          bankAccountId,
+          filePath: relativePath,
+          fileSha256,
+          uploadedBy,
+        });
+      })();
     if (!usePostgresActuals()) {
-      const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
+      const sqliteDb = getDb();
+      const upload = sqliteDb.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
       writeAuditLog({
-        db,
+        db: sqliteDb,
         req,
         action: 'import_statement_file',
         tableName: 'bank_uploads',
@@ -1479,7 +1487,7 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
 
 // POST /api/actuals/receipt - Capture/upload receipt, link to existing expense or create new
 router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Response) => {
-  const db = getDb();
+  const db = usePostgresActuals() ? null : getDb();
   const file = (req as any).file as Express.Multer.File | undefined;
   if (!file) {
     return res.status(400).json({ error: 'Receipt image is required' });
@@ -1501,7 +1509,7 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
         throw new Error('Portfolio unit not found');
       }
     } else {
-      const unit = db.prepare('SELECT id FROM portfolio_units WHERE id = ?').get(portfolioUnitId);
+      const unit = db!.prepare('SELECT id FROM portfolio_units WHERE id = ?').get(portfolioUnitId);
       if (!unit) {
         throw new Error('Portfolio unit not found');
       }
@@ -1582,8 +1590,8 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
         return;
       }
 
-      const tx = db.transaction(() => {
-        const docResult = db.prepare(`
+      const tx = db!.transaction(() => {
+        const docResult = db!.prepare(`
       INSERT INTO documents (parent_id, parent_type, name, category, file_path, file_type, requires_signature, uploaded_by)
       VALUES (?, 'unit', ?, 'financial', ?, ?, 0, ?)
     `).run(
@@ -1601,12 +1609,12 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
         let transactionId: number | null = null;
 
         if (existingTransactionId) {
-          const before = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(existingTransactionId) as any;
+          const before = db!.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(existingTransactionId) as any;
           if (!before) {
             throw new Error('Transaction not found');
           }
-          assertPeriodOpen(db, String(before.date));
-          db.prepare(`
+          assertPeriodOpen(db!, String(before.date));
+          db!.prepare(`
         UPDATE cash_flow_actuals
         SET portfolio_unit_id = COALESCE(portfolio_unit_id, ?),
             source_file = ?,
@@ -1614,9 +1622,9 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
         WHERE id = ?
       `).run(portfolioUnitId, relativePath, documentId, existingTransactionId);
           transactionId = existingTransactionId;
-          const after = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(existingTransactionId) as any;
+          const after = db!.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(existingTransactionId) as any;
           writeAuditLog({
-            db,
+            db: db!,
             req,
             action: 'attach_receipt',
             tableName: 'cash_flow_actuals',
@@ -1632,18 +1640,18 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
           if (!date || amount === null) {
             throw new Error('Valid date and amount are required to create expense');
           }
-          assertPeriodOpen(db, date);
+          assertPeriodOpen(db!, date);
           const allowedCats = new Set(['hoa', 'insurance', 'tax', 'repair', 'management_fee', 'fund_expense', 'other']);
           const safeCategory = allowedCats.has(category) ? category : 'other';
-          const insertResult = db.prepare(`
+          const insertResult = db!.prepare(`
         INSERT INTO cash_flow_actuals (
           portfolio_unit_id, date, amount, category, description, source_file, receipt_document_id, reconciled
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
       `).run(portfolioUnitId, date, amount, safeCategory, description, relativePath, documentId);
           transactionId = Number(insertResult.lastInsertRowid);
-          const created = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(transactionId) as any;
+          const created = db!.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(transactionId) as any;
           writeAuditLog({
-            db,
+            db: db!,
             req,
             action: 'create_from_receipt',
             tableName: 'cash_flow_actuals',
@@ -1673,7 +1681,6 @@ router.post('/receipt', receiptUpload.single('file'), (req: Request, res: Respon
 
 // PUT /api/actuals/transactions/:id - Categorize/reconcile a transaction
 router.put('/transactions/:id', async (req: Request, res: Response) => {
-  const db = getDb();
   const { id } = req.params;
   const {
     category,
@@ -1762,6 +1769,7 @@ router.put('/transactions/:id', async (req: Request, res: Response) => {
     }
   }
 
+  const db = getDb();
   const before = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(id)) as any;
   if (!before) {
     return res.status(404).json({ error: 'Transaction not found' });
@@ -1942,7 +1950,6 @@ router.get('/renovations-options', async (req: Request, res: Response) => {
 
 // POST /api/actuals/transactions/:id/split - split one allocation into two
 router.post('/transactions/:id/split', async (req: Request, res: Response) => {
-  const db = getDb();
   const { id } = req.params;
   const { amount, category, portfolio_unit_id, entity_id, unit_renovation_id, description } = req.body as any;
 
@@ -2016,6 +2023,7 @@ router.post('/transactions/:id/split', async (req: Request, res: Response) => {
     }
   }
 
+  const db = getDb();
   const base = db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(id)) as any;
   if (!base) return res.status(404).json({ error: 'Transaction not found' });
   try {
@@ -2087,7 +2095,6 @@ router.post('/transactions/:id/split', async (req: Request, res: Response) => {
 
 // DELETE /api/actuals/transactions/:id - delete one allocation row
 router.delete('/transactions/:id', async (req: Request, res: Response) => {
-  const db = getDb();
   const id = Number(req.params.id);
   if (usePostgresActuals()) {
     const before = await withPostgresClient(async (client) => {
@@ -2105,6 +2112,7 @@ router.delete('/transactions/:id', async (req: Request, res: Response) => {
     }
     return res.json({ success: true });
   }
+  const db = getDb();
   const before = db.prepare('SELECT id, date FROM cash_flow_actuals WHERE id = ?').get(id) as any;
   if (!before) return res.status(404).json({ error: 'Transaction not found' });
   try {
@@ -2128,7 +2136,6 @@ router.delete('/transactions/:id', async (req: Request, res: Response) => {
 
 // POST /api/actuals/transactions/bulk-reconcile
 router.post('/transactions/bulk-reconcile', async (req: Request, res: Response) => {
-  const db = getDb();
   const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v: any) => Number(v)).filter((n: number) => Number.isFinite(n) && n > 0) : [];
   const reconciled = req.body?.reconciled === undefined ? 1 : (req.body.reconciled ? 1 : 0);
   if (!ids.length) {
@@ -2141,6 +2148,7 @@ router.post('/transactions/bulk-reconcile', async (req: Request, res: Response) 
     });
     return res.json({ success: true, count: ids.length, reconciled });
   }
+  const db = getDb();
   const placeholders = ids.map(() => '?').join(', ');
   const tx = db.transaction(() => {
     const before = db.prepare(`SELECT id, reconciled FROM cash_flow_actuals WHERE id IN (${placeholders})`).all(...ids) as any[];
@@ -2163,7 +2171,6 @@ router.post('/transactions/bulk-reconcile', async (req: Request, res: Response) 
 
 // POST /api/actuals/transactions/bulk-assign
 router.post('/transactions/bulk-assign', async (req: Request, res: Response) => {
-  const db = getDb();
   const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v: any) => Number(v)).filter((n: number) => Number.isFinite(n) && n > 0) : [];
   const portfolioUnitId = req.body?.portfolioUnitId !== undefined ? Number(req.body.portfolioUnitId) || null : undefined;
   const entityId = req.body?.entityId !== undefined ? Number(req.body.entityId) || null : undefined;
@@ -2211,6 +2218,7 @@ router.post('/transactions/bulk-assign', async (req: Request, res: Response) => 
     });
     return res.json({ success: true, count: ids.length });
   }
+  const db = getDb();
   const placeholders = ids.map(() => '?').join(', ');
   db.prepare(`UPDATE cash_flow_actuals SET ${updates.join(', ')} WHERE id IN (${placeholders})`).run(...vals, ...ids);
   res.json({ success: true, count: ids.length });
@@ -2337,7 +2345,7 @@ router.get('/bank-lines', async (req: Request, res: Response) => {
 
 // POST /api/actuals/bank-lines/:id/allocations - add a new allocation row under one bank line
 router.post('/bank-lines/:id/allocations', async (req: Request, res: Response) => {
-  const db = getDb();
+  const db = usePostgresActuals() ? null : getDb();
   const bankId = Number(req.params.id);
   if (!bankId) return res.status(400).json({ error: 'Invalid bank transaction id' });
   const bank = usePostgresActuals()
@@ -2345,14 +2353,14 @@ router.post('/bank-lines/:id/allocations', async (req: Request, res: Response) =
       const result = await client.query(`SELECT * FROM bank_transactions WHERE id = $1 LIMIT 1`, [bankId]);
       return (result.rows[0] || null) as any;
     })
-    : (db.prepare(`SELECT * FROM bank_transactions WHERE id = ?`).get(bankId) as any);
+    : (db!.prepare(`SELECT * FROM bank_transactions WHERE id = ?`).get(bankId) as any);
   if (!bank) return res.status(404).json({ error: 'Bank transaction not found' });
 
   try {
     if (usePostgresActuals()) {
       await withPostgresClient(async (client) => assertPeriodOpenPg(client, String(bank.date)));
     } else {
-      assertPeriodOpen(db, String(bank.date));
+      assertPeriodOpen(db!, String(bank.date));
     }
   } catch (error: any) {
     return res.status(error?.statusCode || 409).json({ error: error?.message || 'Accounting period is closed' });
@@ -2411,7 +2419,7 @@ router.post('/bank-lines/:id/allocations', async (req: Request, res: Response) =
         const result = await client.query(`SELECT id, portfolio_unit_id FROM unit_renovations WHERE id = $1 LIMIT 1`, [renoId]);
         return (result.rows[0] || null) as any;
       })
-      : (db.prepare(`SELECT id, portfolio_unit_id FROM unit_renovations WHERE id = ?`).get(renoId) as any);
+      : (db!.prepare(`SELECT id, portfolio_unit_id FROM unit_renovations WHERE id = ?`).get(renoId) as any);
     if (!reno) return res.status(400).json({ error: 'Renovation not found.' });
     if (Number(reno.portfolio_unit_id) !== Number(unitId)) {
       return res.status(400).json({ error: 'Renovation does not belong to selected Unit.' });
@@ -2431,7 +2439,7 @@ router.post('/bank-lines/:id/allocations', async (req: Request, res: Response) =
         const result = await client.query(`SELECT id, lp_account_id FROM capital_call_items WHERE id = $1 LIMIT 1`, [callItemId]);
         return (result.rows[0] || null) as any;
       })
-      : (db.prepare(`SELECT id, lp_account_id FROM capital_call_items WHERE id = ?`).get(callItemId) as any);
+      : (db!.prepare(`SELECT id, lp_account_id FROM capital_call_items WHERE id = ?`).get(callItemId) as any);
     if (!item || Number(item.lp_account_id) !== Number(lpId)) {
       return res.status(400).json({ error: 'Selected capital call item does not belong to selected LP.' });
     }
@@ -2470,7 +2478,7 @@ router.post('/bank-lines/:id/allocations', async (req: Request, res: Response) =
       );
       return { lastInsertRowid: Number(created.rows[0]?.id || 0) };
     })
-    : db.prepare(`
+    : db!.prepare(`
     INSERT INTO cash_flow_actuals (
       bank_transaction_id,
       portfolio_unit_id, entity_id, unit_renovation_id,
@@ -2497,9 +2505,9 @@ router.post('/bank-lines/:id/allocations', async (req: Request, res: Response) =
       const row = await client.query('SELECT * FROM cash_flow_actuals WHERE id = $1 LIMIT 1', [Number(result.lastInsertRowid)]);
       return row.rows[0] || null;
     })
-    : db.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(result.lastInsertRowid));
-  writeAuditLog({
-    db,
+    : db!.prepare('SELECT * FROM cash_flow_actuals WHERE id = ?').get(Number(result.lastInsertRowid));
+  await writeAuditLogAuto({
+    db: db || undefined,
     req,
     action: 'create',
     tableName: 'cash_flow_actuals',
@@ -2520,7 +2528,6 @@ router.get('/periods', async (req: Request, res: Response) => {
 
 // POST /api/actuals/periods/:month/close - close a month (all bank lines must be allocated/balanced/reconciled)
 router.post('/periods/:month/close', async (req: Request, res: Response) => {
-  const db = getDb();
   const m = String(req.params.month || '').trim();
   if (!/^\d{4}-\d{2}$/.test(m)) return res.status(400).json({ error: 'Month must be YYYY-MM' });
   const from = `${m}-01`;
@@ -2580,6 +2587,7 @@ router.post('/periods/:month/close', async (req: Request, res: Response) => {
     return res.json({ success: true });
   }
 
+  const db = getDb();
   const check = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM bank_transactions bt WHERE bt.date >= ? AND bt.date <= ?) as bank_rows,

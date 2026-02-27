@@ -16,7 +16,7 @@ const usePostgresPortfolio = () => isPostgresPrimaryMode() || usePostgresReads()
 // All portfolio routes require GP auth
 router.use(requireAuth, requireGP);
 
-async function syncFundOwnedContractFields(db: ReturnType<typeof getDb>, portfolioUnitId: number) {
+async function syncFundOwnedContractFields(portfolioUnitId: number) {
   if (usePostgresPortfolio()) {
     await withPostgresClient(async (client) => {
       const rowResult = await client.query(
@@ -52,6 +52,7 @@ async function syncFundOwnedContractFields(db: ReturnType<typeof getDb>, portfol
     return;
   }
 
+  const db = getDb();
   const row = db.prepare(`
     SELECT
       pu.id as portfolio_unit_id,
@@ -499,7 +500,7 @@ router.get('/summary', async (req: Request, res: Response) => {
 
 // POST /api/portfolio/units - Add acquired unit
 router.post('/units', async (req: Request, res: Response) => {
-  const db = getDb();
+  const db = usePostgresPortfolio() ? null : getDb();
   const {
     buildingUnitId, entityId, purchaseDate, purchasePrice,
     closingCosts = 0, transferTax = 0, inspectionCost = 0,
@@ -523,7 +524,7 @@ router.post('/units', async (req: Request, res: Response) => {
       );
       return (result.rows[0] || null) as any;
     })
-    : (db.prepare(`
+    : (db!.prepare(`
       SELECT ut.sqft, ut.base_hoa FROM building_units bu
       JOIN unit_types ut ON bu.unit_type_id = ut.id
       WHERE bu.id = ?
@@ -565,7 +566,7 @@ router.post('/units', async (req: Request, res: Response) => {
       return Number(result.rows[0]?.id || 0);
     })
     : Number(
-      db.prepare(`
+      db!.prepare(`
         INSERT INTO portfolio_units (
           building_unit_id, entity_id, purchase_date, purchase_price, purchase_price_psf,
           closing_costs, transfer_tax, inspection_cost, total_acquisition_cost,
@@ -583,14 +584,14 @@ router.post('/units', async (req: Request, res: Response) => {
     );
 
   // Mark building unit as fund-owned and force signed investment posture in contracts view
-  await syncFundOwnedContractFields(db, insertedId);
+  await syncFundOwnedContractFields(insertedId);
 
   res.status(201).json({ id: insertedId });
 });
 
 // PUT /api/portfolio/units/:id - Update unit
 router.put('/units/:id', async (req: Request, res: Response) => {
-  const db = getDb();
+  const db = usePostgresPortfolio() ? null : getDb();
   const { id } = req.params;
   const fields = req.body;
 
@@ -628,15 +629,15 @@ router.put('/units/:id', async (req: Request, res: Response) => {
       void result;
     });
   } else {
-    db.prepare(`UPDATE portfolio_units SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    db!.prepare(`UPDATE portfolio_units SET ${updates.join(', ')} WHERE id = ?`).run(...values);
   }
-  await syncFundOwnedContractFields(db, Number(id));
+  await syncFundOwnedContractFields(Number(id));
   res.json({ success: true });
 });
 
 // DELETE /api/portfolio/units/:id - Remove unit
 router.delete('/units/:id', async (req: Request, res: Response) => {
-  const db = getDb();
+  const db = usePostgresPortfolio() ? null : getDb();
   const unitId = Number(req.params.id);
 
   const unit = usePostgresPortfolio()
@@ -644,7 +645,7 @@ router.delete('/units/:id', async (req: Request, res: Response) => {
       const result = await client.query('SELECT id, building_unit_id FROM portfolio_units WHERE id = $1 LIMIT 1', [unitId]);
       return (result.rows[0] || null) as any;
     })
-    : (db.prepare(`
+    : (db!.prepare(`
       SELECT id, building_unit_id FROM portfolio_units WHERE id = ?
     `).get(unitId) as any);
 
@@ -658,35 +659,35 @@ router.delete('/units/:id', async (req: Request, res: Response) => {
       const result = await client.query('SELECT id FROM tenants WHERE portfolio_unit_id = $1', [unitId]);
       return result.rows as Array<{ id: number }>;
     })
-    : (db.prepare('SELECT id FROM tenants WHERE portfolio_unit_id = ?').all(unitId) as Array<{ id: number }>);
+    : (db!.prepare('SELECT id FROM tenants WHERE portfolio_unit_id = ?').all(unitId) as Array<{ id: number }>);
   const tenantIds = tenantRows.map((r) => r.id);
   const renoRows = usePostgresPortfolio()
     ? await withPostgresClient(async (client) => {
       const result = await client.query('SELECT id FROM unit_renovations WHERE portfolio_unit_id = $1', [unitId]);
       return result.rows as Array<{ id: number }>;
     })
-    : (db.prepare('SELECT id FROM unit_renovations WHERE portfolio_unit_id = ?').all(unitId) as Array<{ id: number }>);
+    : (db!.prepare('SELECT id FROM unit_renovations WHERE portfolio_unit_id = ?').all(unitId) as Array<{ id: number }>);
   const renoIds = renoRows.map((r) => r.id);
 
-  const delTx = db.transaction(() => {
+  const delTx = db!.transaction(() => {
     if (tenantIds.length > 0) {
       const ph = tenantIds.map(() => '?').join(',');
-      db.prepare(`DELETE FROM tenant_communications WHERE tenant_id IN (${ph})`).run(...tenantIds);
-      db.prepare(`DELETE FROM documents WHERE parent_type = 'tenant' AND parent_id IN (${ph})`).run(...tenantIds);
-      db.prepare(`DELETE FROM tenants WHERE id IN (${ph})`).run(...tenantIds);
+      db!.prepare(`DELETE FROM tenant_communications WHERE tenant_id IN (${ph})`).run(...tenantIds);
+      db!.prepare(`DELETE FROM documents WHERE parent_type = 'tenant' AND parent_id IN (${ph})`).run(...tenantIds);
+      db!.prepare(`DELETE FROM tenants WHERE id IN (${ph})`).run(...tenantIds);
     }
 
     if (renoIds.length > 0) {
       const ph = renoIds.map(() => '?').join(',');
-      db.prepare(`DELETE FROM documents WHERE parent_type = 'renovation' AND parent_id IN (${ph})`).run(...renoIds);
-      db.prepare(`DELETE FROM unit_renovations WHERE id IN (${ph})`).run(...renoIds);
+      db!.prepare(`DELETE FROM documents WHERE parent_type = 'renovation' AND parent_id IN (${ph})`).run(...renoIds);
+      db!.prepare(`DELETE FROM unit_renovations WHERE id IN (${ph})`).run(...renoIds);
     }
 
-    db.prepare(`DELETE FROM documents WHERE parent_type = 'unit' AND parent_id = ?`).run(unitId);
-    db.prepare(`DELETE FROM cash_flow_actuals WHERE portfolio_unit_id = ?`).run(unitId);
-    db.prepare(`DELETE FROM portfolio_units WHERE id = ?`).run(unitId);
+    db!.prepare(`DELETE FROM documents WHERE parent_type = 'unit' AND parent_id = ?`).run(unitId);
+    db!.prepare(`DELETE FROM cash_flow_actuals WHERE portfolio_unit_id = ?`).run(unitId);
+    db!.prepare(`DELETE FROM portfolio_units WHERE id = ?`).run(unitId);
 
-    db.prepare(`
+    db!.prepare(`
       UPDATE building_units
       SET
         is_fund_owned = 0,
@@ -800,7 +801,7 @@ router.post('/units/:id/tenants', async (req: Request, res: Response) => {
       `).run(req.params.id, name, email, phone, leaseStart, leaseEnd, clampDay(Number(rentDueDay || 1)), monthlyRent, securityDeposit, notes).lastInsertRowid
     );
 
-  await syncFundOwnedContractFields(getDb(), Number(req.params.id));
+  await syncFundOwnedContractFields(Number(req.params.id));
   res.status(201).json({ id: insertedId });
 });
 
@@ -852,7 +853,7 @@ router.put('/tenants/:id', async (req: Request, res: Response) => {
   }
 
   if (tenantRow?.portfolio_unit_id) {
-    await syncFundOwnedContractFields(getDb(), Number(tenantRow.portfolio_unit_id));
+    await syncFundOwnedContractFields(Number(tenantRow.portfolio_unit_id));
   }
   res.json({ success: true });
 });
@@ -872,7 +873,7 @@ router.delete('/tenants/:id', async (req: Request, res: Response) => {
       return row;
     })();
   if (tenantRow?.portfolio_unit_id) {
-    await syncFundOwnedContractFields(getDb(), Number(tenantRow.portfolio_unit_id));
+    await syncFundOwnedContractFields(Number(tenantRow.portfolio_unit_id));
   }
   res.json({ success: true });
 });

@@ -331,7 +331,6 @@ router.get('/flagged', async (req: Request, res: Response) => {
 
 // POST /api/contracts/import-master-list - Import BTH master list Excel
 router.post('/import-master-list', importUpload.single('file'), async (req: Request, res: Response) => {
-  const db = getDb();
   const { filePath } = req.body as { filePath?: string };
   const uploadFile = (req as any).file as Express.Multer.File | undefined;
 
@@ -365,7 +364,7 @@ router.post('/import-master-list', importUpload.single('file'), async (req: Requ
         const result = await client.query('SELECT id, unit_number, floor FROM building_units');
         return result.rows as any[];
       })
-      : (db.prepare('SELECT id, unit_number, floor FROM building_units').all() as any[]);
+      : (getDb().prepare('SELECT id, unit_number, floor FROM building_units').all() as any[]);
     const unitMap = new Map<string, number>();
     for (const u of allUnits) {
       unitMap.set(u.unit_number.toUpperCase(), u.id);
@@ -494,6 +493,7 @@ router.post('/import-master-list', importUpload.single('file'), async (req: Requ
         }
       });
     } else {
+      const db = getDb();
       const update = db.prepare(`
         UPDATE building_units SET
           consensus_status = ?,

@@ -27,9 +27,14 @@ import {
 import { sqliteFallbackEnabled, usePostgresLpRoutes, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
+const usePostgresLpReadPath = () => usePostgresReads() || usePostgresLpRoutes();
+
+function rejectWhenSqliteFallbackDisabled(res: Response, error: any) {
+  res.status(502).json({ error: error?.message || 'Postgres path failed and SQLite fallback is disabled' });
+}
 
 async function getLpAccountForUser(userId: number) {
-  const usePg = usePostgresReads() || usePostgresLpRoutes();
+  const usePg = usePostgresLpReadPath();
   if (usePg) {
     const pg = await withPostgresClient(async (client) => {
       const r = await client.query(`SELECT * FROM lp_accounts WHERE user_id = $1 LIMIT 1`, [userId]);
@@ -242,7 +247,7 @@ router.get('/account', requireAuth, requireAnyRole, async (req: Request, res: Re
 
 // GET /api/lp/transactions - My capital calls + distributions
 router.get('/transactions', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
-  const usePg = usePostgresReads() || usePostgresLpRoutes();
+  const usePg = usePostgresLpReadPath();
   const db = usePg ? null : getDb();
   const account = await getLpAccountForUser(Number(req.user!.userId));
   if (!account) {
@@ -257,6 +262,10 @@ router.get('/transactions', requireAuth, requireAnyRole, async (req: Request, re
     }
   } catch (error) {
     // Fall back to SQLite below unless fallback has been disabled in runtime.
+    if (!sqliteFallbackEnabled()) {
+      rejectWhenSqliteFallbackDisabled(res, error);
+      return;
+    }
   }
   const transactions = db!.prepare(`
     SELECT * FROM capital_transactions
@@ -277,7 +286,7 @@ router.get('/ledger', requireAuth, requireAnyRole, async (req: Request, res: Res
   const to = String(req.query.to || '').trim();
   const search = String(req.query.search || '').trim();
 
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  if (usePostgresLpReadPath()) {
     try {
       const rows = await withPostgresClient(async (client) => {
         const accountResult = await client.query('SELECT id FROM lp_accounts WHERE user_id = $1 LIMIT 1', [req.user!.userId]);
@@ -368,6 +377,10 @@ router.get('/ledger', requireAuth, requireAnyRole, async (req: Request, res: Res
       return;
     } catch (error) {
       // Fall back to SQLite below unless fallback has been disabled in runtime.
+      if (!sqliteFallbackEnabled()) {
+        rejectWhenSqliteFallbackDisabled(res, error);
+        return;
+      }
     }
   }
 
@@ -460,7 +473,7 @@ router.get('/capital-calls', requireAuth, requireAnyRole, async (req: Request, r
     return;
   }
 
-  const calls = (usePostgresReads() || usePostgresLpRoutes())
+  const calls = (usePostgresLpReadPath())
     ? await withPostgresClient(async (client) => {
       const result = await client.query(
         `SELECT cci.*, cc.call_number, cc.call_date, cc.due_date, cc.purpose, cc.status as call_status
@@ -490,7 +503,7 @@ router.get('/documents', requireAuth, requireAnyRole, async (req: Request, res: 
     return;
   }
 
-  const docs = (usePostgresReads() || usePostgresLpRoutes())
+  const docs = (usePostgresLpReadPath())
     ? await withPostgresClient(async (client) => {
       const result = await client.query(
         `SELECT * FROM documents
@@ -551,7 +564,7 @@ function interpolateSeries(points: Array<{ date: string; value: number }>, targe
 
 // GET /api/lp/marks - Monthly LP marks (contrib/distrib, NAV, TVPI, IRR/MOIC)
 router.get('/marks', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  if (usePostgresLpReadPath()) {
     try {
       const result = await withPostgresClient(async (client) => {
         const accountResult = await client.query(`SELECT * FROM lp_accounts WHERE user_id = $1 LIMIT 1`, [req.user!.userId]);
@@ -780,6 +793,10 @@ router.get('/marks', requireAuth, requireAnyRole, async (req: Request, res: Resp
       return;
     } catch (error) {
       // Fall back to SQLite below unless fallback has been disabled in runtime.
+      if (!sqliteFallbackEnabled()) {
+        rejectWhenSqliteFallbackDisabled(res, error);
+        return;
+      }
     }
   }
 
@@ -1009,7 +1026,7 @@ router.get('/documents/:id/download', requireAuth, requireAnyRole, async (req: R
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ error: 'Invalid document id' });
 
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  if (usePostgresLpReadPath()) {
     try {
       const result = await withPostgresClient(async (client) => {
         const accountResult = await client.query('SELECT id FROM lp_accounts WHERE user_id = $1 LIMIT 1', [req.user!.userId]);
@@ -1050,6 +1067,10 @@ router.get('/documents/:id/download', requireAuth, requireAnyRole, async (req: R
       }
     } catch (error) {
       // Fall back to SQLite below unless fallback has been disabled in runtime.
+      if (!sqliteFallbackEnabled()) {
+        rejectWhenSqliteFallbackDisabled(res, error);
+        return;
+      }
     }
   }
 
@@ -1082,7 +1103,7 @@ router.get('/documents/:id/download', requireAuth, requireAnyRole, async (req: R
 // GET /api/lp/performance - Fund performance
 router.get('/performance', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
   // Return high-level fund metrics (no GP-specific detail)
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  if (usePostgresLpReadPath()) {
     try {
       const result = await withPostgresClient(async (client) => {
         const accountResult = await client.query(`
@@ -1124,10 +1145,59 @@ router.get('/performance', requireAuth, requireAnyRole, async (req: Request, res
 
         if (assumptionRow) {
           const assumptions = rowToAssumptions(assumptionRow);
-          // Note: getPortfolioData uses SQLite db, so we'll use SQLite fallback for this calculation
-          // or we'd need to rewrite getPortfolioData to support Postgres
-          const db = getDb();
-          const portfolioData = getPortfolioData(db);
+          const unitRowsResult = await client.query(`
+            SELECT
+              pu.id, pu.purchase_date, pu.purchase_price, pu.total_acquisition_cost,
+              pu.monthly_rent, pu.monthly_hoa, pu.monthly_insurance, pu.monthly_tax
+            FROM portfolio_units pu
+            ORDER BY pu.purchase_date
+          `);
+          const ownershipRowResult = await client.query(`
+            SELECT SUM(ut.ownership_pct) as total_ownership_pct
+            FROM portfolio_units pu
+            JOIN building_units bu ON pu.building_unit_id = bu.id
+            JOIN unit_types ut ON bu.unit_type_id = ut.id
+          `);
+          const units = unitRowsResult.rows as any[];
+          const ownershipRow = ownershipRowResult.rows[0] as any;
+          const portfolioData = (() => {
+            if (!units.length) return null;
+            const totalRent = units.reduce((s: number, u: any) => s + Number(u.monthly_rent || 0), 0);
+            const totalHOA = units.reduce((s: number, u: any) => s + Number(u.monthly_hoa || 0), 0);
+            const totalIns = units.reduce((s: number, u: any) => s + Number(u.monthly_insurance || 0), 0);
+            const totalTax = units.reduce((s: number, u: any) => s + Number(u.monthly_tax || 0), 0);
+            const count = units.length;
+            const acqMap = new Map<number, { units: number; totalCost: number }>();
+            for (const u of units) {
+              const d = new Date(u.purchase_date);
+              const yearOff = d.getFullYear() - 2026;
+              const qIdx = yearOff * 4 + Math.floor(d.getMonth() / 3);
+              const q = Math.max(0, qIdx);
+              const existing = acqMap.get(q) || { units: 0, totalCost: 0 };
+              existing.units += 1;
+              existing.totalCost += Number(u.total_acquisition_cost || u.purchase_price || 500_000);
+              acqMap.set(q, existing);
+            }
+            const acquisitions: AcquisitionSchedule[] = [];
+            for (const [quarter, data] of acqMap) {
+              acquisitions.push({
+                quarter,
+                units: data.units,
+                costPerUnit: data.totalCost / data.units,
+              });
+            }
+            return {
+              avgRent: totalRent / count,
+              avgHOA: totalHOA / count,
+              avgAnnualInsurance: totalIns / count,
+              avgAnnualTax: totalTax / count,
+              annualFundOpex: 75_000,
+              totalOwnershipPct: ownershipRow?.total_ownership_pct
+                ? Number(ownershipRow.total_ownership_pct) / 100
+                : null,
+              acquisitions,
+            };
+          })();
 
           const cfInput = portfolioData ? {
             assumptions,
@@ -1137,7 +1207,7 @@ router.get('/performance', requireAuth, requireAnyRole, async (req: Request, res
             baseAnnualInsurance: portfolioData.avgAnnualInsurance,
             baseAnnualTax: portfolioData.avgAnnualTax,
             annualFundOpex: portfolioData.annualFundOpex,
-            totalOwnershipPct: portfolioData.totalOwnershipPct,
+            totalOwnershipPct: portfolioData.totalOwnershipPct ?? undefined,
           } : {
             assumptions,
             acquisitions: generateDefaultAcquisitionSchedule(assumptions),
@@ -1192,6 +1262,10 @@ router.get('/performance', requireAuth, requireAnyRole, async (req: Request, res
       return;
     } catch (error) {
       // Fall back to SQLite below unless fallback has been disabled in runtime.
+      if (!sqliteFallbackEnabled()) {
+        rejectWhenSqliteFallbackDisabled(res, error);
+        return;
+      }
     }
   }
 
@@ -1242,7 +1316,7 @@ router.get('/performance', requireAuth, requireAnyRole, async (req: Request, res
       baseAnnualInsurance: portfolioData.avgAnnualInsurance,
       baseAnnualTax: portfolioData.avgAnnualTax,
       annualFundOpex: portfolioData.annualFundOpex,
-      totalOwnershipPct: portfolioData.totalOwnershipPct,
+            totalOwnershipPct: portfolioData.totalOwnershipPct ?? undefined,
     } : {
       assumptions,
       acquisitions: generateDefaultAcquisitionSchedule(assumptions),
@@ -1582,7 +1656,7 @@ router.get('/investors', requireAuth, requireGP, async (req: Request, res: Respo
       lpa.name
   `;
 
-  const investors = (usePostgresReads() || usePostgresLpRoutes())
+  const investors = (usePostgresLpReadPath())
     ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
     : getDb().prepare(sql).all();
   res.json(investors);
@@ -1777,7 +1851,7 @@ router.get('/capital-call-items/open', requireAuth, requireGP, async (req: Reque
     JOIN lp_accounts lpa ON lpa.id = cci.lp_account_id
     WHERE cc.status IN ('draft', 'sent', 'partially_received', 'completed')
   `;
-  const rows = (usePostgresReads() || usePostgresLpRoutes())
+  const rows = (usePostgresLpReadPath())
     ? await withPostgresClient(async (client) => {
       let sql = baseSql;
       const params: any[] = [];
@@ -1922,7 +1996,7 @@ router.post('/distributions/create', requireAuth, requireGP, async (req: Request
 
 // GET /api/lp/distributions/all - list distribution events
 router.get('/distributions/all', requireAuth, requireGP, async (req: Request, res: Response) => {
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  if (usePostgresLpReadPath()) {
     try {
       const rows = await withPostgresClient(async (client) => {
         const result = await client.query(`
@@ -1941,6 +2015,10 @@ router.get('/distributions/all', requireAuth, requireGP, async (req: Request, re
       return;
     } catch (error) {
       // Fall back to SQLite below unless fallback has been disabled in runtime.
+      if (!sqliteFallbackEnabled()) {
+        rejectWhenSqliteFallbackDisabled(res, error);
+        return;
+      }
     }
   }
 
@@ -2141,7 +2219,7 @@ router.put('/distributions/:eventId/items/:itemId/paid', requireAuth, requireGP,
 
 // Side-letter terms
 router.get('/side-letters', requireAuth, requireGP, async (req: Request, res: Response) => {
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  if (usePostgresLpReadPath()) {
     try {
       const rows = await withPostgresClient(async (client) => {
         const result = await client.query(`
@@ -2156,6 +2234,10 @@ router.get('/side-letters', requireAuth, requireGP, async (req: Request, res: Re
       return;
     } catch (error) {
       // Fall back to SQLite below unless fallback has been disabled in runtime.
+      if (!sqliteFallbackEnabled()) {
+        rejectWhenSqliteFallbackDisabled(res, error);
+        return;
+      }
     }
   }
 
@@ -2233,7 +2315,7 @@ router.get('/reports/quarterly/:quarter', requireAuth, requireGP, async (req: Re
     return;
   }
 
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  if (usePostgresLpReadPath()) {
     try {
       const rows = await withPostgresClient(async (client) => {
         const result = await client.query(`
@@ -2261,6 +2343,10 @@ router.get('/reports/quarterly/:quarter', requireAuth, requireGP, async (req: Re
       return;
     } catch (error) {
       // Fall back to SQLite below unless fallback has been disabled in runtime.
+      if (!sqliteFallbackEnabled()) {
+        rejectWhenSqliteFallbackDisabled(res, error);
+        return;
+      }
     }
   }
 
@@ -2289,7 +2375,6 @@ router.get('/reports/quarterly/:quarter', requireAuth, requireGP, async (req: Re
 
 // POST /api/lp/capital-calls/create - Create capital call
 router.post('/capital-calls/create', requireAuth, requireGP, async (req: Request, res: Response) => {
-  const db = getDb();
   const { totalAmount, callDate, dueDate, purpose, letterTemplate, customEmailSubject, customEmailBody } = req.body;
   if (usePostgresLpRoutes()) {
     try {
@@ -2310,6 +2395,7 @@ router.post('/capital-calls/create', requireAuth, requireGP, async (req: Request
     }
   }
 
+  const db = getDb();
   // Get next call number
   const lastCall = db.prepare(
     'SELECT MAX(call_number) as max_num FROM capital_calls'
@@ -2366,7 +2452,7 @@ router.get('/capital-calls/all', requireAuth, requireGP, async (req: Request, re
 // GET /api/lp/capital-calls/:callId/items - List per-LP items for a call (GP)
 router.get('/capital-calls/:callId/items', requireAuth, requireGP, async (req: Request, res: Response) => {
   const { callId } = req.params;
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  if (usePostgresLpReadPath()) {
     try {
       const items = await withPostgresClient(async (client) => {
         const result = await client.query(`
@@ -2382,6 +2468,10 @@ router.get('/capital-calls/:callId/items', requireAuth, requireGP, async (req: R
       return;
     } catch (error) {
       // Fall back to SQLite below unless fallback has been disabled in runtime.
+      if (!sqliteFallbackEnabled()) {
+        rejectWhenSqliteFallbackDisabled(res, error);
+        return;
+      }
     }
   }
 
@@ -2677,7 +2767,6 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
 
 // PUT /api/lp/capital-calls/:callId/items/:itemId/received - Mark as received
 router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, requireGP, async (req: Request, res: Response) => {
-  const db = getDb();
   const callIdNum = Number(req.params.callId);
   const itemIdNum = Number(req.params.itemId);
   if (!Number.isFinite(callIdNum) || callIdNum <= 0 || !Number.isFinite(itemIdNum) || itemIdNum <= 0) {
@@ -2712,6 +2801,7 @@ router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, require
     }
   }
 
+  const db = getDb();
   const item = db.prepare(`
     SELECT *
     FROM capital_call_items

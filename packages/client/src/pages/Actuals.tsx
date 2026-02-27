@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
 import { fmtCurrency, fmtNumber } from '../lib/format';
@@ -285,7 +285,7 @@ export default function Actuals() {
 
   /* ── Queries ─────────────────────────────────────────────── */
 
-  const { data: transactions = [] } = useQuery<Transaction[]>({
+  const transactionsQuery = useQuery<Transaction[]>({
     queryKey: ['actuals-transactions', filterUploadId],
     queryFn: () => api.get('/actuals/transactions', {
       params: {
@@ -294,6 +294,14 @@ export default function Actuals() {
       },
     }).then((r) => r.data),
   });
+  const transactions = transactionsQuery.data ?? [];
+
+  useEffect(() => {
+    if (!transactionsQuery.error) return;
+    const err: any = transactionsQuery.error;
+    const msg = String(err?.response?.data?.error || err?.message || 'Failed to load transactions');
+    setUploadFeedback(`Load failed: ${msg}`);
+  }, [transactionsQuery.error]);
 
   const { data: uploads = [] } = useQuery<Upload[]>({
     queryKey: ['actuals-uploads'],

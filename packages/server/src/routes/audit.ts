@@ -341,7 +341,7 @@ router.post('/journal/rebuild', async (req: Request, res: Response) => {
 
 router.get('/exports/:month', async (req: Request, res: Response) => {
   const month = String(req.params.month || '').trim();
-  const mode = String(req.query.mode || 'quickbooks').trim().toLowerCase();
+  const mode = String(req.query.mode || 'quickbooks').trim().toLowerCase() === 'tax' ? 'tax' : 'quickbooks';
   if (!/^\d{4}-\d{2}$/.test(month)) {
     res.status(400).json({ error: 'Month must be YYYY-MM' });
     return;
@@ -367,15 +367,64 @@ router.get('/exports/:month', async (req: Request, res: Response) => {
     WHERE je.entry_date >= ? AND je.entry_date <= ?
     ORDER BY je.entry_date, je.id, jel.id
   `;
-  const rows = usePostgresAudit()
-    ? await withPostgresClient(async (client) => {
-      const result = await client.query(
-        sql.replace('>= ? AND je.entry_date <= ?', '>= $1 AND je.entry_date <= $2'),
-        [from, to]
-      );
-      return result.rows as any[];
-    })
-    : (getDb().prepare(sql).all(from, to) as any[]);
+  const pgSql = `
+    SELECT
+      je.entry_date,
+      je.source_type,
+      je.source_id,
+      je.description,
+      coa.account_code,
+      coa.account_name,
+      coa.account_type,
+      jel.debit,
+      jel.credit,
+      jel.notes
+    FROM journal_entry_lines jel
+    JOIN journal_entries je ON je.id = jel.journal_entry_id
+    JOIN chart_of_accounts coa ON coa.id = jel.account_id
+    WHERE je.entry_date >= $1 AND je.entry_date <= $2
+    ORDER BY je.entry_date, je.id, jel.id
+  `;
+  let rows: any[] = [];
+  try {
+    rows = usePostgresAudit()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(pgSql, [from, to]);
+        return result.rows as any[];
+      })
+      : (getDb().prepare(sql).all(from, to) as any[]);
+  } catch {
+    // Fallback for environments that haven't created accounting journal tables yet.
+    const fallbackSql = `
+      SELECT id, date, amount, category, description
+      FROM cash_flow_actuals
+      WHERE date >= ? AND date <= ?
+      ORDER BY date, id
+    `;
+    const fallbackRows = usePostgresAudit()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(
+          fallbackSql.replace('date >= ? AND date <= ?', 'date >= $1 AND date <= $2'),
+          [from, to]
+        );
+        return result.rows as any[];
+      })
+      : (getDb().prepare(fallbackSql).all(from, to) as any[]);
+    rows = fallbackRows.map((r: any) => {
+      const amt = Number(r.amount || 0);
+      return {
+        entry_date: r.date,
+        source_type: 'cash_flow_actual',
+        source_id: r.id,
+        description: r.description || r.category || '',
+        account_code: '',
+        account_name: r.category || '',
+        debit: amt > 0 ? amt : 0,
+        credit: amt < 0 ? Math.abs(amt) : 0,
+        notes: r.description || '',
+      };
+    });
+  }
 
   const header = mode === 'tax'
     ? ['Date', 'SourceType', 'SourceId', 'AccountCode', 'AccountName', 'Debit', 'Credit', 'Memo']

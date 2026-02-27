@@ -14,7 +14,7 @@ type QueryFilters = {
 
 type AnyObj = Record<string, any>;
 
-function baseSql() {
+function baseSql(actualsTable: 'cash_flow_actuals' | 'cash_flows_actual' = 'cash_flow_actuals') {
   return `SELECT
       cfa.*,
       bt.amount as bank_amount,
@@ -25,7 +25,7 @@ function baseSql() {
       bu.unit_number,
       lpa.name as lp_name,
       cci.capital_call_id, cc.call_number
-    FROM cash_flow_actuals cfa
+    FROM ${actualsTable} cfa
     LEFT JOIN bank_transactions bt ON cfa.bank_transaction_id = bt.id
     LEFT JOIN portfolio_units pu ON cfa.portfolio_unit_id = pu.id
     LEFT JOIN entities e ON cfa.entity_id = e.id
@@ -37,14 +37,31 @@ function baseSql() {
     WHERE 1=1`;
 }
 
+async function resolvePostgresActualsTable(): Promise<'cash_flow_actuals' | 'cash_flows_actual'> {
+  return withPostgresClient(async (client) => {
+    const result = await client.query(
+      `
+      SELECT
+        to_regclass('public.cash_flow_actuals') as canonical,
+        to_regclass('public.cash_flows_actual') as legacy
+      `
+    );
+    const row = result.rows[0] as { canonical?: string | null; legacy?: string | null } | undefined;
+    if (row?.canonical) return 'cash_flow_actuals';
+    if (row?.legacy) return 'cash_flows_actual';
+    return 'cash_flow_actuals';
+  });
+}
+
 export async function listActualTransactions(filters: QueryFilters): Promise<AnyObj[]> {
   const limit = Math.max(1, Math.min(1000, Number(filters.limit ?? 100)));
   const offset = Math.max(0, Number(filters.offset ?? 0));
 
   if (usePostgresReads() || usePostgresActualsRoutes()) {
     try {
+      const actualsTable = await resolvePostgresActualsTable();
       return await withPostgresClient(async (client) => {
-        let sql = baseSql();
+        let sql = baseSql(actualsTable);
         const params: any[] = [];
         const bind = (v: any) => {
           params.push(v);
