@@ -109,10 +109,6 @@ export default function PublicSign() {
   const [agree, setAgree] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const visiblePdfFields = useMemo(
-    () => pdfFields.filter((f) => f.name !== 'Recipient'),
-    [pdfFields]
-  );
   const signatureFieldName = useMemo(
     () =>
       pickFieldName(
@@ -123,6 +119,10 @@ export default function PublicSign() {
     [pdfFields]
   );
   const linkedNameFields = useMemo(() => getLinkedNameFieldNames(pdfFields), [pdfFields]);
+  const visiblePdfFields = useMemo(
+    () => pdfFields.filter((f) => f.name !== 'Recipient' && !linkedNameFields.includes(f.name)),
+    [pdfFields, linkedNameFields]
+  );
 
   const docEndpoint = useMemo(() => {
     if (!token) return null;
@@ -191,9 +191,13 @@ export default function PublicSign() {
             // Keep Recipient synced even though we hide that field in UI.
             Recipient: String(formValues.Recipient || formValues.Name || '').trim(),
           };
+          for (const linkedFieldName of linkedNameFields) {
+            previewValues[linkedFieldName] = String(formValues.Name || '').trim();
+          }
           for (const field of pdfFields) {
-            // Date and Recipient are read-only in UI, but we still render them in preview.
-            if (field.readOnly && field.name !== 'Date' && field.name !== 'Recipient') continue;
+            // Date/Recipient/linked name copy fields are read-only in UI, but should still render in preview.
+            const isPreviewLinkedName = linkedNameFields.includes(field.name);
+            if (field.readOnly && field.name !== 'Date' && field.name !== 'Recipient' && !isPreviewLinkedName) continue;
             const val = String(previewValues[field.name] || '').trim();
             try {
               form.getTextField(field.name).setText(val);
@@ -302,7 +306,7 @@ export default function PublicSign() {
       cancelled = true;
       window.clearTimeout(debounce);
     };
-  }, [sourcePdfBytes, formValues, pdfFields, signatureFieldName]);
+  }, [sourcePdfBytes, formValues, pdfFields, signatureFieldName, linkedNameFields]);
 
   const missingRequired = useMemo(() => {
     const missing: string[] = [];
