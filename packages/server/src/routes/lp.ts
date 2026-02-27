@@ -16,6 +16,7 @@ import type { FundAssumptions } from '@brickell/shared';
 import type { AcquisitionSchedule } from '@brickell/engine';
 import { sendTransactionalEmail } from '../lib/email';
 import { readStoredFile } from '../lib/storage';
+import { withPostgresClient } from '../db/postgres-client';
 import {
   createCapitalCallWithItems,
   getLpAccountByUserId,
@@ -26,6 +27,17 @@ import {
 import { usePostgresLpRoutes, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
+
+async function getLpAccountForUser(userId: number) {
+  if (usePostgresReads() || usePostgresLpRoutes()) {
+    const pg = await withPostgresClient(async (client) => {
+      const r = await client.query(`SELECT * FROM lp_accounts WHERE user_id = $1 LIMIT 1`, [userId]);
+      return r.rows[0] || null;
+    });
+    if (pg) return pg as any;
+  }
+  return (getDb().prepare(`SELECT * FROM lp_accounts WHERE user_id = ?`).get(userId) as any) || null;
+}
 
 function recalcCalledCapitalForLp(db: ReturnType<typeof getDb>, lpAccountId: number) {
   db.prepare(`
@@ -229,7 +241,7 @@ router.get('/account', requireAuth, requireAnyRole, async (req: Request, res: Re
 // GET /api/lp/transactions - My capital calls + distributions
 router.get('/transactions', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
   const db = getDb();
-  const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
+  const account = await getLpAccountForUser(Number(req.user!.userId));
   if (!account) {
     res.status(404).json({ error: 'No LP account found' });
     return;
@@ -343,38 +355,58 @@ router.get('/ledger', requireAuth, requireAnyRole, (req: Request, res: Response)
 });
 
 // GET /api/lp/capital-calls - My pending/historical calls
-router.get('/capital-calls', requireAuth, requireAnyRole, (req: Request, res: Response) => {
-  const db = getDb();
-  const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
+router.get('/capital-calls', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
+  const account = await getLpAccountForUser(Number(req.user!.userId));
   if (!account) {
     res.status(404).json({ error: 'No LP account found' });
     return;
   }
 
-  const calls = db.prepare(`
-    SELECT cci.*, cc.call_number, cc.call_date, cc.due_date, cc.purpose, cc.status as call_status
-    FROM capital_call_items cci
-    JOIN capital_calls cc ON cci.capital_call_id = cc.id
-    WHERE cci.lp_account_id = ?
-    ORDER BY cc.call_date DESC
-  `).all(account.id);
+  const calls = (usePostgresReads() || usePostgresLpRoutes())
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `SELECT cci.*, cc.call_number, cc.call_date, cc.due_date, cc.purpose, cc.status as call_status
+         FROM capital_call_items cci
+         JOIN capital_calls cc ON cci.capital_call_id = cc.id
+         WHERE cci.lp_account_id = $1
+         ORDER BY cc.call_date DESC`,
+        [account.id]
+      );
+      return result.rows;
+    })
+    : getDb().prepare(`
+      SELECT cci.*, cc.call_number, cc.call_date, cc.due_date, cc.purpose, cc.status as call_status
+      FROM capital_call_items cci
+      JOIN capital_calls cc ON cci.capital_call_id = cc.id
+      WHERE cci.lp_account_id = ?
+      ORDER BY cc.call_date DESC
+    `).all(account.id);
   res.json(calls);
 });
 
 // GET /api/lp/documents - My documents
-router.get('/documents', requireAuth, requireAnyRole, (req: Request, res: Response) => {
-  const db = getDb();
-  const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
+router.get('/documents', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
+  const account = await getLpAccountForUser(Number(req.user!.userId));
   if (!account) {
     res.status(404).json({ error: 'No LP account found' });
     return;
   }
 
-  const docs = db.prepare(`
-    SELECT * FROM documents
-    WHERE (parent_type = 'lp' AND parent_id = ?) OR parent_type = 'fund'
-    ORDER BY uploaded_at DESC
-  `).all(account.id);
+  const docs = (usePostgresReads() || usePostgresLpRoutes())
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(
+        `SELECT * FROM documents
+         WHERE (parent_type = 'lp' AND parent_id = $1) OR parent_type = 'fund'
+         ORDER BY uploaded_at DESC`,
+        [account.id]
+      );
+      return result.rows;
+    })
+    : getDb().prepare(`
+      SELECT * FROM documents
+      WHERE (parent_type = 'lp' AND parent_id = ?) OR parent_type = 'fund'
+      ORDER BY uploaded_at DESC
+    `).all(account.id);
   res.json(docs);
 });
 

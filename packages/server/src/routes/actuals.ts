@@ -10,9 +10,12 @@ import { deleteStoredFile, saveUploadedBuffer } from '../lib/storage';
 import { createHash } from 'crypto';
 import { writeAuditLog } from '../lib/audit';
 import { listActualTransactions } from '../db/repositories/actuals-repository';
+import { withPostgresClient } from '../db/postgres-client';
+import { isPostgresPrimaryMode, usePostgresActualsRoutes, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
 router.use(requireAuth, requireGP);
+const usePostgresActuals = () => usePostgresReads() || usePostgresActualsRoutes() || isPostgresPrimaryMode();
 
 /* ── Multer config for statement file uploads ─────────────────── */
 
@@ -1394,9 +1397,8 @@ router.put('/transactions/:id', (req: Request, res: Response) => {
 });
 
 // GET /api/actuals/renovations-options - lightweight list for Actuals allocation dropdowns
-router.get('/renovations-options', (req: Request, res: Response) => {
-  const db = getDb();
-  const rows = db.prepare(`
+router.get('/renovations-options', async (req: Request, res: Response) => {
+  const sql = `
     SELECT
       ur.id,
       ur.portfolio_unit_id,
@@ -1407,7 +1409,10 @@ router.get('/renovations-options', (req: Request, res: Response) => {
     JOIN portfolio_units pu ON ur.portfolio_unit_id = pu.id
     JOIN building_units bu ON pu.building_unit_id = bu.id
     ORDER BY ur.portfolio_unit_id, ur.id DESC
-  `).all();
+  `;
+  const rows = usePostgresActuals()
+    ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
+    : getDb().prepare(sql).all();
   res.json(rows);
 });
 
@@ -1760,9 +1765,10 @@ router.post('/bank-lines/:id/allocations', (req: Request, res: Response) => {
 });
 
 // GET /api/actuals/periods - list closed periods
-router.get('/periods', (req: Request, res: Response) => {
-  const db = getDb();
-  const rows = db.prepare(`SELECT * FROM accounting_periods ORDER BY month DESC`).all();
+router.get('/periods', async (req: Request, res: Response) => {
+  const rows = usePostgresActuals()
+    ? await withPostgresClient(async (client) => (await client.query(`SELECT * FROM accounting_periods ORDER BY month DESC`)).rows)
+    : getDb().prepare(`SELECT * FROM accounting_periods ORDER BY month DESC`).all();
   res.json(rows);
 });
 
@@ -1827,8 +1833,7 @@ router.post('/periods/:month/close', (req: Request, res: Response) => {
 });
 
 // GET /api/actuals/variance - Actual vs forecast comparison
-router.get('/variance', (req: Request, res: Response) => {
-  const db = getDb();
+router.get('/variance', async (req: Request, res: Response) => {
 
   // Compare a *real* calendar month (no smoothing of annual items).
   // Default: current month in server time.
@@ -1839,24 +1844,39 @@ router.get('/variance', (req: Request, res: Response) => {
   const to = `${year}-${String(month).padStart(2, '0')}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`;
 
   // Get reconciled actuals grouped by category for this month
-  const actuals = db.prepare(`
+  const actualsSql = `
     SELECT category, SUM(amount) as total, COUNT(*) as count
     FROM cash_flow_actuals
     WHERE reconciled = 1
       AND date >= ? AND date <= ?
     GROUP BY category
     ORDER BY total DESC
-  `).all(from, to) as any[];
+  `;
 
   // Get forecast from portfolio units (month-specific; insurance/tax are annual lumps in their payment month)
-  const portfolio = db.prepare(`
+  const portfolioSql = `
     SELECT
       SUM(COALESCE(monthly_rent, 0)) as forecast_rent,
       SUM(COALESCE(monthly_hoa, 0)) as forecast_hoa,
       SUM(CASE WHEN COALESCE(insurance_payment_month, 1) = ? THEN COALESCE(monthly_insurance, 0) ELSE 0 END) as forecast_insurance_lump,
       SUM(CASE WHEN COALESCE(tax_payment_month, 1) = ? THEN COALESCE(monthly_tax, 0) ELSE 0 END) as forecast_tax_lump
     FROM portfolio_units
-  `).get(month, month) as any;
+  `;
+  const { actuals, portfolio } = usePostgresActuals()
+    ? await withPostgresClient(async (client) => {
+      const [actualsResult, portfolioResult] = await Promise.all([
+        client.query(actualsSql.replace('date >= ? AND date <= ?', 'date >= $1 AND date <= $2'), [from, to]),
+        client.query(portfolioSql.replace(/\?/g, (_m, i) => (i === 0 ? '$1' : '$2')), [month, month]),
+      ]);
+      return { actuals: actualsResult.rows as any[], portfolio: (portfolioResult.rows[0] || {}) as any };
+    })
+    : (() => {
+      const db = getDb();
+      return {
+        actuals: db.prepare(actualsSql).all(from, to) as any[],
+        portfolio: db.prepare(portfolioSql).get(month, month) as any,
+      };
+    })();
 
   const monthlyForecast = {
     rent: portfolio?.forecast_rent || 0,
@@ -1887,9 +1907,8 @@ router.get('/variance', (req: Request, res: Response) => {
 });
 
 // GET /api/actuals/uploads - List upload history
-router.get('/uploads', (req: Request, res: Response) => {
-  const db = getDb();
-  const uploads = db.prepare(`
+router.get('/uploads', async (req: Request, res: Response) => {
+  const sql = `
     SELECT
       u.*,
       COALESCE((
@@ -1936,14 +1955,18 @@ router.get('/uploads', (req: Request, res: Response) => {
       ), 0) as out_of_balance_bank_lines
     FROM bank_uploads u
     ORDER BY u.upload_date DESC
-  `).all();
+  `;
+  const uploads = usePostgresActuals()
+    ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
+    : getDb().prepare(sql).all();
   res.json(uploads);
 });
 
 // Bank accounts (operating/reserve/escrow)
-router.get('/bank-accounts', (req: Request, res: Response) => {
-  const db = getDb();
-  const rows = db.prepare(`SELECT * FROM bank_accounts ORDER BY is_active DESC, id DESC`).all();
+router.get('/bank-accounts', async (req: Request, res: Response) => {
+  const rows = usePostgresActuals()
+    ? await withPostgresClient(async (client) => (await client.query(`SELECT * FROM bank_accounts ORDER BY is_active DESC, id DESC`)).rows)
+    : getDb().prepare(`SELECT * FROM bank_accounts ORDER BY is_active DESC, id DESC`).all();
   res.json(rows);
 });
 
@@ -1963,16 +1986,18 @@ router.post('/bank-accounts', (req: Request, res: Response) => {
 });
 
 // Recurring expense templates and generation
-router.get('/recurring-expenses', (req: Request, res: Response) => {
-  const db = getDb();
-  const rows = db.prepare(`
+router.get('/recurring-expenses', async (req: Request, res: Response) => {
+  const sql = `
     SELECT re.*, bu.unit_number, e.name as entity_name
     FROM recurring_expenses re
     LEFT JOIN portfolio_units pu ON pu.id = re.portfolio_unit_id
     LEFT JOIN building_units bu ON bu.id = pu.building_unit_id
     LEFT JOIN entities e ON e.id = re.entity_id
     ORDER BY re.id DESC
-  `).all();
+  `;
+  const rows = usePostgresActuals()
+    ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
+    : getDb().prepare(sql).all();
   res.json(rows);
 });
 
@@ -2260,15 +2285,17 @@ router.get('/exports/month/:month', (req: Request, res: Response) => {
 /* ── Learned Mappings CRUD ───────────────────────────────────── */
 
 // GET /api/actuals/mappings - List all learned description→unit mappings
-router.get('/mappings', (req: Request, res: Response) => {
-  const db = getDb();
-  const mappings = db.prepare(`
+router.get('/mappings', async (req: Request, res: Response) => {
+  const sql = `
     SELECT lm.*, bu.unit_number
     FROM learned_mappings lm
     LEFT JOIN portfolio_units pu ON lm.portfolio_unit_id = pu.id
     LEFT JOIN building_units bu ON pu.building_unit_id = bu.id
     ORDER BY lm.created_at DESC
-  `).all();
+  `;
+  const mappings = usePostgresActuals()
+    ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
+    : getDb().prepare(sql).all();
   res.json(mappings);
 });
 

@@ -12,8 +12,11 @@ import jwt from 'jsonwebtoken';
 import { getDb } from '../db/database';
 import { readStoredFile } from '../lib/storage';
 import { sendTransactionalEmail } from '../lib/email';
+import { withPostgresClient } from '../db/postgres-client';
+import { isPostgresPrimaryMode, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
+const usePostgresInvestorRoutes = () => isPostgresPrimaryMode() || usePostgresReads();
 
 type InvestorTokenPayload = {
   kind: 'investor_room';
@@ -307,26 +310,39 @@ router.get('/me', requireInvestorRoom, (req: Request, res: Response) => {
 });
 
 // GET /api/investor/documents - Fund documents for prospects
-router.get('/documents', requireInvestorRoom, (req: Request, res: Response) => {
-  const db = getDb();
-  const docs = db.prepare(`
-    SELECT id, parent_id, parent_type, name, category, file_path, file_type, uploaded_at, requires_signature, signed_at, uploaded_by
-    FROM documents
-    WHERE parent_type = 'fund'
-    ORDER BY uploaded_at DESC
-  `).all();
+router.get('/documents', requireInvestorRoom, async (req: Request, res: Response) => {
+  const docs = usePostgresInvestorRoutes()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query(`
+        SELECT id, parent_id, parent_type, name, category, file_path, file_type, uploaded_at, requires_signature, signed_at, uploaded_by
+        FROM documents
+        WHERE parent_type = 'fund'
+        ORDER BY uploaded_at DESC
+      `);
+      return result.rows;
+    })
+    : getDb().prepare(`
+      SELECT id, parent_id, parent_type, name, category, file_path, file_type, uploaded_at, requires_signature, signed_at, uploaded_by
+      FROM documents
+      WHERE parent_type = 'fund'
+      ORDER BY uploaded_at DESC
+    `).all();
   res.json(docs);
 });
 
 // GET /api/investor/documents/:id/download - Download fund doc
 router.get('/documents/:id/download', requireInvestorRoom, async (req: Request, res: Response) => {
-  const db = getDb();
   const id = Number(req.params.id);
   if (!id) {
     res.status(400).json({ error: 'Invalid document id' });
     return;
   }
-  const doc = db.prepare(`SELECT * FROM documents WHERE id = ?`).get(id) as any;
+  const doc = usePostgresInvestorRoutes()
+    ? await withPostgresClient(async (client) => {
+      const result = await client.query('SELECT * FROM documents WHERE id = $1 LIMIT 1', [id]);
+      return (result.rows[0] || null) as any;
+    })
+    : (getDb().prepare(`SELECT * FROM documents WHERE id = ?`).get(id) as any);
   if (!doc || doc.parent_type !== 'fund') {
     res.status(404).json({ error: 'Document not found' });
     return;

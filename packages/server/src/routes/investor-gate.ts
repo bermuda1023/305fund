@@ -11,22 +11,41 @@ import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { getDb } from '../db/database';
+import { withPostgresClient } from '../db/postgres-client';
+import { isPostgresPrimaryMode, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
+const usePostgresInvestorGate = () => isPostgresPrimaryMode() || usePostgresReads();
 
-function logGateAttempt(input: { signatureId?: number; ip: string; userAgent: string; success: boolean; reason: string }) {
+async function logGateAttempt(input: { signatureId?: number; ip: string; userAgent: string; success: boolean; reason: string }) {
   try {
-    const db = getDb();
-    db.prepare(`
-      INSERT INTO investor_gate_attempts (signature_id, ip, user_agent, success, reason)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(
-      input.signatureId || null,
-      input.ip || null,
-      input.userAgent || null,
-      input.success ? 1 : 0,
-      input.reason || null
-    );
+    if (usePostgresInvestorGate()) {
+      await withPostgresClient(async (client) => {
+        await client.query(
+          `INSERT INTO investor_gate_attempts (signature_id, ip, user_agent, success, reason)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            input.signatureId || null,
+            input.ip || null,
+            input.userAgent || null,
+            input.success ? 1 : 0,
+            input.reason || null,
+          ]
+        );
+      });
+    } else {
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO investor_gate_attempts (signature_id, ip, user_agent, success, reason)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        input.signatureId || null,
+        input.ip || null,
+        input.userAgent || null,
+        input.success ? 1 : 0,
+        input.reason || null
+      );
+    }
   } catch {
     // do not block unlock on logging failures
   }
@@ -77,7 +96,7 @@ const unlockLimiter = rateLimit({
 
 // POST /api/public/investor-gate/unlock
 // Body: { password, ndaProofToken }
-router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
+router.post('/unlock', unlockLimiter, async (req: Request, res: Response) => {
   const password = String(req.body?.password || '');
   const ndaProofToken = String(req.body?.ndaProofToken || '');
   if (!password) return res.status(400).json({ error: 'password is required' });
@@ -87,18 +106,33 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
     const { signatureId, documentId } = verifyNdaProofToken(ndaProofToken);
     const ip = String(req.ip || '');
     const userAgent = String(req.get('user-agent') || '');
-    const db = getDb();
-    const sigRow = db.prepare(
-      `SELECT investor_gate_password_hash, investor_gate_password_expires_at
-       FROM document_signatures
-       WHERE id = ?
-       LIMIT 1`
-    ).get(signatureId) as
-      | {
-          investor_gate_password_hash?: string | null;
-          investor_gate_password_expires_at?: string | null;
-        }
-      | undefined;
+    const sigRow = usePostgresInvestorGate()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(
+          `SELECT investor_gate_password_hash, investor_gate_password_expires_at
+           FROM document_signatures
+           WHERE id = $1
+           LIMIT 1`,
+          [signatureId]
+        );
+        return result.rows[0] as
+          | {
+              investor_gate_password_hash?: string | null;
+              investor_gate_password_expires_at?: string | null;
+            }
+          | undefined;
+      })
+      : (getDb().prepare(
+        `SELECT investor_gate_password_hash, investor_gate_password_expires_at
+         FROM document_signatures
+         WHERE id = ?
+         LIMIT 1`
+      ).get(signatureId) as
+        | {
+            investor_gate_password_hash?: string | null;
+            investor_gate_password_expires_at?: string | null;
+          }
+        | undefined);
     if (!sigRow) return res.status(400).json({ error: 'Invalid ndaProofToken' });
 
     const perSignerHash = String(sigRow.investor_gate_password_hash || '').trim();
@@ -106,7 +140,7 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
     if (expiresAtRaw) {
       const expiresAtMs = new Date(expiresAtRaw).getTime();
       if (Number.isFinite(expiresAtMs) && expiresAtMs < Date.now()) {
-        logGateAttempt({ signatureId, ip, userAgent, success: false, reason: 'code_expired' });
+        await logGateAttempt({ signatureId, ip, userAgent, success: false, reason: 'code_expired' });
         return res.status(401).json({ error: 'This access code has expired' });
       }
     }
@@ -121,7 +155,7 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
           ? password === plain
           : password === 'admin';
     if (!ok) {
-      logGateAttempt({ signatureId, ip, userAgent, success: false, reason: 'invalid_password' });
+      await logGateAttempt({ signatureId, ip, userAgent, success: false, reason: 'invalid_password' });
       return res.status(401).json({ error: 'Invalid password' });
     }
 
@@ -135,14 +169,14 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
       { expiresIn: '2h' }
     );
 
-    logGateAttempt({ signatureId, ip, userAgent, success: true, reason: 'unlock_success' });
+    await logGateAttempt({ signatureId, ip, userAgent, success: true, reason: 'unlock_success' });
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       investorAccessToken,
       investorTargetUrl: getInvestorTargetUrl(),
     });
   } catch (err: any) {
-    logGateAttempt({
+    void logGateAttempt({
       ip: String(req.ip || ''),
       userAgent: String(req.get('user-agent') || ''),
       success: false,

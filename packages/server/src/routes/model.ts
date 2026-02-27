@@ -602,6 +602,438 @@ type ModelEvalResult = {
   gpEconomics: any;
 };
 
+type PgModelSnapshot = {
+  portfolioRows: any[];
+  ownershipRow: { total_ownership_pct?: number } | null;
+  annualExpenseRows: any[];
+  renovationRows: any[];
+  acquisitionRows: any[];
+  capitalCallRows: Array<{ date: string; amount: number }>;
+  liquidityExpenseRows: Array<{ date: string; amount: number }>;
+  portfolioModelRows: any[];
+};
+
+async function fetchModelSnapshotPg(): Promise<PgModelSnapshot> {
+  return withPostgresClient(async (client) => {
+    const [
+      portfolioRowsResult,
+      ownershipResult,
+      annualExpenseResult,
+      renovationResult,
+      acquisitionResult,
+      capitalCallResult,
+      expenseResult,
+      portfolioModelResult,
+    ] = await Promise.all([
+      client.query(`
+        SELECT
+          pu.id, pu.purchase_date, pu.purchase_price, pu.total_acquisition_cost,
+          pu.monthly_rent, pu.monthly_hoa, pu.monthly_insurance, pu.monthly_tax
+        FROM portfolio_units pu
+        ORDER BY pu.purchase_date
+      `),
+      client.query(`
+        SELECT SUM(ut.ownership_pct) as total_ownership_pct
+        FROM portfolio_units pu
+        JOIN building_units bu ON pu.building_unit_id = bu.id
+        JOIN unit_types ut ON bu.unit_type_id = ut.id
+      `),
+      client.query(`
+        SELECT
+          pu.id as portfolio_unit_id,
+          pu.purchase_date,
+          COALESCE(pu.monthly_insurance, 0) as annual_insurance,
+          COALESCE(pu.monthly_tax, 0) as annual_tax,
+          COALESCE(pu.insurance_payment_month, 1) as insurance_payment_month,
+          COALESCE(pu.insurance_payment_day, 1) as insurance_payment_day,
+          COALESCE(pu.tax_payment_month, 1) as tax_payment_month,
+          COALESCE(pu.tax_payment_day, 1) as tax_payment_day
+        FROM portfolio_units pu
+      `),
+      client.query(`
+        SELECT
+          ur.id,
+          ur.portfolio_unit_id,
+          ur.description,
+          ur.status,
+          ur.start_date,
+          ur.end_date,
+          COALESCE(ur.actual_cost, ur.estimated_cost, 0) as paid_cost,
+          bu.unit_number
+        FROM unit_renovations ur
+        JOIN portfolio_units pu ON ur.portfolio_unit_id = pu.id
+        JOIN building_units bu ON pu.building_unit_id = bu.id
+        WHERE COALESCE(ur.actual_cost, ur.estimated_cost, 0) > 0
+          AND (ur.start_date IS NOT NULL OR ur.end_date IS NOT NULL)
+        ORDER BY COALESCE(ur.end_date, ur.start_date)
+      `),
+      client.query(`
+        SELECT
+          pu.id as portfolio_unit_id,
+          pu.purchase_date,
+          COALESCE(pu.total_acquisition_cost, pu.purchase_price, 0) as amount,
+          bu.unit_number
+        FROM portfolio_units pu
+        JOIN building_units bu ON pu.building_unit_id = bu.id
+        WHERE pu.purchase_date IS NOT NULL
+        ORDER BY pu.purchase_date
+      `),
+      client.query(`
+        SELECT date, SUM(amount) as amount
+        FROM capital_transactions
+        WHERE type = 'call'
+        GROUP BY date
+        ORDER BY date
+      `),
+      client.query(`
+        SELECT date, SUM(ABS(amount)) as amount
+        FROM cash_flow_actuals
+        WHERE amount < 0
+          AND category IN ('hoa', 'insurance', 'tax', 'repair', 'management_fee', 'fund_expense', 'other')
+        GROUP BY date
+      `),
+      client.query(`
+        SELECT
+          pu.id as portfolio_unit_id,
+          bu.unit_number,
+          pu.purchase_date,
+          COALESCE(pu.monthly_hoa, 0) as monthly_hoa,
+          COALESCE(pu.monthly_rent, 0) as proforma_monthly_rent,
+          t.monthly_rent as tenant_monthly_rent,
+          t.lease_start,
+          t.lease_end,
+          t.status as tenant_status
+        FROM portfolio_units pu
+        JOIN building_units bu ON bu.id = pu.building_unit_id
+        LEFT JOIN tenants t
+          ON t.portfolio_unit_id = pu.id
+         AND t.status IN ('active', 'month_to_month')
+        WHERE pu.purchase_date IS NOT NULL
+        ORDER BY pu.purchase_date ASC
+      `),
+    ]);
+    return {
+      portfolioRows: portfolioRowsResult.rows as any[],
+      ownershipRow: (ownershipResult.rows[0] || null) as any,
+      annualExpenseRows: annualExpenseResult.rows as any[],
+      renovationRows: renovationResult.rows as any[],
+      acquisitionRows: acquisitionResult.rows as any[],
+      capitalCallRows: capitalCallResult.rows as Array<{ date: string; amount: number }>,
+      liquidityExpenseRows: expenseResult.rows as Array<{ date: string; amount: number }>,
+      portfolioModelRows: portfolioModelResult.rows as any[],
+    };
+  });
+}
+
+function evaluateAssumptionsPg(
+  assumptions: FundAssumptions,
+  snapshot: PgModelSnapshot,
+  mode: ModelDataMode = 'auto'
+): ModelEvalResult {
+  const buildPortfolioData = () => {
+    const units = snapshot.portfolioRows;
+    const ownershipRow = snapshot.ownershipRow;
+    if (units.length === 0) return null;
+    const totalRent = units.reduce((s: number, u: any) => s + Number(u.monthly_rent || 0), 0);
+    const totalHOA = units.reduce((s: number, u: any) => s + Number(u.monthly_hoa || 0), 0);
+    const totalIns = units.reduce((s: number, u: any) => s + Number(u.monthly_insurance || 0), 0);
+    const totalTax = units.reduce((s: number, u: any) => s + Number(u.monthly_tax || 0), 0);
+    const count = units.length;
+    const acqMap = new Map<number, { units: number; totalCost: number }>();
+    for (const u of units) {
+      const d = new Date(u.purchase_date);
+      const yearOff = d.getFullYear() - 2026;
+      const qIdx = yearOff * 4 + Math.floor(d.getMonth() / 3);
+      const q = Math.max(0, qIdx);
+      const existing = acqMap.get(q) || { units: 0, totalCost: 0 };
+      existing.units += 1;
+      existing.totalCost += Number(u.total_acquisition_cost || u.purchase_price || 500_000);
+      acqMap.set(q, existing);
+    }
+    const acquisitions: AcquisitionSchedule[] = [];
+    for (const [quarter, data] of acqMap) {
+      acquisitions.push({ quarter, units: data.units, costPerUnit: data.totalCost / data.units });
+    }
+    return {
+      avgRent: totalRent / count,
+      avgHOA: totalHOA / count,
+      avgAnnualInsurance: totalIns / count,
+      avgAnnualTax: totalTax / count,
+      acquisitions,
+      unitCount: count,
+      totalOwnershipPct: ownershipRow?.total_ownership_pct ? Number(ownershipRow.total_ownership_pct) / 100 : null,
+    };
+  };
+
+  const portfolio = mode === 'defaults' ? null : buildPortfolioData();
+  const cfInput = mode === 'sample'
+    ? buildSampleCashFlowInput(assumptions).input
+    : portfolio
+      ? {
+        assumptions,
+        acquisitions: portfolio.acquisitions,
+        baseMonthlyRent: portfolio.avgRent,
+        baseMonthlyHOA: portfolio.avgHOA,
+        baseAnnualInsurance: 0,
+        baseAnnualTax: 0,
+        annualFundOpex: calcAnnualFundOpex(assumptions, portfolio.totalOwnershipPct ?? 0),
+        totalOwnershipPct: portfolio.totalOwnershipPct ?? undefined,
+      }
+      : {
+        assumptions,
+        acquisitions: generateDefaultAcquisitionSchedule(assumptions),
+        baseMonthlyRent: 2800,
+        baseMonthlyHOA: 1400,
+        baseAnnualInsurance: 2400,
+        baseAnnualTax: 2400,
+        annualFundOpex: calcAnnualFundOpex(assumptions, 0),
+      };
+
+  const dataSource = mode === 'sample'
+    ? buildSampleCashFlowInput(assumptions).dataSource
+    : portfolio
+      ? { type: 'portfolio' as const, unitCount: portfolio.unitCount, avgRent: portfolio.avgRent, avgHOA: portfolio.avgHOA }
+      : { type: 'defaults' as const, unitCount: 0, avgRent: 2800, avgHOA: 1400 };
+
+  const baseCashFlows = projectCashFlows(cfInput);
+
+  const annualExpenseRows = snapshot.annualExpenseRows;
+  const byQuarterInsurance = new Map<number, number>();
+  const byQuarterTax = new Map<number, number>();
+  const annualEvents: Array<{ paidDate: string; category: 'insurance' | 'tax'; amount: number }> = [];
+  const startYear = 2026;
+  const maxQuarter = assumptions.fundTermYears * 4;
+  for (const r of annualExpenseRows) {
+    const purchase = new Date(r.purchase_date);
+    for (let y = 0; y < assumptions.fundTermYears; y++) {
+      const year = startYear + y;
+      if (Number(r.annual_insurance || 0) > 0) {
+        const date = dateFromMonthDay(year, Number(r.insurance_payment_month), Number(r.insurance_payment_day));
+        const d = new Date(date);
+        if (!Number.isNaN(purchase.getTime()) && d >= purchase) {
+          const qIdx = quarterIndexFromDate(date);
+          if (qIdx >= 0 && qIdx < maxQuarter) {
+            const grown = Number(r.annual_insurance) * Math.pow(1 + assumptions.hoaGrowthPct, y);
+            byQuarterInsurance.set(qIdx, (byQuarterInsurance.get(qIdx) || 0) + grown);
+            annualEvents.push({ paidDate: date, category: 'insurance', amount: grown });
+          }
+        }
+      }
+      if (Number(r.annual_tax || 0) > 0) {
+        const date = dateFromMonthDay(year, Number(r.tax_payment_month), Number(r.tax_payment_day));
+        const d = new Date(date);
+        if (!Number.isNaN(purchase.getTime()) && d >= purchase) {
+          const qIdx = quarterIndexFromDate(date);
+          if (qIdx >= 0 && qIdx < maxQuarter) {
+            const taxGrowthPct = Number((assumptions as any).taxGrowthPct ?? assumptions.hoaGrowthPct ?? 0);
+            const grown = Number(r.annual_tax) * Math.pow(1 + taxGrowthPct, y);
+            byQuarterTax.set(qIdx, (byQuarterTax.get(qIdx) || 0) + grown);
+            annualEvents.push({ paidDate: date, category: 'tax', amount: grown });
+          }
+        }
+      }
+    }
+  }
+
+  const renoEvents = snapshot.renovationRows.map((r) => {
+    const paidDate = r.end_date || r.start_date;
+    return {
+      id: r.id,
+      portfolioUnitId: r.portfolio_unit_id,
+      unitNumber: r.unit_number,
+      description: r.description,
+      status: r.status,
+      paidDate,
+      quarterIndex: quarterIndexFromDate(String(paidDate)),
+      amount: Number(r.paid_cost || 0),
+    };
+  });
+  const renoByQuarter = new Map<number, number>();
+  for (const e of renoEvents) renoByQuarter.set(e.quarterIndex, (renoByQuarter.get(e.quarterIndex) || 0) + e.amount);
+  const acquisitionEvents = snapshot.acquisitionRows
+    .map((r) => ({
+      portfolioUnitId: Number(r.portfolio_unit_id),
+      unitNumber: String(r.unit_number),
+      paidDate: String(r.purchase_date),
+      quarterIndex: quarterIndexFromDate(String(r.purchase_date)),
+      amount: Number(r.amount || 0),
+    }))
+    .filter((e) => e.amount > 0);
+  const capitalCallEvents = snapshot.capitalCallRows
+    .map((r) => ({
+      paidDate: String(r.date),
+      quarterIndex: quarterIndexFromDate(String(r.date)),
+      amount: Number(r.amount || 0),
+    }))
+    .filter((e) => e.amount > 0);
+
+  const callByMonth = new Map<string, number>();
+  const deployByMonth = new Map<string, number>();
+  for (const e of capitalCallEvents) {
+    const d = new Date(e.paidDate);
+    if (!Number.isNaN(d.getTime())) callByMonth.set(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, (callByMonth.get(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`) || 0) + e.amount);
+  }
+  for (const e of acquisitionEvents) {
+    const d = new Date(e.paidDate);
+    if (!Number.isNaN(d.getTime())) deployByMonth.set(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, (deployByMonth.get(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`) || 0) + e.amount);
+  }
+  for (const r of snapshot.liquidityExpenseRows) {
+    const d = new Date(r.date);
+    if (!Number.isNaN(d.getTime())) deployByMonth.set(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, (deployByMonth.get(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`) || 0) + Number(r.amount || 0));
+  }
+  const liquidityLedger: any[] = [];
+  const monthlyRate = Number(assumptions.mmRate || 0) / 12;
+  let mmBalance = 0;
+  for (let i = 0; i < assumptions.fundTermYears * 12; i++) {
+    const d = new Date(2026, i, 1);
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const called = callByMonth.get(k) || 0;
+    const deployed = deployByMonth.get(k) || 0;
+    const start = mmBalance;
+    const income = start * monthlyRate;
+    const end = Math.max(0, start + called - deployed + income);
+    liquidityLedger.push({ label: `${d.toLocaleString('default', { month: 'short' })} ${d.getFullYear()}`, month: k, capitalCalled: called, deployed, mmIncome: income, mmBalanceStart: start, mmBalanceEnd: end });
+    mmBalance = end;
+  }
+
+  const portfolioUnits = snapshot.portfolioModelRows.map((r) => ({
+    portfolioUnitId: Number(r.portfolio_unit_id),
+    unitNumber: String(r.unit_number),
+    purchaseDate: String(r.purchase_date),
+    monthlyHOA: Number(r.monthly_hoa || 0),
+    proformaMonthlyRent: Number(r.proforma_monthly_rent || 0),
+    tenantMonthlyRent: r.tenant_monthly_rent != null ? Number(r.tenant_monthly_rent) : null,
+    leaseStart: r.lease_start ? String(r.lease_start) : null,
+    leaseEnd: r.lease_end ? String(r.lease_end) : null,
+    tenantStatus: r.tenant_status ? String(r.tenant_status) : null,
+  }));
+
+  const cashFlows = baseCashFlows.map((cf) => {
+    const renovationCost = renoByQuarter.get(cf.quarterIndex) || 0;
+    const insuranceCost = byQuarterInsurance.get(cf.quarterIndex) || 0;
+    const taxCost = byQuarterTax.get(cf.quarterIndex) || 0;
+    return {
+      ...cf,
+      renovationCost,
+      insuranceExpense: cf.insuranceExpense + insuranceCost,
+      taxExpense: cf.taxExpense + taxCost,
+      operatingExpense: cf.operatingExpense + renovationCost,
+      netOperatingIncome: cf.netOperatingIncome - renovationCost - insuranceCost - taxCost,
+      netCashFlow: cf.netCashFlow - renovationCost - insuranceCost - taxCost,
+    };
+  });
+  let cumulative = 0;
+  for (const cf of cashFlows) {
+    cumulative += cf.netCashFlow;
+    cf.cumulativeCashFlow = cumulative;
+  }
+  const exitCF = cashFlows[cashFlows.length - 1];
+  const totalDistributions = exitCF.grossSaleProceeds + exitCF.mmLiquidation;
+  const interimDistributions = cashFlows.reduce((s, cf) => s + (cf.lpDistributions || 0), 0);
+  const totalCapitalDeployed = cashFlows.reduce((s, cf) => s + cf.capitalCalls, 0);
+  const totalNOI = cashFlows.reduce((s, cf) => s + cf.netOperatingIncome, 0);
+  const gpCoinvest = assumptions.fundSize * assumptions.gpCoinvestPct;
+  const lpCapital = assumptions.fundSize - gpCoinvest;
+  const fundMOIC = calcMOIC(totalDistributions + interimDistributions, totalCapitalDeployed);
+  const insuranceByMonth = new Map<string, number>();
+  const taxByMonth = new Map<string, number>();
+  for (const ev of annualEvents) {
+    const k = monthKeyFromDate(ev.paidDate);
+    if (!k) continue;
+    if (ev.category === 'insurance') insuranceByMonth.set(k, (insuranceByMonth.get(k) || 0) + ev.amount);
+    if (ev.category === 'tax') taxByMonth.set(k, (taxByMonth.get(k) || 0) + ev.amount);
+  }
+  const renoByMonth = new Map<string, number>();
+  for (const ev of renoEvents) {
+    const k = monthKeyFromDate(String(ev.paidDate));
+    if (!k) continue;
+    renoByMonth.set(k, (renoByMonth.get(k) || 0) + ev.amount);
+  }
+  const callByMonth2 = new Map<string, number>();
+  for (const ev of capitalCallEvents) {
+    const k = monthKeyFromDate(ev.paidDate);
+    if (!k) continue;
+    callByMonth2.set(k, (callByMonth2.get(k) || 0) + ev.amount);
+  }
+  const hasCallEvents = capitalCallEvents.length > 0;
+  const hasAnnualOpsEvents = annualEvents.length > 0;
+  const xirrFlows: Array<{ date: Date; amount: number }> = [];
+  for (const cf of cashFlows) {
+    const quarterReno = Number(cf.renovationCost || 0);
+    const baseFundOpexMonthly = Math.max(0, (Number(cf.operatingExpense || 0) - quarterReno) / 3);
+    const baseMgmtMonthly = Number(cf.mgmtFee || 0) / 3;
+    const baseDebtRepayMonthly = Number(cf.debtRepayment || 0) / 3;
+    const baseInterestMonthly = Number(cf.interestExpense || 0) / 3;
+    for (let m = 0; m < 3; m++) {
+      const monthStart = monthStartFromQuarterMonth(String(cf.date), m);
+      if (!monthStart) continue;
+      const k = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}`;
+      const capitalCall = hasCallEvents ? (callByMonth2.get(k) || 0) : (m === 0 ? Number(cf.capitalCalls || 0) : 0);
+      const insurance = hasAnnualOpsEvents ? (insuranceByMonth.get(k) || 0) : (m === 0 ? Number(cf.insuranceExpense || 0) : 0);
+      const tax = hasAnnualOpsEvents ? (taxByMonth.get(k) || 0) : (m === 0 ? Number(cf.taxExpense || 0) : 0);
+      const renovations = renoByMonth.get(k) || 0;
+      const netRentMonthly = Number(cf.netRent || 0) / 3;
+      const hoaMonthly = Number(cf.hoaExpense || 0) / 3;
+      const debtDrawdown = m === 0 ? Number(cf.debtDrawdown || 0) : 0;
+      const grossSaleProceeds = m === 2 ? Number(cf.grossSaleProceeds || 0) : 0;
+      const mmLiquidation = m === 2 ? Number(cf.mmLiquidation || 0) : 0;
+      const lpDistributions = m === 2 ? Number(cf.lpDistributions || 0) : 0;
+      const noi = netRentMonthly - hoaMonthly - insurance - tax - baseFundOpexMonthly - renovations;
+      const netCF = -capitalCall + noi - baseMgmtMonthly + debtDrawdown - baseDebtRepayMonthly - baseInterestMonthly + grossSaleProceeds + mmLiquidation - lpDistributions;
+      if (Math.abs(netCF) > 0.0001) xirrFlows.push({ date: monthStart, amount: netCF });
+    }
+  }
+  let fundIRR = 0;
+  try { fundIRR = xirr(xirrFlows); } catch { fundIRR = 0; }
+  const waterfall = runWaterfall({
+    totalAvailable: totalDistributions,
+    lpCapital,
+    gpCoinvest,
+    outstandingDebt: exitCF.debtBalance,
+    assumptions,
+    lpCashFlows: xirrFlows.map((f) => ({ ...f, amount: f.amount * (lpCapital / assumptions.fundSize) })),
+  });
+  const lpMOIC = calcLPMOIC(waterfall.totalLP + interimDistributions, lpCapital);
+  const gpEcon = calcGPEconomics({
+    assumptions,
+    waterfall,
+    totalNOI,
+    actualHoldYears: assumptions.fundTermYears,
+    actualYield: exitCF.netOperatingIncome > 0 ? (exitCF.netOperatingIncome * 4) / totalCapitalDeployed : 0,
+    fundIRR,
+    capitalDeployed: totalCapitalDeployed,
+    numQuartersInvesting: assumptions.investmentPeriodYears * 4,
+    numQuartersPost: (assumptions.fundTermYears - assumptions.investmentPeriodYears) * 4,
+    cashFlows,
+  });
+  return {
+    assumptions,
+    cashFlows,
+    renovationEvents: renoEvents,
+    acquisitionEvents,
+    capitalCallEvents,
+    portfolioUnits,
+    annualExpenseEvents: annualEvents,
+    liquidityLedger,
+    dataSource,
+    returns: {
+      totalEquityCommitted: assumptions.fundSize,
+      capitalDeployed: totalCapitalDeployed,
+      totalDistributions: totalDistributions + interimDistributions,
+      totalNOI,
+      netProfit: totalDistributions + interimDistributions - totalCapitalDeployed,
+      fundMOIC,
+      fundIRR,
+      lpMOIC,
+      lpIRR: 0,
+      gpEconomics: gpEcon,
+      waterfall,
+    },
+    waterfall,
+    gpEconomics: gpEcon,
+  };
+}
+
 function getPortfolioUnitsForModel(db: ReturnType<typeof getDb>) {
   const rows = db.prepare(`
     SELECT
@@ -1116,7 +1548,9 @@ router.post('/run', async (req: Request, res: Response) => {
     return;
   }
   const mode: ModelDataMode = (dataMode === 'defaults' || dataMode === 'sample') ? dataMode : 'auto';
-  const result = evaluateAssumptions(assumptions, db, mode);
+  const result = usePostgresModel()
+    ? evaluateAssumptionsPg(assumptions, await fetchModelSnapshotPg(), mode)
+    : evaluateAssumptions(assumptions, db, mode);
   res.json(result);
 });
 
@@ -1140,8 +1574,11 @@ router.post('/sensitivity', async (req: Request, res: Response) => {
   }
 
   const config = presetFn(assumptions);
+  const pgSnapshot = usePostgresModel() ? await fetchModelSnapshotPg() : null;
   const result = generateSensitivityTable(assumptions, config, (a) => {
-    return evaluateAssumptions(a, db, 'auto').returns.fundMOIC;
+    return pgSnapshot
+      ? evaluateAssumptionsPg(a, pgSnapshot, 'auto').returns.fundMOIC
+      : evaluateAssumptions(a, db, 'auto').returns.fundMOIC;
   });
 
   res.json(result);
@@ -1171,6 +1608,7 @@ router.post('/sensitivity-stress', async (req: Request, res: Response) => {
   const keys = selectedKeys.length > 0 ? selectedKeys : (['exitYears', 'landValue', 'vacancyBps', 'expenseOverrun'] as StressKey[]);
 
   const cache = new Map<string, { fundIRR: number; fundMOIC: number; lpMOIC: number; netProfit: number }>();
+  const pgSnapshot = usePostgresModel() ? await fetchModelSnapshotPg() : null;
   const evaluateMetrics = (a: FundAssumptions) => {
     const key = JSON.stringify([
       a.fundTermYears, a.investmentPeriodYears, a.landValueTotal, a.landGrowthPct, a.rentGrowthPct,
@@ -1179,7 +1617,9 @@ router.post('/sensitivity-stress', async (req: Request, res: Response) => {
     ]);
     const hit = cache.get(key);
     if (hit) return hit;
-    const out = evaluateAssumptions(a, db, 'auto');
+    const out = pgSnapshot
+      ? evaluateAssumptionsPg(a, pgSnapshot, 'auto')
+      : evaluateAssumptions(a, db, 'auto');
     const metrics = {
       fundIRR: out.returns.fundIRR,
       fundMOIC: out.returns.fundMOIC,
