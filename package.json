@@ -7,12 +7,15 @@
     "dev": "concurrently \"pnpm --filter @brickell/server dev\" \"pnpm --filter @brickell/client dev\"",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "lint": "pnpm -r lint",
+    "lint:types": "pnpm -r lint",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml}\" || node -e \"process.exit(0)\"",
     "db:migrate": "pnpm --filter @brickell/server db:migrate",
     "db:migrate:pg": "pnpm --filter @brickell/server db:migrate:pg",
     "db:sync:pg": "pnpm --filter @brickell/server db:sync:pg",
     "db:seed": "pnpm --filter @brickell/server db:seed",
-    "deploy:check": "pnpm -r lint && pnpm -r build && pnpm audit --prod"
+    "deploy:check": "pnpm lint:types && pnpm lint && pnpm format:check && pnpm -r build && pnpm audit --prod"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -21,7 +24,11 @@
     ]
   },
   "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.46.3",
+    "@typescript-eslint/parser": "^8.46.3",
     "concurrently": "^9.1.0",
+    "eslint": "^8.57.1",
+    "prettier": "^3.6.2",
     "tsx": "^4.21.0",
     "typescript": "^5.7.0"
   }

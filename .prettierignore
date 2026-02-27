@@ -1,0 +1,6 @@
+node_modules
+dist
+coverage
+.cursor
+pnpm-lock.yaml
+*.db

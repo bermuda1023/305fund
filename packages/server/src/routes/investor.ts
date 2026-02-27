@@ -162,6 +162,14 @@ function parseNotifyEmails(): string[] {
     .filter(Boolean);
 }
 
+function storageKeyFromFilePath(filePath: string): string | null {
+  const fp = String(filePath || '').trim();
+  if (!fp) return null;
+  if (fp.startsWith('/api/files/')) return decodeURIComponent(fp.replace('/api/files/', ''));
+  if (fp.startsWith('/uploads/')) return fp.replace('/uploads/', '');
+  return fp;
+}
+
 function requireInvestorRoom(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
@@ -324,7 +332,12 @@ router.get('/documents/:id/download', requireInvestorRoom, async (req: Request, 
     return;
   }
   try {
-    const file = await readStoredFile(String(doc.file_path));
+    const storageKey = storageKeyFromFilePath(String(doc.file_path || ''));
+    if (!storageKey) {
+      res.status(500).json({ error: 'Unsupported document storage path' });
+      return;
+    }
+    const file = await readStoredFile(storageKey);
     res.setHeader('Content-Type', file.contentType || doc.file_type || 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${String(doc.name || 'document').replace(/"/g, '')}"`);
     file.body.pipe(res);

@@ -12,7 +12,7 @@
     "db:sync:pg": "tsx src/db/pg-sync-from-sqlite.ts",
     "db:seed": "tsx src/db/seed.ts",
     "lint": "tsc --noEmit",
-    "test": "node -e \"console.log('No server tests configured yet')\""
+    "test": "jest --runInBand"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.990.0",
@@ -44,8 +44,13 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.7",
+    "@types/jest": "^29.5.14",
     "@types/multer": "^1.4.12",
     "@types/pg": "^8.16.0",
+    "@types/supertest": "^6.0.3",
+    "jest": "^29.7.0",
+    "supertest": "^7.1.4",
+    "ts-jest": "^29.4.2",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

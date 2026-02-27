@@ -34,6 +34,9 @@ let pushInFlight = false;
 let pushQueued = false;
 let pullInFlight = false;
 let lastPullAt = 0;
+let lastPushError: Error | null = null;
+let lastPushAt = 0;
+let lastPushSuccessAt = 0;
 
 function quoteIdent(value: string) {
   return `"${value.replace(/"/g, '""')}"`;
@@ -405,6 +408,32 @@ export function isPostgresBridgeEnabled(): boolean {
   return process.env.PG_BRIDGE_DISABLED !== '1';
 }
 
+export type PostgresBridgeStatus = {
+  enabled: boolean;
+  pushInFlight: boolean;
+  pullInFlight: boolean;
+  pushQueued: boolean;
+  debounceScheduled: boolean;
+  lastPullAt: number | null;
+  lastPushAt: number | null;
+  lastPushSuccessAt: number | null;
+  lastPushError: string | null;
+};
+
+export function getPostgresBridgeStatus(): PostgresBridgeStatus {
+  return {
+    enabled: isPostgresBridgeEnabled(),
+    pushInFlight,
+    pullInFlight,
+    pushQueued,
+    debounceScheduled: !!debounceTimer,
+    lastPullAt: lastPullAt > 0 ? lastPullAt : null,
+    lastPushAt: lastPushAt > 0 ? lastPushAt : null,
+    lastPushSuccessAt: lastPushSuccessAt > 0 ? lastPushSuccessAt : null,
+    lastPushError: lastPushError ? String(lastPushError.message || lastPushError) : null,
+  };
+}
+
 export function configurePostgresBridge(provider: () => Database.Database) {
   sqliteProvider = provider;
 }
@@ -438,10 +467,15 @@ async function runPush(reason: string) {
   }
 
   pushInFlight = true;
+  lastPushAt = Date.now();
+  pushQueued = false;
   try {
     await syncSqliteToPostgres(sqliteProvider());
+    lastPushError = null;
+    lastPushSuccessAt = Date.now();
     console.log(`[pg-bridge] Push complete (${reason})`);
   } catch (error) {
+    lastPushError = error instanceof Error ? error : new Error(String(error));
     console.error('[pg-bridge] Push failed:', error);
   } finally {
     pushInFlight = false;
@@ -464,4 +498,31 @@ export function schedulePostgresPush(reason = 'mutation') {
     debounceTimer = null;
     void runPush(reason);
   }, debounceMs);
+}
+
+export async function flushPostgresPush(reason = 'mutation-flush', timeoutMs = 12_000): Promise<void> {
+  if (!isPostgresBridgeEnabled() || !sqliteProvider) return;
+
+  const startedAt = Date.now();
+  // Request an immediate push cycle.
+  pushQueued = true;
+  if (!pushInFlight && !pullInFlight) {
+    await runPush(reason);
+  }
+
+  // Wait until bridge activity settles, driving queued push cycles when needed.
+  while (pushInFlight || pullInFlight || pushQueued) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error('Timed out waiting for Postgres bridge synchronization');
+    }
+    if (!pushInFlight && !pullInFlight && pushQueued) {
+      await runPush('flush-queued');
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+
+  if (lastPushError) {
+    throw lastPushError;
+  }
 }
