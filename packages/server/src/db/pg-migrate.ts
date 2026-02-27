@@ -3,6 +3,7 @@ dotenv.config();
 
 import { Client } from 'pg';
 import { POSTGRES_SCHEMA } from './postgres-schema';
+import { POSTGRES_AUDIT_EXTENSIONS } from './audit-extensions';
 
 async function run() {
   const connectionString = process.env.DATABASE_URL;
@@ -16,6 +17,7 @@ async function run() {
   try {
     await client.query('BEGIN');
     await client.query(POSTGRES_SCHEMA);
+    await client.query(POSTGRES_AUDIT_EXTENSIONS);
     await client.query('COMMIT');
     console.log('Postgres schema migration complete');
   } catch (error) {

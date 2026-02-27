@@ -4,6 +4,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { getDb } from '../db/database';
 
 export interface AuthPayload {
   userId: number;
@@ -11,6 +12,8 @@ export interface AuthPayload {
   role: 'gp' | 'lp';
   mustChangePassword?: boolean;
 }
+
+type RoleScope = 'accounting' | 'operations' | 'auditor';
 
 declare global {
   namespace Express {
@@ -76,4 +79,42 @@ export function requireAnyRole(req: Request, res: Response, next: NextFunction):
     return;
   }
   next();
+}
+
+/**
+ * Optional scoped authorization scaffold beyond GP/LP.
+ * GP users are always allowed. For other users, checks user_role_scopes table.
+ */
+export function requireScope(...scopes: RoleScope[]) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+    if (req.user.role === 'gp') {
+      next();
+      return;
+    }
+    if (!scopes.length) {
+      next();
+      return;
+    }
+    try {
+      const db = getDb();
+      const placeholders = scopes.map(() => '?').join(', ');
+      const row = db.prepare(`
+        SELECT COUNT(*) as c
+        FROM user_role_scopes
+        WHERE user_id = ?
+          AND scope IN (${placeholders})
+      `).get(req.user.userId, ...scopes) as { c?: number } | undefined;
+      if (Number(row?.c || 0) > 0) {
+        next();
+        return;
+      }
+      res.status(403).json({ error: 'Insufficient scope' });
+    } catch {
+      res.status(403).json({ error: 'Insufficient scope' });
+    }
+  };
 }

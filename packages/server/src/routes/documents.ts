@@ -6,8 +6,10 @@
 import { Router, Request, Response } from 'express';
 import { createHash, randomBytes } from 'crypto';
 import { requireAuth, requireGP } from '../middleware/auth';
+import { getDb } from '../db/database';
 import multer from 'multer';
 import { deleteStoredFile, saveUploadedBuffer } from '../lib/storage';
+import { writeAuditLog } from '../lib/audit';
 import {
   createDocument,
   createSigningLink,
@@ -51,6 +53,7 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
   }
 
   const { parentType, parentId, category = 'general', requiresSignature = false } = req.body;
+  const replacesDocumentId = req.body?.replacesDocumentId ? Number(req.body.replacesDocumentId) : null;
 
   if (!parentType || !parentId) {
     res.status(400).json({ error: 'parentType and parentId are required' });
@@ -81,11 +84,33 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
       uploadedBy: (req as any).user?.email || 'unknown',
     });
 
+    if (replacesDocumentId && Number.isFinite(replacesDocumentId) && replacesDocumentId > 0) {
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO document_versions (document_id, replaces_document_id, version_label)
+        VALUES (?, ?, ?)
+      `).run(id, replacesDocumentId, req.body?.versionLabel || null);
+      db.prepare(`
+        UPDATE documents
+        SET superseded_by_document_id = ?
+        WHERE id = ?
+      `).run(id, replacesDocumentId);
+    }
+
     res.status(201).json({
       id,
       name: file.originalname,
       filePath: stored.filePath,
       fileType: file.mimetype,
+    });
+    writeAuditLog({
+      db: getDb(),
+      req,
+      action: 'create',
+      tableName: 'documents',
+      recordId: id,
+      before: null,
+      after: { id, parentType, parentId, category, filePath: stored.filePath, replacesDocumentId },
     });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || 'Failed to store document' });
@@ -156,7 +181,22 @@ router.post('/:id/signing-link', async (req: Request, res: Response) => {
 router.get('/:parentType/:parentId', async (req: Request, res: Response) => {
   const { parentType, parentId } = req.params;
   const docs = await listDocumentsByParent(String(parentType), Number(parentId));
-  res.json(docs);
+  try {
+    const db = getDb();
+    const enriched = docs.map((d: any) => {
+      const version = db.prepare(`
+        SELECT replaces_document_id, version_label, created_at
+        FROM document_versions
+        WHERE document_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(Number(d.id)) as any;
+      return { ...d, version };
+    });
+    res.json(enriched);
+  } catch {
+    res.json(docs);
+  }
 });
 
 // DELETE /api/documents/:id — Remove document
@@ -171,6 +211,15 @@ router.delete('/:id', async (req: Request, res: Response) => {
   try {
     await deleteStoredFile(doc.file_path);
     await deleteDocumentById(Number(id));
+    writeAuditLog({
+      db: getDb(),
+      req,
+      action: 'delete',
+      tableName: 'documents',
+      recordId: Number(id),
+      before: doc,
+      after: null,
+    });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error?.message || 'Failed to delete document file' });

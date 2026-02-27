@@ -12,6 +12,7 @@ const gpLinks = [
   { to: '/app/market', label: 'Market Data', icon: '◬' },
   { to: '/app/entities', label: 'Entities', icon: '◇' },
   { to: '/app/actuals', label: 'Actuals', icon: '◈' },
+  { to: '/app/exports', label: 'Export Center', icon: '⬒' },
   { to: '/app/lp-admin', label: 'LP Admin', icon: '◎' },
 ];
 

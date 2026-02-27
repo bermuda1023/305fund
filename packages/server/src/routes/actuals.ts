@@ -700,12 +700,13 @@ function importTransactions(
     rows: any[];
     fileType: 'csv' | 'ofx' | 'pdf' | 'manual' | 'xls' | 'xlsx';
     status?: 'parsed' | 'pending_review';
+    bankAccountId?: number | null;
     filePath?: string;
     fileSha256?: string | null;
     uploadedBy?: string | null;
   }
 ) {
-  const { filename, rows, fileType, status = 'parsed', filePath, fileSha256, uploadedBy } = params;
+  const { filename, rows, fileType, status = 'parsed', bankAccountId, filePath, fileSha256, uploadedBy } = params;
 
   const unitRows = db.prepare(`
     SELECT pu.id, bu.unit_number
@@ -724,9 +725,9 @@ function importTransactions(
   );
 
   const upload = db.prepare(`
-    INSERT INTO bank_uploads (filename, upload_date, file_type, row_count, status, file_path, file_sha256, uploaded_by)
-    VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?)
-  `).run(filename, fileType, rows.length, status, filePath || null, fileSha256 || null, uploadedBy || null);
+    INSERT INTO bank_uploads (filename, upload_date, file_type, row_count, status, bank_account_id, file_path, file_sha256, uploaded_by)
+    VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?)
+  `).run(filename, fileType, rows.length, status, bankAccountId || null, filePath || null, fileSha256 || null, uploadedBy || null);
 
   if (status !== 'parsed') {
     return {
@@ -740,8 +741,8 @@ function importTransactions(
 
   const insertBank = db.prepare(`
     INSERT INTO bank_transactions (
-      bank_upload_id, date, amount, description, source_file, statement_ref
-    ) VALUES (?, ?, ?, ?, ?, ?)
+      bank_upload_id, bank_account_id, date, amount, description, source_file, statement_ref
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insert = db.prepare(`
@@ -817,7 +818,7 @@ function importTransactions(
       const statementRef = rawRef || `upload:${upload.lastInsertRowid}:row:${rowsImported + rowsSkipped + rowsInvalid + 1}`;
       const reconciled = Number(row.reconciled ?? 0) === 1 ? 1 : 0;
 
-      const bankResult = insertBank.run(upload.lastInsertRowid, date, amount, desc, filename, statementRef || null);
+      const bankResult = insertBank.run(upload.lastInsertRowid, bankAccountId || null, date, amount, desc, filename, statementRef || null);
       const bankTransactionId = Number(bankResult.lastInsertRowid);
 
       const insertResult = insert.run(
@@ -921,7 +922,7 @@ router.get('/transactions', async (req: Request, res: Response) => {
 // POST /api/actuals/upload - Upload bank statement (CSV parsing / manual entry)
 router.post('/upload', (req: Request, res: Response) => {
   const db = getDb();
-  const { filename, rows: csvRows, file_type = 'csv' } = req.body;
+  const { filename, rows: csvRows, file_type = 'csv', bankAccountId } = req.body;
 
   if (!filename || !csvRows || !Array.isArray(csvRows)) {
     return res.status(400).json({ error: 'filename and rows array required' });
@@ -931,6 +932,7 @@ router.post('/upload', (req: Request, res: Response) => {
     filename,
     rows: csvRows,
     fileType: safeType as 'csv' | 'manual' | 'ofx' | 'pdf' | 'xls' | 'xlsx',
+    bankAccountId: bankAccountId ? Number(bankAccountId) : null,
     uploadedBy: String((req as any).user?.email || '') || null,
   });
   const upload = db.prepare(`SELECT * FROM bank_uploads WHERE id = ?`).get(Number(result.upload_id));
@@ -971,6 +973,7 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
   const relativePath = stored.filePath;
   const fileSha256 = createHash('sha256').update(file.buffer).digest('hex');
   const uploadedBy = String((req as any).user?.email || '') || null;
+  const bankAccountId = req.body?.bankAccountId ? Number(req.body.bankAccountId) : null;
 
   // OFX/QFX is stored for manual review right now.
   if (fileType === 'ofx') {
@@ -979,6 +982,7 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       rows: [],
       fileType: fileType as 'ofx',
       status: 'pending_review',
+      bankAccountId,
       filePath: relativePath,
       fileSha256,
       uploadedBy,
@@ -1023,6 +1027,7 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
         rows,
         fileType: 'pdf',
         status: hasRows ? 'parsed' : 'pending_review',
+        bankAccountId,
         filePath: relativePath,
         fileSha256,
         uploadedBy,
@@ -1065,6 +1070,7 @@ router.post('/upload-file', fileUpload.single('file'), async (req: Request, res:
       rows,
       fileType: fileType as 'csv' | 'xls' | 'xlsx',
       status,
+      bankAccountId,
       filePath: relativePath,
       fileSha256,
       uploadedBy,
@@ -1505,6 +1511,69 @@ router.delete('/transactions/:id', (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
+// POST /api/actuals/transactions/bulk-reconcile
+router.post('/transactions/bulk-reconcile', (req: Request, res: Response) => {
+  const db = getDb();
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v: any) => Number(v)).filter((n: number) => Number.isFinite(n) && n > 0) : [];
+  const reconciled = req.body?.reconciled === undefined ? 1 : (req.body.reconciled ? 1 : 0);
+  if (!ids.length) {
+    res.status(400).json({ error: 'ids[] is required' });
+    return;
+  }
+  const placeholders = ids.map(() => '?').join(', ');
+  const tx = db.transaction(() => {
+    const before = db.prepare(`SELECT id, reconciled FROM cash_flow_actuals WHERE id IN (${placeholders})`).all(...ids) as any[];
+    db.prepare(`UPDATE cash_flow_actuals SET reconciled = ? WHERE id IN (${placeholders})`).run(reconciled, ...ids);
+    const after = db.prepare(`SELECT id, reconciled FROM cash_flow_actuals WHERE id IN (${placeholders})`).all(...ids) as any[];
+    return { before, after };
+  });
+  const payload = tx();
+  writeAuditLog({
+    db,
+    req,
+    action: 'bulk_reconcile',
+    tableName: 'cash_flow_actuals',
+    recordId: ids.join(','),
+    before: payload.before,
+    after: payload.after,
+  });
+  res.json({ success: true, count: ids.length, reconciled });
+});
+
+// POST /api/actuals/transactions/bulk-assign
+router.post('/transactions/bulk-assign', (req: Request, res: Response) => {
+  const db = getDb();
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((v: any) => Number(v)).filter((n: number) => Number.isFinite(n) && n > 0) : [];
+  const portfolioUnitId = req.body?.portfolioUnitId !== undefined ? Number(req.body.portfolioUnitId) || null : undefined;
+  const entityId = req.body?.entityId !== undefined ? Number(req.body.entityId) || null : undefined;
+  const category = req.body?.category !== undefined ? String(req.body.category || '') : undefined;
+  if (!ids.length) {
+    res.status(400).json({ error: 'ids[] is required' });
+    return;
+  }
+  const updates: string[] = [];
+  const vals: any[] = [];
+  if (portfolioUnitId !== undefined) {
+    updates.push('portfolio_unit_id = ?');
+    vals.push(portfolioUnitId);
+  }
+  if (entityId !== undefined) {
+    updates.push('entity_id = ?');
+    vals.push(entityId);
+  }
+  if (category !== undefined) {
+    updates.push('category = ?');
+    vals.push(category);
+  }
+  if (!updates.length) {
+    res.status(400).json({ error: 'No assignment fields provided' });
+    return;
+  }
+  const placeholders = ids.map(() => '?').join(', ');
+  db.prepare(`UPDATE cash_flow_actuals SET ${updates.join(', ')} WHERE id IN (${placeholders})`).run(...vals, ...ids);
+  res.json({ success: true, count: ids.length });
+});
+
 // GET /api/actuals/bank-lines - bank transactions with allocations and delta
 router.get('/bank-lines', (req: Request, res: Response) => {
   const db = getDb();
@@ -1869,6 +1938,112 @@ router.get('/uploads', (req: Request, res: Response) => {
     ORDER BY u.upload_date DESC
   `).all();
   res.json(uploads);
+});
+
+// Bank accounts (operating/reserve/escrow)
+router.get('/bank-accounts', (req: Request, res: Response) => {
+  const db = getDb();
+  const rows = db.prepare(`SELECT * FROM bank_accounts ORDER BY is_active DESC, id DESC`).all();
+  res.json(rows);
+});
+
+router.post('/bank-accounts', (req: Request, res: Response) => {
+  const db = getDb();
+  const name = String(req.body?.name || '').trim();
+  const accountType = String(req.body?.accountType || '').trim() || 'operating';
+  if (!name) {
+    res.status(400).json({ error: 'name is required' });
+    return;
+  }
+  const result = db.prepare(`
+    INSERT INTO bank_accounts (name, account_type, institution_name, account_mask, is_active)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(name, accountType, req.body?.institutionName || null, req.body?.accountMask || null, req.body?.isActive === false ? 0 : 1);
+  res.status(201).json({ id: Number(result.lastInsertRowid) });
+});
+
+// Recurring expense templates and generation
+router.get('/recurring-expenses', (req: Request, res: Response) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT re.*, bu.unit_number, e.name as entity_name
+    FROM recurring_expenses re
+    LEFT JOIN portfolio_units pu ON pu.id = re.portfolio_unit_id
+    LEFT JOIN building_units bu ON bu.id = pu.building_unit_id
+    LEFT JOIN entities e ON e.id = re.entity_id
+    ORDER BY re.id DESC
+  `).all();
+  res.json(rows);
+});
+
+router.post('/recurring-expenses', (req: Request, res: Response) => {
+  const db = getDb();
+  const amount = Number(req.body?.amount);
+  const category = String(req.body?.category || '').trim();
+  const startsOn = String(req.body?.startsOn || '').trim();
+  if (!Number.isFinite(amount) || !category || !startsOn) {
+    res.status(400).json({ error: 'amount, category, startsOn are required' });
+    return;
+  }
+  const result = db.prepare(`
+    INSERT INTO recurring_expenses (
+      portfolio_unit_id, entity_id, category, amount, day_of_month, starts_on, ends_on, memo, is_active
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    req.body?.portfolioUnitId || null,
+    req.body?.entityId || null,
+    category,
+    amount,
+    Math.max(1, Math.min(31, Number(req.body?.dayOfMonth || 1))),
+    startsOn,
+    req.body?.endsOn || null,
+    req.body?.memo || null,
+    req.body?.isActive === false ? 0 : 1
+  );
+  res.status(201).json({ id: Number(result.lastInsertRowid) });
+});
+
+router.post('/recurring-expenses/run', (req: Request, res: Response) => {
+  const db = getDb();
+  const month = String(req.body?.month || new Date().toISOString().slice(0, 7));
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    res.status(400).json({ error: 'month must be YYYY-MM' });
+    return;
+  }
+  const runDate = `${month}-01`;
+  const rows = db.prepare(`
+    SELECT *
+    FROM recurring_expenses
+    WHERE is_active = 1
+      AND starts_on <= ?
+      AND (ends_on IS NULL OR ends_on >= ?)
+  `).all(runDate, runDate) as any[];
+  const tx = db.transaction(() => {
+    let generated = 0;
+    for (const r of rows) {
+      const entryDate = `${month}-${String(Math.max(1, Math.min(28, Number(r.day_of_month || 1)))).padStart(2, '0')}`;
+      const exists = db.prepare(`
+        SELECT id FROM cash_flow_actuals
+        WHERE category = ?
+          AND date = ?
+          AND COALESCE(description, '') = COALESCE(?, '')
+          AND COALESCE(portfolio_unit_id, 0) = COALESCE(?, 0)
+          AND COALESCE(entity_id, 0) = COALESCE(?, 0)
+        LIMIT 1
+      `).get(r.category, entryDate, r.memo || null, r.portfolio_unit_id || null, r.entity_id || null);
+      if (exists) continue;
+      db.prepare(`
+        INSERT INTO cash_flow_actuals (
+          portfolio_unit_id, entity_id, date, amount, category, description, source_file, statement_ref, reconciled
+        ) VALUES (?, ?, ?, ?, ?, ?, 'recurring_template', NULL, 0)
+      `).run(r.portfolio_unit_id || null, r.entity_id || null, entryDate, -Math.abs(Number(r.amount || 0)), r.category, r.memo || 'Recurring expense');
+      db.prepare(`UPDATE recurring_expenses SET last_generated_on = ? WHERE id = ?`).run(entryDate, r.id);
+      generated += 1;
+    }
+    return generated;
+  });
+  const generated = tx();
+  res.json({ success: true, month, generated });
 });
 
 // POST /api/actuals/uploads/:id/close - mark a statement upload reconciled

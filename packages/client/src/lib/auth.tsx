@@ -20,6 +20,9 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+const ACTIVITY_KEY = 'session_activity_at';
+const LOGOUT_BROADCAST_KEY = 'session_logout_at';
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 function readStoredUser(): User | null {
   const stored = localStorage.getItem('user');
@@ -66,7 +69,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    localStorage.setItem(LOGOUT_BROADCAST_KEY, String(Date.now()));
   };
+
+  useEffect(() => {
+    const bumpActivity = () => {
+      if (!token) return;
+      localStorage.setItem(ACTIVITY_KEY, String(Date.now()));
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LOGOUT_BROADCAST_KEY && e.newValue) {
+        setToken(null);
+        setUser(null);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
+      if (e.key === 'token' && !e.newValue) {
+        setToken(null);
+        setUser(null);
+      }
+    };
+
+    const events: Array<keyof WindowEventMap> = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    for (const ev of events) window.addEventListener(ev, bumpActivity, { passive: true });
+    window.addEventListener('storage', onStorage);
+    bumpActivity();
+
+    const interval = window.setInterval(() => {
+      if (!token) return;
+      const last = Number(localStorage.getItem(ACTIVITY_KEY) || Date.now());
+      if (Date.now() - last > IDLE_TIMEOUT_MS) {
+        logout();
+      }
+    }, 30_000);
+
+    return () => {
+      for (const ev of events) window.removeEventListener(ev, bumpActivity);
+      window.removeEventListener('storage', onStorage);
+      window.clearInterval(interval);
+    };
+  }, [token]);
 
   return (
     <AuthContext.Provider value={{

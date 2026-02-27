@@ -14,6 +14,24 @@ import { getDb } from '../db/database';
 
 const router = Router();
 
+function logGateAttempt(input: { signatureId?: number; ip: string; userAgent: string; success: boolean; reason: string }) {
+  try {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO investor_gate_attempts (signature_id, ip, user_agent, success, reason)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      input.signatureId || null,
+      input.ip || null,
+      input.userAgent || null,
+      input.success ? 1 : 0,
+      input.reason || null
+    );
+  } catch {
+    // do not block unlock on logging failures
+  }
+}
+
 function getJwtSecret(): string {
   const configured = process.env.JWT_SECRET;
   if (configured && configured.trim().length > 0) return configured;
@@ -67,6 +85,8 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
 
   try {
     const { signatureId, documentId } = verifyNdaProofToken(ndaProofToken);
+    const ip = String(req.ip || '');
+    const userAgent = String(req.get('user-agent') || '');
     const db = getDb();
     const sigRow = db.prepare(
       `SELECT investor_gate_password_hash, investor_gate_password_expires_at
@@ -86,6 +106,7 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
     if (expiresAtRaw) {
       const expiresAtMs = new Date(expiresAtRaw).getTime();
       if (Number.isFinite(expiresAtMs) && expiresAtMs < Date.now()) {
+        logGateAttempt({ signatureId, ip, userAgent, success: false, reason: 'code_expired' });
         return res.status(401).json({ error: 'This access code has expired' });
       }
     }
@@ -99,7 +120,10 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
         : plain
           ? password === plain
           : password === 'admin';
-    if (!ok) return res.status(401).json({ error: 'Invalid password' });
+    if (!ok) {
+      logGateAttempt({ signatureId, ip, userAgent, success: false, reason: 'invalid_password' });
+      return res.status(401).json({ error: 'Invalid password' });
+    }
 
     const investorAccessToken = jwt.sign(
       {
@@ -111,12 +135,19 @@ router.post('/unlock', unlockLimiter, (req: Request, res: Response) => {
       { expiresIn: '2h' }
     );
 
+    logGateAttempt({ signatureId, ip, userAgent, success: true, reason: 'unlock_success' });
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       investorAccessToken,
       investorTargetUrl: getInvestorTargetUrl(),
     });
   } catch (err: any) {
+    logGateAttempt({
+      ip: String(req.ip || ''),
+      userAgent: String(req.get('user-agent') || ''),
+      success: false,
+      reason: String(err?.message || 'unlock_failed'),
+    });
     res.status(400).json({ error: err?.message || 'Unlock failed' });
   }
 });

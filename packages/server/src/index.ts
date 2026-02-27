@@ -32,6 +32,7 @@ import entitiesRoutes from './routes/entities';
 import lpRoutes from './routes/lp';
 import actualsRoutes from './routes/actuals';
 import documentsRoutes from './routes/documents';
+import auditRoutes from './routes/audit';
 
 import investorRoutes from './routes/investor';
 
@@ -287,6 +288,7 @@ app.use('/api/entities', entitiesRoutes);
 app.use('/api/lp', lpRoutes);
 app.use('/api/actuals', actualsRoutes);
 app.use('/api/documents', documentsRoutes);
+app.use('/api/audit', auditRoutes);
 
 app.use('/api/investor', investorRoutes);
 
@@ -294,6 +296,11 @@ app.use('/api/public/sign', publicSignRoutes);
 app.use('/api/public/investor-gate', investorGateRoutes);
 app.use('/api/public/investor-hidden', publicInvestorHiddenRoutes);
 app.use('/api/public/investor-nda', publicInvestorNdaRoutes);
+
+app.use('*', (req, res, next) => {
+  if (!String(req.path || '').startsWith('/api/')) return next();
+  res.status(404).json({ error: 'API route not found' });
+});
 
 // Error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

@@ -19,6 +19,12 @@ import Entities from './pages/Entities';
 import Actuals from './pages/Actuals';
 import Landing from './pages/Landing';
 import InvestorRoom from './pages/InvestorRoom';
+import AccountantExports from './pages/AccountantExports';
+import RouteErrorBoundary from './components/RouteErrorBoundary';
+
+function Safe({ children }: { children: React.ReactNode }) {
+  return <RouteErrorBoundary>{children}</RouteErrorBoundary>;
+}
 
 function ProtectedRoute({
   children,
@@ -43,18 +49,18 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/investor" element={<InvestorRoom />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        <Route path="/sign/:token" element={<PublicSign />} />
-        <Route path="/investor-gate" element={<InvestorGate />} />
+        <Route path="/" element={<Safe><Landing /></Safe>} />
+        <Route path="/investor" element={<Safe><InvestorRoom /></Safe>} />
+        <Route path="/login" element={<Safe><Login /></Safe>} />
+        <Route path="/forgot-password" element={<Safe><ForgotPassword /></Safe>} />
+        <Route path="/reset-password" element={<Safe><ResetPassword /></Safe>} />
+        <Route path="/sign/:token" element={<Safe><PublicSign /></Safe>} />
+        <Route path="/investor-gate" element={<Safe><InvestorGate /></Safe>} />
         <Route
           path="/change-password"
           element={
             <ProtectedRoute allowPasswordChangeOnly>
-              <ChangePassword />
+              <Safe><ChangePassword /></Safe>
             </ProtectedRoute>
           }
         />
@@ -66,19 +72,20 @@ export default function App() {
         }>
           {/* GP Routes */}
           <Route index element={<Navigate to={isGP ? "/app/dashboard" : "/app/lp"} />} />
-          <Route path="dashboard" element={<ProtectedRoute gpOnly><Dashboard /></ProtectedRoute>} />
-          <Route path="portfolio" element={<ProtectedRoute gpOnly><Portfolio /></ProtectedRoute>} />
-          <Route path="model" element={<ProtectedRoute gpOnly><Model /></ProtectedRoute>} />
-          <Route path="sensitivity" element={<ProtectedRoute gpOnly><Sensitivity /></ProtectedRoute>} />
-          <Route path="contracts" element={<ProtectedRoute gpOnly><Contracts /></ProtectedRoute>} />
-          <Route path="listings" element={<ProtectedRoute gpOnly><Listings /></ProtectedRoute>} />
-          <Route path="market" element={<ProtectedRoute gpOnly><MarketData /></ProtectedRoute>} />
-          <Route path="entities" element={<ProtectedRoute gpOnly><Entities /></ProtectedRoute>} />
-          <Route path="actuals" element={<ProtectedRoute gpOnly><Actuals /></ProtectedRoute>} />
-          <Route path="lp-admin" element={<ProtectedRoute gpOnly><LPPortal adminMode /></ProtectedRoute>} />
+          <Route path="dashboard" element={<ProtectedRoute gpOnly><Safe><Dashboard /></Safe></ProtectedRoute>} />
+          <Route path="portfolio" element={<ProtectedRoute gpOnly><Safe><Portfolio /></Safe></ProtectedRoute>} />
+          <Route path="model" element={<ProtectedRoute gpOnly><Safe><Model /></Safe></ProtectedRoute>} />
+          <Route path="sensitivity" element={<ProtectedRoute gpOnly><Safe><Sensitivity /></Safe></ProtectedRoute>} />
+          <Route path="contracts" element={<ProtectedRoute gpOnly><Safe><Contracts /></Safe></ProtectedRoute>} />
+          <Route path="listings" element={<ProtectedRoute gpOnly><Safe><Listings /></Safe></ProtectedRoute>} />
+          <Route path="market" element={<ProtectedRoute gpOnly><Safe><MarketData /></Safe></ProtectedRoute>} />
+          <Route path="entities" element={<ProtectedRoute gpOnly><Safe><Entities /></Safe></ProtectedRoute>} />
+          <Route path="actuals" element={<ProtectedRoute gpOnly><Safe><Actuals /></Safe></ProtectedRoute>} />
+          <Route path="exports" element={<ProtectedRoute gpOnly><Safe><AccountantExports /></Safe></ProtectedRoute>} />
+          <Route path="lp-admin" element={<ProtectedRoute gpOnly><Safe><LPPortal adminMode /></Safe></ProtectedRoute>} />
 
           {/* LP Route */}
-          <Route path="lp" element={<ProtectedRoute><LPPortal /></ProtectedRoute>} />
+          <Route path="lp" element={<ProtectedRoute><Safe><LPPortal /></Safe></ProtectedRoute>} />
         </Route>
 
         {/* Legacy route compatibility */}
@@ -91,8 +98,10 @@ export default function App() {
         <Route path="/market" element={<Navigate to="/app/market" replace />} />
         <Route path="/entities" element={<Navigate to="/app/entities" replace />} />
         <Route path="/actuals" element={<Navigate to="/app/actuals" replace />} />
+        <Route path="/exports" element={<Navigate to="/app/exports" replace />} />
         <Route path="/lp-admin" element={<Navigate to="/app/lp-admin" replace />} />
         <Route path="/lp" element={<Navigate to="/app/lp" replace />} />
+        <Route path="*" element={<div style={{ padding: '2rem', textAlign: 'center' }}><h2>404</h2><p>Page not found.</p></div>} />
       </Routes>
     </BrowserRouter>
   );

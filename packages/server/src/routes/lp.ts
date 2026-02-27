@@ -175,6 +175,25 @@ function fmtMoney(value: number) {
   });
 }
 
+function quarterBounds(quarter: string): { from: string; to: string } | null {
+  const m = quarter.match(/^(\d{4})-Q([1-4])$/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const q = Number(m[2]);
+  const startMonth = (q - 1) * 3 + 1;
+  const from = `${year}-${String(startMonth).padStart(2, '0')}-01`;
+  const endMonth = startMonth + 2;
+  const to = `${year}-${String(endMonth).padStart(2, '0')}-31`;
+  return { from, to };
+}
+
+function quarterFromDate(dateIso: string): string {
+  const d = new Date(dateIso);
+  if (Number.isNaN(d.getTime())) return '';
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return `${d.getFullYear()}-Q${q}`;
+}
+
 function storageKeyFromFilePath(filePath: string): string | null {
   const fp = String(filePath || '').trim();
   if (!fp) return null;
@@ -1012,6 +1031,230 @@ router.get('/capital-call-items/open', requireAuth, requireGP, (req: Request, re
 
   const rows = db.prepare(sql).all(...params);
   res.json(rows);
+});
+
+// POST /api/lp/distributions/create - Create distribution event with LP allocations
+router.post('/distributions/create', requireAuth, requireGP, (req: Request, res: Response) => {
+  const db = getDb();
+  const totalAmount = Number(req.body?.totalAmount);
+  const eventDate = String(req.body?.eventDate || '').trim();
+  const purpose = String(req.body?.purpose || '').trim();
+  const customEmailSubject = req.body?.customEmailSubject ? String(req.body.customEmailSubject) : null;
+  const customEmailBody = req.body?.customEmailBody ? String(req.body.customEmailBody) : null;
+  if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+    res.status(400).json({ error: 'totalAmount must be positive' });
+    return;
+  }
+  if (!eventDate) {
+    res.status(400).json({ error: 'eventDate is required' });
+    return;
+  }
+  const maxEvent = db.prepare(`SELECT COALESCE(MAX(event_number), 0) as max_num FROM distribution_events`).get() as any;
+  const eventNumber = Number(maxEvent?.max_num || 0) + 1;
+  const lpRows = db.prepare(`
+    SELECT id, name, commitment
+    FROM lp_accounts
+    WHERE status IN ('active', 'pending')
+    ORDER BY id
+  `).all() as Array<{ id: number; name: string; commitment: number }>;
+  const totalCommitment = lpRows.reduce((sum, lp) => sum + Number(lp.commitment || 0), 0);
+  if (lpRows.length === 0 || totalCommitment <= 0) {
+    res.status(400).json({ error: 'No eligible LPs for distribution allocation' });
+    return;
+  }
+
+  const tx = db.transaction(() => {
+    const eventResult = db.prepare(`
+      INSERT INTO distribution_events (event_number, event_date, total_amount, status, purpose, custom_email_subject, custom_email_body)
+      VALUES (?, ?, ?, 'draft', ?, ?, ?)
+    `).run(eventNumber, eventDate, totalAmount, purpose || null, customEmailSubject, customEmailBody);
+    const eventId = Number(eventResult.lastInsertRowid);
+    const insertItem = db.prepare(`
+      INSERT INTO distribution_items (distribution_event_id, lp_account_id, amount, status)
+      VALUES (?, ?, ?, 'pending')
+    `);
+    const items: Array<{ lpId: number; lpName: string; amount: number }> = [];
+    for (const lp of lpRows) {
+      const amount = totalAmount * (Number(lp.commitment || 0) / totalCommitment);
+      insertItem.run(eventId, lp.id, amount);
+      items.push({ lpId: lp.id, lpName: lp.name, amount });
+    }
+    return { eventId, items };
+  });
+
+  const result = tx();
+  res.status(201).json({
+    eventId: result.eventId,
+    eventNumber,
+    totalAmount,
+    items: result.items,
+  });
+});
+
+// GET /api/lp/distributions/all - list distribution events
+router.get('/distributions/all', requireAuth, requireGP, (req: Request, res: Response) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT
+      de.*,
+      COALESCE(SUM(CASE WHEN di.status = 'paid' THEN 1 ELSE 0 END), 0) as paid_count,
+      COALESCE(COUNT(di.id), 0) as item_count
+    FROM distribution_events de
+    LEFT JOIN distribution_items di ON di.distribution_event_id = de.id
+    GROUP BY de.id
+    ORDER BY de.event_date DESC, de.id DESC
+  `).all();
+  res.json(rows);
+});
+
+// POST /api/lp/distributions/:eventId/send - mark notices sent
+router.post('/distributions/:eventId/send', requireAuth, requireGP, async (req: Request, res: Response) => {
+  const db = getDb();
+  const eventId = Number(req.params.eventId);
+  if (!Number.isFinite(eventId) || eventId <= 0) {
+    res.status(400).json({ error: 'Invalid event id' });
+    return;
+  }
+  const event = db.prepare(`SELECT * FROM distribution_events WHERE id = ?`).get(eventId) as any;
+  if (!event) {
+    res.status(404).json({ error: 'Distribution event not found' });
+    return;
+  }
+  const items = db.prepare(`
+    SELECT di.*, lpa.name as lp_name, lpa.email as lp_email
+    FROM distribution_items di
+    JOIN lp_accounts lpa ON lpa.id = di.lp_account_id
+    WHERE di.distribution_event_id = ?
+  `).all(eventId) as any[];
+  let sentCount = 0;
+  for (const item of items) {
+    const subject = String(event.custom_email_subject || `Distribution #${event.event_number} notice`);
+    const body = String(event.custom_email_body || '')
+      || `Hi ${item.lp_name},\n\nA distribution has been approved.\n\nEvent #${event.event_number}\nAmount: $${fmtMoney(Number(item.amount || 0))}\nDate: ${event.event_date}\nPurpose: ${event.purpose || ''}\n`;
+    const ok = await sendTransactionalEmail({
+      to: String(item.lp_email || ''),
+      subject,
+      text: body,
+    });
+    if (ok) {
+      sentCount += 1;
+      db.prepare(`UPDATE distribution_items SET status = 'sent', sent_at = CURRENT_TIMESTAMP, email_sent = 1 WHERE id = ?`).run(item.id);
+    }
+  }
+  db.prepare(`UPDATE distribution_events SET status = 'sent' WHERE id = ?`).run(eventId);
+  res.json({ success: true, sentCount, totalItems: items.length });
+});
+
+// PUT /api/lp/distributions/:eventId/items/:itemId/paid - settle LP payment
+router.put('/distributions/:eventId/items/:itemId/paid', requireAuth, requireGP, (req: Request, res: Response) => {
+  const db = getDb();
+  const eventId = Number(req.params.eventId);
+  const itemId = Number(req.params.itemId);
+  const paidAmount = Number(req.body?.paidAmount);
+  if (!Number.isFinite(eventId) || !Number.isFinite(itemId) || eventId <= 0 || itemId <= 0) {
+    res.status(400).json({ error: 'Invalid event/item id' });
+    return;
+  }
+  const item = db.prepare(`
+    SELECT di.*, de.event_date
+    FROM distribution_items di
+    JOIN distribution_events de ON de.id = di.distribution_event_id
+    WHERE di.id = ? AND di.distribution_event_id = ?
+  `).get(itemId, eventId) as any;
+  if (!item) {
+    res.status(404).json({ error: 'Distribution item not found' });
+    return;
+  }
+  const amount = Number.isFinite(paidAmount) && paidAmount > 0 ? paidAmount : Number(item.amount || 0);
+  const quarter = quarterFromDate(String(item.event_date));
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE distribution_items SET status = 'paid', paid_at = CURRENT_TIMESTAMP WHERE id = ?`).run(itemId);
+    db.prepare(`
+      INSERT INTO capital_transactions (lp_account_id, capital_call_item_id, type, amount, date, quarter, notes)
+      VALUES (?, NULL, 'distribution', ?, date('now'), ?, ?)
+    `).run(item.lp_account_id, amount, quarter, `Distribution event #${eventId} item #${itemId}`);
+    db.prepare(`
+      UPDATE lp_accounts
+      SET distributions = COALESCE(distributions, 0) + ?
+      WHERE id = ?
+    `).run(amount, item.lp_account_id);
+    const open = db.prepare(`
+      SELECT COUNT(*) as c
+      FROM distribution_items
+      WHERE distribution_event_id = ? AND status != 'paid'
+    `).get(eventId) as any;
+    db.prepare(`UPDATE distribution_events SET status = ? WHERE id = ?`).run(Number(open?.c || 0) > 0 ? 'partially_paid' : 'paid', eventId);
+  });
+  tx();
+  res.json({ success: true });
+});
+
+// Side-letter terms
+router.get('/side-letters', requireAuth, requireGP, (req: Request, res: Response) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT sl.*, lpa.name as lp_name, lpa.email as lp_email
+    FROM side_letters sl
+    JOIN lp_accounts lpa ON lpa.id = sl.lp_account_id
+    ORDER BY sl.created_at DESC, sl.id DESC
+  `).all();
+  res.json(rows);
+});
+
+router.post('/side-letters', requireAuth, requireGP, (req: Request, res: Response) => {
+  const db = getDb();
+  const lpAccountId = Number(req.body?.lpAccountId);
+  if (!Number.isFinite(lpAccountId) || lpAccountId <= 0) {
+    res.status(400).json({ error: 'lpAccountId is required' });
+    return;
+  }
+  const result = db.prepare(`
+    INSERT INTO side_letters (
+      lp_account_id, pref_override_pct, carry_override_gp_pct, mgmt_fee_override_pct,
+      notice_days_override, effective_from, effective_to, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    lpAccountId,
+    req.body?.prefOverridePct ?? null,
+    req.body?.carryOverrideGpPct ?? null,
+    req.body?.mgmtFeeOverridePct ?? null,
+    req.body?.noticeDaysOverride ?? null,
+    req.body?.effectiveFrom ?? null,
+    req.body?.effectiveTo ?? null,
+    req.body?.notes ?? null
+  );
+  res.status(201).json({ id: Number(result.lastInsertRowid) });
+});
+
+// Quarterly LP package export (accountant/tax support baseline)
+router.get('/reports/quarterly/:quarter', requireAuth, requireGP, (req: Request, res: Response) => {
+  const db = getDb();
+  const q = String(req.params.quarter || '').trim().toUpperCase();
+  const bounds = quarterBounds(q);
+  if (!bounds) {
+    res.status(400).json({ error: 'Quarter must be YYYY-Q1..Q4' });
+    return;
+  }
+  const rows = db.prepare(`
+    SELECT
+      lpa.id as lp_account_id,
+      lpa.name as lp_name,
+      lpa.email as lp_email,
+      COALESCE(SUM(CASE WHEN ct.type = 'call' THEN ct.amount ELSE 0 END), 0) as calls,
+      COALESCE(SUM(CASE WHEN ct.type = 'distribution' THEN ct.amount ELSE 0 END), 0) as distributions
+    FROM lp_accounts lpa
+    LEFT JOIN capital_transactions ct
+      ON ct.lp_account_id = lpa.id
+      AND ct.date >= ?
+      AND ct.date <= ?
+    GROUP BY lpa.id
+    ORDER BY lpa.name
+  `).all(bounds.from, bounds.to) as any[];
+  res.json({
+    quarter: q,
+    period: bounds,
+    rows,
+  });
 });
 
 // POST /api/lp/capital-calls/create - Create capital call

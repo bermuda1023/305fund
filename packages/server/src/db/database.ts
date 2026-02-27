@@ -5,6 +5,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { SCHEMA } from './schema';
+import { SQLITE_AUDIT_EXTENSIONS } from './audit-extensions';
 import { ALL_UNIT_TYPES, generateBuildingUnits, DEFAULT_ASSUMPTIONS } from '@brickell/shared';
 
 let db: Database.Database | null = null;
@@ -101,6 +102,7 @@ export function initDb(): void {
   const database = getDb();
   try {
     database.exec(SCHEMA);
+    database.exec(SQLITE_AUDIT_EXTENSIONS);
   } catch (error: any) {
     // Older DBs can fail on newly added index columns before migrations run.
     const msg = String(error?.message || '');
@@ -129,6 +131,7 @@ export function initDb(): void {
         ''
       );
     database.exec(schemaWithoutNewIndexes);
+    database.exec(SQLITE_AUDIT_EXTENSIONS);
   }
 
   // Run migrations for new columns (safe to re-run)
@@ -210,6 +213,14 @@ export function initDb(): void {
     `ALTER TABLE document_signatures ADD COLUMN investor_gate_password_hash TEXT`,
     `ALTER TABLE document_signatures ADD COLUMN investor_gate_password_expires_at DATETIME`,
     `ALTER TABLE document_signatures ADD COLUMN investor_gate_password_used_at DATETIME`,
+    `ALTER TABLE entities ADD COLUMN fund_id INTEGER REFERENCES funds(id)`,
+    `ALTER TABLE entities ADD COLUMN parent_entity_id INTEGER REFERENCES entities(id)`,
+    `ALTER TABLE entities ADD COLUMN tax_classification TEXT`,
+    `ALTER TABLE entities ADD COLUMN entity_role TEXT`,
+    `ALTER TABLE entities ADD COLUMN is_blocker INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE bank_uploads ADD COLUMN bank_account_id INTEGER REFERENCES bank_accounts(id)`,
+    `ALTER TABLE bank_transactions ADD COLUMN bank_account_id INTEGER REFERENCES bank_accounts(id)`,
+    `ALTER TABLE documents ADD COLUMN superseded_by_document_id INTEGER REFERENCES documents(id)`,
   ];
 
   for (const sql of migrations) {
@@ -339,6 +350,77 @@ export function initDb(): void {
     `);
   } catch {
     // Already exists — ignore
+  }
+
+  try {
+    database.exec(SQLITE_AUDIT_EXTENSIONS);
+  } catch {
+    // ignore extension table bootstrap failures
+  }
+
+  // Baseline CoA/posting defaults for audit-friendly close packs.
+  try {
+    database.exec(`
+      INSERT OR IGNORE INTO funds (id, code, name, legal_structure, is_active)
+      VALUES (1, '305FUND', '305 Opportunities Fund', 'series_llc', 1);
+
+      INSERT OR IGNORE INTO chart_of_accounts (fund_id, account_code, account_name, account_type, normal_balance, is_active)
+      VALUES
+        (1, '1000', 'Cash - Operating', 'asset', 'debit', 1),
+        (1, '1100', 'Cash - Reserve', 'asset', 'debit', 1),
+        (1, '1200', 'Accounts Receivable - Tenant', 'asset', 'debit', 1),
+        (1, '2000', 'Investor Capital Payable', 'liability', 'credit', 1),
+        (1, '3000', 'LP Capital', 'equity', 'credit', 1),
+        (1, '3100', 'GP Capital', 'equity', 'credit', 1),
+        (1, '4000', 'Rental Income', 'revenue', 'credit', 1),
+        (1, '4100', 'Other Income', 'revenue', 'credit', 1),
+        (1, '5000', 'HOA Expense', 'expense', 'debit', 1),
+        (1, '5100', 'Insurance Expense', 'expense', 'debit', 1),
+        (1, '5200', 'Tax Expense', 'expense', 'debit', 1),
+        (1, '5300', 'Repair Expense', 'expense', 'debit', 1),
+        (1, '5400', 'Management Fee Expense', 'expense', 'debit', 1),
+        (1, '5500', 'Fund Admin Expense', 'expense', 'debit', 1);
+
+      INSERT OR IGNORE INTO posting_policies (category, debit_account_id, credit_account_id, memo_template)
+      VALUES
+        ('rent',
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '1000'),
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '4000'),
+          'Rent receipt'
+        ),
+        ('hoa',
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '5000'),
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '1000'),
+          'HOA payment'
+        ),
+        ('insurance',
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '5100'),
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '1000'),
+          'Insurance payment'
+        ),
+        ('tax',
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '5200'),
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '1000'),
+          'Tax payment'
+        ),
+        ('repair',
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '5300'),
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '1000'),
+          'Repair payment'
+        ),
+        ('management_fee',
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '5400'),
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '1000'),
+          'Management fee'
+        ),
+        ('fund_expense',
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '5500'),
+          (SELECT id FROM chart_of_accounts WHERE fund_id = 1 AND account_code = '1000'),
+          'Fund expense'
+        );
+    `);
+  } catch {
+    // ignore baseline seed issues on legacy DBs
   }
 
   // Ensure rent reminder tables + single settings row exist

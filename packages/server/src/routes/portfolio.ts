@@ -743,5 +743,209 @@ router.get('/rent-reminders/runs', (req: Request, res: Response) => {
   res.json(runs);
 });
 
+// GET /api/portfolio/rent-roll/variance?month=YYYY-MM
+router.get('/rent-roll/variance', (req: Request, res: Response) => {
+  const db = getDb();
+  const month = String(req.query.month || new Date().toISOString().slice(0, 7));
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    res.status(400).json({ error: 'month must be YYYY-MM' });
+    return;
+  }
+  const from = `${month}-01`;
+  const to = `${month}-31`;
+  const rows = db.prepare(`
+    SELECT
+      t.id as tenant_id,
+      t.name as tenant_name,
+      bu.unit_number,
+      t.monthly_rent as expected_rent,
+      COALESCE(SUM(CASE WHEN tle.entry_type IN ('payment', 'credit') THEN tle.amount ELSE 0 END), 0) as paid_or_credited,
+      COALESCE(SUM(CASE WHEN tle.entry_type IN ('charge', 'fee') THEN tle.amount ELSE 0 END), 0) as charges
+    FROM tenants t
+    JOIN portfolio_units pu ON pu.id = t.portfolio_unit_id
+    JOIN building_units bu ON bu.id = pu.building_unit_id
+    LEFT JOIN tenant_ledger_entries tle
+      ON tle.tenant_id = t.id
+      AND tle.entry_date >= ?
+      AND tle.entry_date <= ?
+    WHERE t.status IN ('active', 'month_to_month')
+    GROUP BY t.id
+    ORDER BY bu.unit_number, t.name
+  `).all(from, to) as any[];
+
+  const enriched = rows.map((r) => {
+    const expected = Number(r.expected_rent || 0);
+    const paid = Number(r.paid_or_credited || 0);
+    const due = expected - paid;
+    const agingBucket = due <= 0 ? 'current' : due <= expected * 0.5 ? '1-30' : due <= expected ? '31-60' : '60+';
+    return { ...r, due, aging_bucket: agingBucket };
+  });
+  res.json({ month, rows: enriched });
+});
+
+// Tenant ledger
+router.get('/tenants/:tenantId/ledger', (req: Request, res: Response) => {
+  const db = getDb();
+  const tenantId = Number(req.params.tenantId);
+  if (!tenantId) {
+    res.status(400).json({ error: 'Invalid tenantId' });
+    return;
+  }
+  const rows = db.prepare(`
+    SELECT *
+    FROM tenant_ledger_entries
+    WHERE tenant_id = ?
+    ORDER BY entry_date DESC, id DESC
+  `).all(tenantId);
+  res.json(rows);
+});
+
+router.post('/tenants/:tenantId/ledger', (req: Request, res: Response) => {
+  const db = getDb();
+  const tenantId = Number(req.params.tenantId);
+  const entryDate = String(req.body?.entryDate || '').trim();
+  const entryType = String(req.body?.entryType || '').trim();
+  const amount = Number(req.body?.amount);
+  const description = String(req.body?.description || '').trim();
+  if (!tenantId || !entryDate || !entryType || !Number.isFinite(amount)) {
+    res.status(400).json({ error: 'tenantId, entryDate, entryType, amount are required' });
+    return;
+  }
+  const result = db.prepare(`
+    INSERT INTO tenant_ledger_entries (tenant_id, entry_date, entry_type, amount, description, source_type, source_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(tenantId, entryDate, entryType, amount, description || null, req.body?.sourceType || null, req.body?.sourceId || null);
+  res.status(201).json({ id: Number(result.lastInsertRowid) });
+});
+
+// Reserve and special assessments
+router.get('/reserve-activities', (req: Request, res: Response) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT rfa.*, e.name as entity_name, bu.unit_number
+    FROM reserve_fund_activities rfa
+    LEFT JOIN entities e ON e.id = rfa.entity_id
+    LEFT JOIN portfolio_units pu ON pu.id = rfa.portfolio_unit_id
+    LEFT JOIN building_units bu ON bu.id = pu.building_unit_id
+    ORDER BY rfa.activity_date DESC, rfa.id DESC
+  `).all();
+  res.json(rows);
+});
+
+router.post('/reserve-activities', (req: Request, res: Response) => {
+  const db = getDb();
+  const activityDate = String(req.body?.activityDate || '').trim();
+  const activityType = String(req.body?.activityType || '').trim();
+  const amount = Number(req.body?.amount);
+  if (!activityDate || !activityType || !Number.isFinite(amount)) {
+    res.status(400).json({ error: 'activityDate, activityType, amount are required' });
+    return;
+  }
+  const result = db.prepare(`
+    INSERT INTO reserve_fund_activities (activity_date, activity_type, amount, entity_id, portfolio_unit_id, description)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    activityDate,
+    activityType,
+    amount,
+    req.body?.entityId || null,
+    req.body?.portfolioUnitId || null,
+    req.body?.description || null
+  );
+  res.status(201).json({ id: Number(result.lastInsertRowid) });
+});
+
+// Violations + fines ledger
+router.get('/violations', (req: Request, res: Response) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT v.*, bu.unit_number, t.name as tenant_name
+    FROM violation_entries v
+    LEFT JOIN portfolio_units pu ON pu.id = v.portfolio_unit_id
+    LEFT JOIN building_units bu ON bu.id = pu.building_unit_id
+    LEFT JOIN tenants t ON t.id = v.tenant_id
+    ORDER BY v.opened_at DESC, v.id DESC
+  `).all();
+  res.json(rows);
+});
+
+router.post('/violations', (req: Request, res: Response) => {
+  const db = getDb();
+  const violationType = String(req.body?.violationType || '').trim();
+  const openedAt = String(req.body?.openedAt || '').trim();
+  if (!violationType || !openedAt) {
+    res.status(400).json({ error: 'violationType and openedAt are required' });
+    return;
+  }
+  const result = db.prepare(`
+    INSERT INTO violation_entries (
+      portfolio_unit_id, tenant_id, violation_type, opened_at, resolved_at, fine_amount, status, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    req.body?.portfolioUnitId || null,
+    req.body?.tenantId || null,
+    violationType,
+    openedAt,
+    req.body?.resolvedAt || null,
+    Number(req.body?.fineAmount || 0),
+    req.body?.status || 'open',
+    req.body?.notes || null
+  );
+  res.status(201).json({ id: Number(result.lastInsertRowid) });
+});
+
+router.get('/leases/expiring', (req: Request, res: Response) => {
+  const db = getDb();
+  const withinDays = Math.max(1, Number(req.query.withinDays || 60));
+  const rows = db.prepare(`
+    SELECT
+      t.id as tenant_id,
+      t.name as tenant_name,
+      t.lease_end,
+      bu.unit_number,
+      CAST((julianday(t.lease_end) - julianday(date('now'))) AS INTEGER) as days_to_expiry
+    FROM tenants t
+    JOIN portfolio_units pu ON pu.id = t.portfolio_unit_id
+    JOIN building_units bu ON bu.id = pu.building_unit_id
+    WHERE t.lease_end IS NOT NULL
+      AND date(t.lease_end) <= date('now', '+' || ? || ' days')
+      AND t.status IN ('active', 'month_to_month')
+    ORDER BY t.lease_end ASC
+  `).all(withinDays);
+  res.json({ withinDays, rows });
+});
+
+router.post('/leases/alerts/run', (req: Request, res: Response) => {
+  const db = getDb();
+  const today = new Date();
+  const rows = db.prepare(`
+    SELECT id, lease_end
+    FROM tenants
+    WHERE lease_end IS NOT NULL
+      AND status IN ('active', 'month_to_month')
+  `).all() as Array<{ id: number; lease_end: string }>;
+  let created = 0;
+  for (const r of rows) {
+    const leaseEnd = new Date(r.lease_end);
+    if (Number.isNaN(leaseEnd.getTime())) continue;
+    const diffDays = Math.floor((leaseEnd.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+    const alertType = diffDays <= 0 ? 'expired' : diffDays <= 30 ? '30_day' : diffDays <= 60 ? '60_day' : null;
+    if (!alertType) continue;
+    const exists = db.prepare(`
+      SELECT id
+      FROM lease_renewal_alerts
+      WHERE tenant_id = ? AND lease_end = ? AND alert_type = ?
+      LIMIT 1
+    `).get(r.id, r.lease_end, alertType);
+    if (exists) continue;
+    db.prepare(`
+      INSERT INTO lease_renewal_alerts (tenant_id, lease_end, alert_type, status)
+      VALUES (?, ?, ?, 'draft')
+    `).run(r.id, r.lease_end, alertType);
+    created += 1;
+  }
+  res.json({ success: true, created });
+});
+
 export default router;
 export { runRentReminderSweepCore };
