@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:migrate:pg": "tsx src/db/pg-migrate.ts",
-    "db:sync:pg": "tsx src/db/pg-sync-from-sqlite.ts",
+    "db:reconcile": "tsx src/scripts/reconciliation-job.ts",
     "db:seed": "tsx src/db/seed.ts",
     "lint": "tsc --noEmit",
     "test": "jest --runInBand"

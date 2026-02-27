@@ -16,6 +16,14 @@ import type { FundAssumptions } from '@brickell/shared';
 import type { AcquisitionSchedule } from '@brickell/engine';
 import { sendTransactionalEmail } from '../lib/email';
 import { readStoredFile } from '../lib/storage';
+import {
+  createCapitalCallWithItems,
+  getLpAccountByUserId,
+  listCapitalCallsAll,
+  listLpTransactions,
+  markCapitalCallItemReceived,
+} from '../db/repositories/lp-repository';
+import { usePostgresLpRoutes, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
 
@@ -186,39 +194,36 @@ function renderMergeTemplate(tpl: string, vars: Record<string, string>) {
 // ---- LP Read-Only Routes ----
 
 // GET /api/lp/account - My capital account
-router.get('/account', requireAuth, requireAnyRole, (req: Request, res: Response) => {
-  const db = getDb();
-  const account = db.prepare(`
-    SELECT
-      lpa.*,
-      COALESCE((
-        SELECT SUM(cci.amount)
-        FROM capital_call_items cci
-        JOIN capital_calls cc ON cc.id = cci.capital_call_id
-        WHERE cci.lp_account_id = lpa.id
-          AND cc.status IN ('sent', 'partially_received', 'completed')
-      ), 0) as called_capital
-    FROM lp_accounts lpa
-    WHERE lpa.user_id = ?
-  `).get(req.user!.userId) as any;
-
-  if (!account) {
-    res.status(404).json({ error: 'No LP account found for this user' });
-    return;
+router.get('/account', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
+  try {
+    const account = await getLpAccountByUserId(Number(req.user!.userId));
+    if (!account) {
+      res.status(404).json({ error: 'No LP account found for this user' });
+      return;
+    }
+    res.json(account);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Failed to load LP account' });
   }
-
-  res.json(account);
 });
 
 // GET /api/lp/transactions - My capital calls + distributions
-router.get('/transactions', requireAuth, requireAnyRole, (req: Request, res: Response) => {
+router.get('/transactions', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
   const db = getDb();
   const account = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user!.userId) as any;
   if (!account) {
     res.status(404).json({ error: 'No LP account found' });
     return;
   }
-
+  try {
+    if (usePostgresReads() || usePostgresLpRoutes()) {
+      const transactions = await listLpTransactions(Number(account.id));
+      res.json(transactions);
+      return;
+    }
+  } catch (error) {
+    // Fall back to SQLite below unless fallback has been disabled in runtime.
+  }
   const transactions = db.prepare(`
     SELECT * FROM capital_transactions
     WHERE lp_account_id = ?
@@ -1010,9 +1015,27 @@ router.get('/capital-call-items/open', requireAuth, requireGP, (req: Request, re
 });
 
 // POST /api/lp/capital-calls/create - Create capital call
-router.post('/capital-calls/create', requireAuth, requireGP, (req: Request, res: Response) => {
+router.post('/capital-calls/create', requireAuth, requireGP, async (req: Request, res: Response) => {
   const db = getDb();
   const { totalAmount, callDate, dueDate, purpose, letterTemplate, customEmailSubject, customEmailBody } = req.body;
+  if (usePostgresLpRoutes()) {
+    try {
+      const result = await createCapitalCallWithItems({
+        totalAmount: Number(totalAmount),
+        callDate: String(callDate),
+        dueDate: String(dueDate),
+        purpose: String(purpose || ''),
+        letterTemplate: letterTemplate || null,
+        customEmailSubject: customEmailSubject || null,
+        customEmailBody: customEmailBody || null,
+      });
+      res.status(201).json(result);
+      return;
+    } catch (error: any) {
+      res.status(400).json({ error: error?.message || 'Failed to create capital call' });
+      return;
+    }
+  }
 
   // Get next call number
   const lastCall = db.prepare(
@@ -1058,16 +1081,13 @@ router.post('/capital-calls/create', requireAuth, requireGP, (req: Request, res:
 });
 
 // GET /api/lp/capital-calls/all - List all capital calls (GP)
-router.get('/capital-calls/all', requireAuth, requireGP, (req: Request, res: Response) => {
-  const db = getDb();
-  const calls = db.prepare(`
-    SELECT cc.*,
-      (SELECT COUNT(*) FROM capital_call_items cci WHERE cci.capital_call_id = cc.id AND cci.status = 'received') as received_count,
-      (SELECT COUNT(*) FROM capital_call_items cci WHERE cci.capital_call_id = cc.id) as total_items
-    FROM capital_calls cc
-    ORDER BY cc.call_date DESC
-  `).all();
-  res.json(calls);
+router.get('/capital-calls/all', requireAuth, requireGP, async (req: Request, res: Response) => {
+  try {
+    const calls = await listCapitalCallsAll();
+    res.json(calls);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Failed to load capital calls' });
+  }
 });
 
 // GET /api/lp/capital-calls/:callId/items - List per-LP items for a call (GP)
@@ -1224,7 +1244,7 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
 });
 
 // PUT /api/lp/capital-calls/:callId/items/:itemId/received - Mark as received
-router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, requireGP, (req: Request, res: Response) => {
+router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, requireGP, async (req: Request, res: Response) => {
   const db = getDb();
   const callIdNum = Number(req.params.callId);
   const itemIdNum = Number(req.params.itemId);
@@ -1240,6 +1260,25 @@ router.put('/capital-calls/:callId/items/:itemId/received', requireAuth, require
     receiptReference?: string;
     bankTxnId?: string;
   };
+
+  if (usePostgresLpRoutes()) {
+    try {
+      await markCapitalCallItemReceived({
+        callId: callIdNum,
+        itemId: itemIdNum,
+        receivedAmount,
+        receiptReference,
+        bankTxnId,
+      });
+      res.json({ success: true });
+      return;
+    } catch (error: any) {
+      const msg = String(error?.message || 'Failed to mark call item received');
+      const code = msg.includes('not found') ? 404 : msg.includes('positive number') ? 400 : 500;
+      res.status(code).json({ error: msg });
+      return;
+    }
+  }
 
   const item = db.prepare(`
     SELECT *

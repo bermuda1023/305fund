@@ -9,6 +9,7 @@ import { PDFParse } from 'pdf-parse';
 import { deleteStoredFile, saveUploadedBuffer } from '../lib/storage';
 import { createHash } from 'crypto';
 import { writeAuditLog } from '../lib/audit';
+import { listActualTransactions } from '../db/repositories/actuals-repository';
 
 const router = Router();
 router.use(requireAuth, requireGP);
@@ -848,9 +849,24 @@ function importTransactions(
 /* ── Routes ──────────────────────────────────────────────────── */
 
 // GET /api/actuals/transactions - List imported transactions
-router.get('/transactions', (req: Request, res: Response) => {
+router.get('/transactions', async (req: Request, res: Response) => {
   const db = getDb();
   const { unit_id, entity_id, category, reconciled, upload_id, limit = 100, offset = 0 } = req.query;
+  try {
+    const rows = await listActualTransactions({
+      unit_id: unit_id ? Number(unit_id) : undefined,
+      entity_id: entity_id ? Number(entity_id) : undefined,
+      category: category ? String(category) : undefined,
+      reconciled: reconciled !== undefined ? reconciled === 'true' : undefined,
+      upload_id: upload_id ? Number(upload_id) : undefined,
+      limit: Number(limit),
+      offset: Number(offset),
+    });
+    res.json(rows);
+    return;
+  } catch {
+    // Fall through to existing SQLite query path.
+  }
 
   let sql = `SELECT
       cfa.*,

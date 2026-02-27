@@ -7,15 +7,16 @@
     "dev": "concurrently \"pnpm --filter @brickell/server dev\" \"pnpm --filter @brickell/client dev\"",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
+    "test:ci": "pnpm -r test",
     "lint:types": "pnpm -r lint",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml}\" || node -e \"process.exit(0)\"",
     "db:migrate": "pnpm --filter @brickell/server db:migrate",
     "db:migrate:pg": "pnpm --filter @brickell/server db:migrate:pg",
-    "db:sync:pg": "pnpm --filter @brickell/server db:sync:pg",
+    "db:reconcile": "pnpm --filter @brickell/server db:reconcile",
     "db:seed": "pnpm --filter @brickell/server db:seed",
-    "deploy:check": "pnpm lint:types && pnpm lint && pnpm format:check && pnpm -r build && pnpm audit --prod"
+    "deploy:check": "pnpm lint:types && pnpm lint && pnpm format:check && pnpm test:ci && pnpm -r build && pnpm audit --prod"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

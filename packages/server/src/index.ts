@@ -25,6 +25,9 @@ import { requireAuth, requireGP } from './middleware/auth';
 import { Client } from 'pg';
 import { getStorageBackend, readStoredFile } from './lib/storage';
 import { validateRuntimeEnv } from './lib/env';
+import { checkPostgresConnectivity } from './db/postgres-client';
+import { getDbRuntimeMode, isPostgresPrimaryMode } from './db/runtime-mode';
+import { reconcileCriticalTables } from './db/reconciliation';
 
 // Route imports
 import authRoutes from './routes/auth';
@@ -50,15 +53,10 @@ import publicInvestorNdaRoutes from './routes/public-investor-nda';
 const app = express();
 const PORT = process.env.PORT || 3001;
 const isProduction = (process.env.NODE_ENV || 'development') === 'production';
-const pgBridgeReadPullEnabled = String(process.env.PG_BRIDGE_READ_PULL || '').toLowerCase() === '1';
+const pgBridgeReadPullEnabled = !isPostgresPrimaryMode() && String(process.env.PG_BRIDGE_READ_PULL || '').toLowerCase() === '1';
 const pgBridgePeriodicPullEnabled = String(process.env.PG_BRIDGE_PERIODIC_PULL || '').toLowerCase() === '1';
 
 validateRuntimeEnv();
-
-function getDbRuntimeMode(): 'sqlite-bridge' | 'postgres-primary' {
-  const raw = String(process.env.DB_RUNTIME_MODE || '').trim().toLowerCase();
-  return raw === 'postgres-primary' ? 'postgres-primary' : 'sqlite-bridge';
-}
 
 function mustHavePersistentBridgeReady(): boolean {
   const raw = String(process.env.PG_BRIDGE_REQUIRE_READY || '').toLowerCase();
@@ -68,15 +66,37 @@ function mustHavePersistentBridgeReady(): boolean {
 }
 
 async function verifyPostgresBridgeConnectivity(): Promise<void> {
-  const rawUrl = String(process.env.DATABASE_URL || '').trim();
-  if (!rawUrl) throw new Error('DATABASE_URL missing while Postgres bridge is enabled');
-  const client = new Client({ connectionString: rawUrl });
-  try {
-    await client.connect();
-    await client.query('SELECT 1');
-  } finally {
-    try { await client.end(); } catch { /* ignore */ }
-  }
+  await checkPostgresConnectivity();
+}
+
+function mustEnforceCutoverGates(): boolean {
+  const raw = String(process.env.CUTOVER_REQUIRE_GATES || '').toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+async function evaluateCutoverGates() {
+  const threshold = Math.max(0, Number(process.env.CUTOVER_DIVERGENCE_THRESHOLD || 0));
+  const requiredParityRate = Number(process.env.CUTOVER_PARITY_PASS_RATE || 1);
+  const parityPassRate = Number(process.env.CUTOVER_PARITY_PASS_RATE_CURRENT || 0);
+  const smokeFailures = Number(process.env.CUTOVER_SMOKE_FAILURES || 0);
+  const bridgeStatus = getPostgresBridgeStatus();
+  const reconcile = await reconcileCriticalTables(threshold);
+  const gates = {
+    parity: parityPassRate >= requiredParityRate,
+    divergence: reconcile.pass,
+    smoke: smokeFailures === 0,
+    bridge: !bridgeStatus.lastPushError,
+  };
+  return {
+    pass: gates.parity && gates.divergence && gates.smoke && gates.bridge,
+    threshold,
+    requiredParityRate,
+    parityPassRate,
+    smokeFailures,
+    bridgeStatus,
+    reconcile,
+    gates,
+  };
 }
 
 // Middleware
@@ -134,6 +154,10 @@ app.use(async (req, res, next) => {
 
 // Runtime bridge: keep SQLite runtime in sync with managed Postgres.
 app.use((req, res, next) => {
+  if (isPostgresPrimaryMode()) {
+    next();
+    return;
+  }
   const isMutation = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE';
   const shouldSkip = req.path === '/api/auth/login';
   if (isMutation && !shouldSkip && req.path.startsWith('/api')) {
@@ -246,6 +270,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     version: '0.1.0',
     dbRuntimeMode,
+    readSource: isPostgresPrimaryMode() ? 'postgres-primary' : 'sqlite-runtime',
     postgresBridge: {
       enabled: isPostgresBridgeEnabled(),
       readPullEnabled: pgBridgeReadPullEnabled,
@@ -304,6 +329,58 @@ app.get('/api/diag/db', requireAuth, async (req, res) => {
   });
 });
 
+// Cutover safety gates: parity, divergence, and smoke checks.
+app.get('/api/diag/cutover-gates', requireAuth, requireGP, async (req, res) => {
+  try {
+    const gateStatus = await evaluateCutoverGates();
+    const allPass = gateStatus.pass;
+    const gates = {
+      parity: {
+        requiredRate: gateStatus.requiredParityRate,
+        currentRate: gateStatus.parityPassRate,
+        pass: gateStatus.gates.parity,
+      },
+      divergence: {
+        threshold: gateStatus.threshold,
+        pass: gateStatus.gates.divergence,
+        reconcile: gateStatus.reconcile,
+      },
+      smoke: {
+        failures: gateStatus.smokeFailures,
+        pass: gateStatus.gates.smoke,
+      },
+      bridge: {
+        lastPushError: gateStatus.bridgeStatus.lastPushError,
+        pass: gateStatus.gates.bridge,
+      },
+    };
+    res.json({
+      pass: allPass,
+      dbRuntimeMode: getDbRuntimeMode(),
+      postgresPrimary: isPostgresPrimaryMode(),
+      gates,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      pass: false,
+      dbRuntimeMode: getDbRuntimeMode(),
+      postgresPrimary: isPostgresPrimaryMode(),
+      error: error?.message || 'Failed to evaluate cutover gates',
+    });
+  }
+});
+
+app.post('/api/diag/reconcile', requireAuth, requireGP, async (req, res) => {
+  try {
+    const threshold = Math.max(0, Number(req.body?.threshold ?? process.env.CUTOVER_DIVERGENCE_THRESHOLD ?? 0));
+    const result = await reconcileCriticalTables(threshold);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Failed to reconcile tables' });
+  }
+});
+
+
 // Manually trigger a Postgres -> SQLite pull (GP only).
 // Useful when read-pull is disabled and you don't want to restart the server.
 app.post('/api/diag/pull', requireAuth, requireGP, async (req, res) => {
@@ -344,8 +421,10 @@ async function start() {
   const dbRuntimeMode = getDbRuntimeMode();
   // Initialize DB runtime
   initDb();
-  configurePostgresBridge(getDb);
-  if (isPostgresBridgeEnabled()) {
+  if (!isPostgresPrimaryMode()) {
+    configurePostgresBridge(getDb);
+  }
+  if (!isPostgresPrimaryMode() && isPostgresBridgeEnabled()) {
     if (mustHavePersistentBridgeReady()) {
       await verifyPostgresBridgeConnectivity();
     }
@@ -354,6 +433,16 @@ async function start() {
       console.log('[pg-bridge] Startup pull complete');
     } catch (error) {
       console.error('[pg-bridge] Startup pull failed. Continuing with local SQLite state.', error);
+    }
+  }
+
+  // Optional promotion blocker: fail startup if cutover safety gates are not satisfied.
+  if (isPostgresPrimaryMode() && mustEnforceCutoverGates()) {
+    const gateStatus = await evaluateCutoverGates();
+    if (!gateStatus.pass) {
+      throw new Error(
+        `Cutover gates failed (parity=${gateStatus.gates.parity}, divergence=${gateStatus.gates.divergence}, smoke=${gateStatus.gates.smoke}, bridge=${gateStatus.gates.bridge})`
+      );
     }
   }
 
@@ -370,7 +459,7 @@ async function start() {
     }
   }, sweepMinutes * 60 * 1000);
 
-  if (isPostgresBridgeEnabled() && pgBridgePeriodicPullEnabled) {
+  if (!isPostgresPrimaryMode() && isPostgresBridgeEnabled() && pgBridgePeriodicPullEnabled) {
     const pullMinutes = Math.max(1, Number(process.env.PG_BRIDGE_PULL_MINUTES || 5));
     setInterval(() => {
       void hydrateSqliteFromPostgres().catch((error) => {
