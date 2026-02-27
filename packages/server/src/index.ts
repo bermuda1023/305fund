@@ -67,6 +67,13 @@ function mustEnforceCutoverGates(): boolean {
   return isPostgresPrimaryMode();
 }
 
+function normalizeBool(value: string | undefined, fallback = false): boolean {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return fallback;
+}
+
 async function evaluateCutoverGates() {
   const threshold = Math.max(0, Number(process.env.CUTOVER_DIVERGENCE_THRESHOLD || 0));
   const requiredParityRate = Number(process.env.CUTOVER_PARITY_PASS_RATE || 1);
@@ -96,9 +103,17 @@ app.use(helmet({
 }));
 app.use(cors({
   origin: (origin, callback) => {
+    const configuredClient = String(process.env.CLIENT_URL || '').trim();
+    const configuredPublic = String(process.env.PUBLIC_CORS_ORIGINS || '').trim();
+    const allowAnyOrigin = normalizeBool(
+      process.env.CORS_ALLOW_ALL,
+      !configuredClient && !configuredPublic
+    );
+    if (allowAnyOrigin) return callback(null, true);
+
     const allowed = [
-      process.env.CLIENT_URL || 'http://localhost:5173',
-      process.env.PUBLIC_CORS_ORIGINS || '',
+      configuredClient || (isProduction ? '' : 'http://localhost:5173'),
+      configuredPublic,
     ]
       .join(',')
       .split(',')
