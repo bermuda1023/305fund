@@ -20,6 +20,7 @@ import { getDb } from '../db/database';
 import { readStoredFile, saveUploadedBuffer } from '../lib/storage';
 import { withPostgresClient } from '../db/postgres-client';
 import { isPostgresPrimaryMode, usePostgresReads } from '../db/runtime-mode';
+import { createSigningLink } from '../db/repositories/documents-repository';
 
 const router = Router();
 const usePostgresPublicInvestorNda = () => isPostgresPrimaryMode() || usePostgresReads();
@@ -201,21 +202,14 @@ router.post('/start', async (_req: Request, res: Response) => {
     const expiresAtIso = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
     // Reusable signing link for the investor NDA flow.
-    if (usePostgresPublicInvestorNda()) {
-      await withPostgresClient(async (client) => {
-        await client.query(
-          `INSERT INTO document_signing_links (document_id, token_hash, is_single_use, expires_at, created_by)
-           VALUES ($1, $2, 0, $3, $4)`,
-          [documentId, tokenHash, expiresAtIso, 'system']
-        );
-      });
-    } else {
-      const db = getDb();
-      db.prepare(`
-        INSERT INTO document_signing_links (document_id, token_hash, is_single_use, expires_at, created_by)
-        VALUES (?, ?, 0, ?, ?)
-      `).run(documentId, tokenHash, expiresAtIso, 'system');
-    }
+    // Route through repository so Postgres signing tables are auto-created when needed.
+    await createSigningLink({
+      documentId,
+      tokenHash,
+      isSingleUse: 0,
+      expiresAtIso,
+      createdBy: 'system',
+    });
 
     res.json({ url: buildSigningUrl(rawToken), expiresAt: expiresAtIso });
   } catch (err: any) {
