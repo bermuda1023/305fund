@@ -254,7 +254,7 @@ function runRentReminderSweepCore(db: ReturnType<typeof getDb>) {
   return { checked, alerts, skipped, month: month.key };
 }
 
-async function runRentReminderSweepCorePg() {
+export async function runRentReminderSweepCorePg() {
   const now = new Date();
   const month = monthWindow(now);
   const settings = await withPostgresClient(async (client) => {

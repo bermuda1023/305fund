@@ -24,17 +24,19 @@ import {
   listLpTransactions,
   markCapitalCallItemReceived,
 } from '../db/repositories/lp-repository';
-import { usePostgresLpRoutes, usePostgresReads } from '../db/runtime-mode';
+import { sqliteFallbackEnabled, usePostgresLpRoutes, usePostgresReads } from '../db/runtime-mode';
 
 const router = Router();
 
 async function getLpAccountForUser(userId: number) {
-  if (usePostgresReads() || usePostgresLpRoutes()) {
+  const usePg = usePostgresReads() || usePostgresLpRoutes();
+  if (usePg) {
     const pg = await withPostgresClient(async (client) => {
       const r = await client.query(`SELECT * FROM lp_accounts WHERE user_id = $1 LIMIT 1`, [userId]);
       return r.rows[0] || null;
     });
     if (pg) return pg as any;
+    if (!sqliteFallbackEnabled()) return null;
   }
   return (getDb().prepare(`SELECT * FROM lp_accounts WHERE user_id = ?`).get(userId) as any) || null;
 }
@@ -240,14 +242,15 @@ router.get('/account', requireAuth, requireAnyRole, async (req: Request, res: Re
 
 // GET /api/lp/transactions - My capital calls + distributions
 router.get('/transactions', requireAuth, requireAnyRole, async (req: Request, res: Response) => {
-  const db = getDb();
+  const usePg = usePostgresReads() || usePostgresLpRoutes();
+  const db = usePg ? null : getDb();
   const account = await getLpAccountForUser(Number(req.user!.userId));
   if (!account) {
     res.status(404).json({ error: 'No LP account found' });
     return;
   }
   try {
-    if (usePostgresReads() || usePostgresLpRoutes()) {
+    if (usePg) {
       const transactions = await listLpTransactions(Number(account.id));
       res.json(transactions);
       return;
@@ -255,7 +258,7 @@ router.get('/transactions', requireAuth, requireAnyRole, async (req: Request, re
   } catch (error) {
     // Fall back to SQLite below unless fallback has been disabled in runtime.
   }
-  const transactions = db.prepare(`
+  const transactions = db!.prepare(`
     SELECT * FROM capital_transactions
     WHERE lp_account_id = ?
     ORDER BY date DESC

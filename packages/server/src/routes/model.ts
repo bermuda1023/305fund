@@ -1537,31 +1537,33 @@ router.delete('/scenarios/:id', async (req: Request, res: Response) => {
 
 // POST /api/model/run - Run full projection (uses real portfolio data when available)
 router.post('/run', async (req: Request, res: Response) => {
-  const db = getDb();
   const { scenarioId, dataMode } = req.body as { scenarioId?: number; dataMode?: ModelDataMode };
+  const usePg = usePostgresModel();
+  const db = usePg ? null : getDb();
 
-  const assumptions = usePostgresModel()
+  const assumptions = usePg
     ? await getScenarioAssumptionsPg(scenarioId)
-    : getScenarioAssumptions(db, scenarioId);
+    : getScenarioAssumptions(db!, scenarioId);
   if (!assumptions) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
   }
   const mode: ModelDataMode = (dataMode === 'defaults' || dataMode === 'sample') ? dataMode : 'auto';
-  const result = usePostgresModel()
+  const result = usePg
     ? evaluateAssumptionsPg(assumptions, await fetchModelSnapshotPg(), mode)
-    : evaluateAssumptions(assumptions, db, mode);
+    : evaluateAssumptions(assumptions, db!, mode);
   res.json(result);
 });
 
 // POST /api/model/sensitivity
 router.post('/sensitivity', async (req: Request, res: Response) => {
-  const db = getDb();
   const { scenarioId, preset } = req.body;
+  const usePg = usePostgresModel();
+  const db = usePg ? null : getDb();
 
-  const assumptions = usePostgresModel()
+  const assumptions = usePg
     ? await getScenarioAssumptionsPg(scenarioId)
-    : getScenarioAssumptions(db, scenarioId);
+    : getScenarioAssumptions(db!, scenarioId);
   if (!assumptions) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
@@ -1574,11 +1576,11 @@ router.post('/sensitivity', async (req: Request, res: Response) => {
   }
 
   const config = presetFn(assumptions);
-  const pgSnapshot = usePostgresModel() ? await fetchModelSnapshotPg() : null;
+  const pgSnapshot = usePg ? await fetchModelSnapshotPg() : null;
   const result = generateSensitivityTable(assumptions, config, (a) => {
     return pgSnapshot
       ? evaluateAssumptionsPg(a, pgSnapshot, 'auto').returns.fundMOIC
-      : evaluateAssumptions(a, db, 'auto').returns.fundMOIC;
+      : evaluateAssumptions(a, db!, 'auto').returns.fundMOIC;
   });
 
   res.json(result);
@@ -1586,17 +1588,18 @@ router.post('/sensitivity', async (req: Request, res: Response) => {
 
 // POST /api/model/sensitivity-stress
 router.post('/sensitivity-stress', async (req: Request, res: Response) => {
-  const db = getDb();
   const { scenarioId, enabledKeys, rowKey, colKey } = req.body as {
     scenarioId?: number;
     enabledKeys?: string[];
     rowKey?: StressKey;
     colKey?: StressKey;
   };
+  const usePg = usePostgresModel();
+  const db = usePg ? null : getDb();
 
-  const assumptions = usePostgresModel()
+  const assumptions = usePg
     ? await getScenarioAssumptionsPg(scenarioId)
-    : getScenarioAssumptions(db, scenarioId);
+    : getScenarioAssumptions(db!, scenarioId);
   if (!assumptions) {
     res.status(404).json({ error: 'Scenario not found' });
     return;
@@ -1608,7 +1611,7 @@ router.post('/sensitivity-stress', async (req: Request, res: Response) => {
   const keys = selectedKeys.length > 0 ? selectedKeys : (['exitYears', 'landValue', 'vacancyBps', 'expenseOverrun'] as StressKey[]);
 
   const cache = new Map<string, { fundIRR: number; fundMOIC: number; lpMOIC: number; netProfit: number }>();
-  const pgSnapshot = usePostgresModel() ? await fetchModelSnapshotPg() : null;
+  const pgSnapshot = usePg ? await fetchModelSnapshotPg() : null;
   const evaluateMetrics = (a: FundAssumptions) => {
     const key = JSON.stringify([
       a.fundTermYears, a.investmentPeriodYears, a.landValueTotal, a.landGrowthPct, a.rentGrowthPct,
@@ -1619,7 +1622,7 @@ router.post('/sensitivity-stress', async (req: Request, res: Response) => {
     if (hit) return hit;
     const out = pgSnapshot
       ? evaluateAssumptionsPg(a, pgSnapshot, 'auto')
-      : evaluateAssumptions(a, db, 'auto');
+      : evaluateAssumptions(a, db!, 'auto');
     const metrics = {
       fundIRR: out.returns.fundIRR,
       fundMOIC: out.returns.fundMOIC,

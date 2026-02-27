@@ -16,14 +16,15 @@ import { requireAuth, requireGP } from './middleware/auth';
 import { Client } from 'pg';
 import { getStorageBackend, readStoredFile } from './lib/storage';
 import { validateRuntimeEnv } from './lib/env';
-import { checkPostgresConnectivity } from './db/postgres-client';
-import { getDbRuntimeMode, isPostgresPrimaryMode } from './db/runtime-mode';
+import { checkPostgresConnectivity, withPostgresClient } from './db/postgres-client';
+import { getDbRuntimeMode, isPostgresPrimaryMode, sqliteFallbackEnabled, usePostgresReads } from './db/runtime-mode';
 import { reconcileCriticalTables } from './db/reconciliation';
+import { getLpAccountByUserId } from './db/repositories/lp-repository';
 
 // Route imports
 import authRoutes from './routes/auth';
 import portfolioRoutes from './routes/portfolio';
-import { runRentReminderSweepCore } from './routes/portfolio';
+import { runRentReminderSweepCore, runRentReminderSweepCorePg } from './routes/portfolio';
 import modelRoutes from './routes/model';
 import contractsRoutes from './routes/contracts';
 import listingsRoutes from './routes/listings';
@@ -140,20 +141,35 @@ app.get('/api/files/:key(*)', requireAuth, async (req, res) => {
     // Authorization: allow GP to fetch anything; LP can only fetch documents
     // that belong to them or are fund-level docs.
     if (req.user?.role === 'lp') {
-      const db = getDb();
-      const lp = db.prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user.userId) as any;
+      const usePg = isPostgresPrimaryMode() || usePostgresReads();
+      const lp = usePg
+        ? await getLpAccountByUserId(Number(req.user.userId))
+        : (getDb().prepare('SELECT id FROM lp_accounts WHERE user_id = ?').get(req.user.userId) as any);
       if (!lp) {
         res.status(403).json({ error: 'LP account not found' });
         return;
       }
 
       // Map allowed documents -> allowed storage keys.
-      const docs = db.prepare(`
-        SELECT file_path
-        FROM documents
-        WHERE parent_type = 'fund'
-           OR (parent_type = 'lp' AND parent_id = ?)
-      `).all(lp.id) as Array<{ file_path: string }>;
+      const docs = usePg
+        ? await withPostgresClient(async (client) => {
+          const result = await client.query(
+            `
+            SELECT file_path
+            FROM documents
+            WHERE parent_type = 'fund'
+               OR (parent_type = 'lp' AND parent_id = $1)
+            `,
+            [lp.id]
+          );
+          return result.rows as Array<{ file_path: string }>;
+        })
+        : (getDb().prepare(`
+            SELECT file_path
+            FROM documents
+            WHERE parent_type = 'fund'
+               OR (parent_type = 'lp' AND parent_id = ?)
+          `).all(lp.id) as Array<{ file_path: string }>);
       const allowedKeys = new Set<string>();
       for (const d of docs) {
         const fp = String(d.file_path || '');
@@ -190,14 +206,17 @@ app.get('/api/health', (req, res) => {
 // Diagnostic endpoint: helps confirm runtime SQLite vs Postgres connectivity.
 // Requires auth so we don't leak data publicly.
 app.get('/api/diag/db', requireAuth, async (req, res) => {
-  const db = getDb();
-  const sqliteCounts: Record<string, number> = {};
+  const shouldReadSqlite = !isPostgresPrimaryMode() || sqliteFallbackEnabled();
+  const sqliteCounts: Record<string, number> | null = shouldReadSqlite ? {} : null;
   const tables = ['building_units', 'portfolio_units', 'contracts', 'unit_types', 'users'] as const;
-  for (const t of tables) {
-    try {
-      sqliteCounts[t] = Number((db.prepare(`SELECT COUNT(*) as c FROM ${t}`).get() as any)?.c || 0);
-    } catch {
-      sqliteCounts[t] = -1; // table missing or query failed
+  if (shouldReadSqlite && sqliteCounts) {
+    const db = getDb();
+    for (const t of tables) {
+      try {
+        sqliteCounts[t] = Number((db.prepare(`SELECT COUNT(*) as c FROM ${t}`).get() as any)?.c || 0);
+      } catch {
+        sqliteCounts[t] = -1; // table missing or query failed
+      }
     }
   }
 
@@ -311,7 +330,9 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 async function start() {
   const dbRuntimeMode = getDbRuntimeMode();
   // Initialize DB runtime
-  initDb();
+  if (!isPostgresPrimaryMode() || sqliteFallbackEnabled()) {
+    initDb();
+  }
   if (mustHavePersistentStoreReady()) {
     await verifyPostgresBridgeConnectivity();
   }
@@ -330,9 +351,21 @@ async function start() {
   const sweepMinutes = Math.max(5, Number(process.env.RENT_REMINDER_SWEEP_MINUTES || 60));
   setInterval(() => {
     try {
-      const result = runRentReminderSweepCore(getDb());
-      if (result.alerts > 0) {
-        console.log(`[rent-reminders] month=${result.month} alerts=${result.alerts} checked=${result.checked}`);
+      if (isPostgresPrimaryMode()) {
+        void runRentReminderSweepCorePg()
+          .then((result) => {
+            if (result.alerts > 0) {
+              console.log(`[rent-reminders] month=${result.month} alerts=${result.alerts} checked=${result.checked}`);
+            }
+          })
+          .catch((err) => {
+            console.error('[rent-reminders] sweep failed:', err);
+          });
+      } else {
+        const result = runRentReminderSweepCore(getDb());
+        if (result.alerts > 0) {
+          console.log(`[rent-reminders] month=${result.month} alerts=${result.alerts} checked=${result.checked}`);
+        }
       }
     } catch (err) {
       console.error('[rent-reminders] sweep failed:', err);
