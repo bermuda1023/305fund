@@ -74,6 +74,16 @@ function normalizeBool(value: string | undefined, fallback = false): boolean {
   return fallback;
 }
 
+function toOrigin(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
+}
+
 async function evaluateCutoverGates() {
   const threshold = Math.max(0, Number(process.env.CUTOVER_DIVERGENCE_THRESHOLD || 0));
   const requiredParityRate = Number(process.env.CUTOVER_PARITY_PASS_RATE || 1);
@@ -110,6 +120,7 @@ app.use(cors({
       !configuredClient && !configuredPublic
     );
     if (allowAnyOrigin) return callback(null, true);
+    const strictCors = normalizeBool(process.env.CORS_STRICT, false);
 
     const allowed = [
       configuredClient || (isProduction ? '' : 'http://localhost:5173'),
@@ -118,10 +129,14 @@ app.use(cors({
       .join(',')
       .split(',')
       .map((s) => s.trim())
+      .map((s) => toOrigin(s))
       .filter(Boolean);
     // Allow non-browser requests (health checks, server-to-server).
     if (!origin) return callback(null, true);
-    if (allowed.includes(origin)) return callback(null, true);
+    const normalizedRequestOrigin = toOrigin(origin);
+    if (allowed.includes(normalizedRequestOrigin)) return callback(null, true);
+    // Fail-open by default to prevent frontend hard outages from allowlist drift.
+    if (!strictCors) return callback(null, true);
     return callback(new Error('CORS blocked for origin'), false);
   },
   credentials: true,

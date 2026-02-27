@@ -82,10 +82,11 @@ export default function Contracts() {
   const queryClient = useQueryClient();
   const num = fmtNumber;
 
-  const { data: units = [] } = useQuery<ContractUnit[]>({
+  const unitsQuery = useQuery<ContractUnit[]>({
     queryKey: ['contracts'],
     queryFn: () => api.get('/contracts').then((r) => r.data),
   });
+  const units = unitsQuery.data ?? [];
 
   const { data: progress } = useQuery<VoteProgress>({
     queryKey: ['contracts-progress'],
@@ -172,6 +173,22 @@ export default function Contracts() {
         <h2>Voting Consensus</h2>
         <p style={{ color: 'var(--text-muted)' }}>Track building-wide consensus and listing agreement progress</p>
       </div>
+
+      {unitsQuery.error && (
+        <div
+          style={{
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid rgba(239, 68, 68, 0.45)',
+            borderRadius: 8,
+            padding: '0.6rem 0.85rem',
+            marginBottom: '1rem',
+            color: '#ef4444',
+            fontSize: '0.85rem',
+          }}
+        >
+          Failed to load units: {String((unitsQuery.error as any)?.response?.data?.error || (unitsQuery.error as any)?.message || 'Unknown error')}
+        </div>
+      )}
 
       <div className="card mb-4">
         <div className="card-header">

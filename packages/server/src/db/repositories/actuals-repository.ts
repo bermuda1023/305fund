@@ -14,11 +14,19 @@ type QueryFilters = {
 
 type AnyObj = Record<string, any>;
 
-function baseSql(actualsTable: 'cash_flow_actuals' | 'cash_flows_actual' = 'cash_flow_actuals') {
+function baseSql(
+  actualsTable: 'cash_flow_actuals' | 'cash_flows_actual' = 'cash_flow_actuals',
+  includeBankTransactions = true
+) {
+  const bankAmountSelect = includeBankTransactions ? 'bt.amount' : 'NULL';
+  const bankDescSelect = includeBankTransactions ? 'bt.description' : 'NULL';
+  const bankJoin = includeBankTransactions
+    ? 'LEFT JOIN bank_transactions bt ON cfa.bank_transaction_id = bt.id'
+    : '';
   return `SELECT
       cfa.*,
-      bt.amount as bank_amount,
-      bt.description as bank_description,
+      ${bankAmountSelect} as bank_amount,
+      ${bankDescSelect} as bank_description,
       e.name as entity_name,
       ur.description as renovation_description,
       pu.id as portfolio_unit_id,
@@ -26,7 +34,7 @@ function baseSql(actualsTable: 'cash_flow_actuals' | 'cash_flows_actual' = 'cash
       lpa.name as lp_name,
       cci.capital_call_id, cc.call_number
     FROM ${actualsTable} cfa
-    LEFT JOIN bank_transactions bt ON cfa.bank_transaction_id = bt.id
+    ${bankJoin}
     LEFT JOIN portfolio_units pu ON cfa.portfolio_unit_id = pu.id
     LEFT JOIN entities e ON cfa.entity_id = e.id
     LEFT JOIN unit_renovations ur ON cfa.unit_renovation_id = ur.id
@@ -37,19 +45,29 @@ function baseSql(actualsTable: 'cash_flow_actuals' | 'cash_flows_actual' = 'cash
     WHERE 1=1`;
 }
 
-async function resolvePostgresActualsTable(): Promise<'cash_flow_actuals' | 'cash_flows_actual'> {
+async function resolvePostgresActualsMetadata(): Promise<{
+  actualsTable: 'cash_flow_actuals' | 'cash_flows_actual';
+  hasBankTransactions: boolean;
+}> {
   return withPostgresClient(async (client) => {
     const result = await client.query(
       `
       SELECT
         to_regclass('public.cash_flow_actuals') as canonical,
-        to_regclass('public.cash_flows_actual') as legacy
+        to_regclass('public.cash_flows_actual') as legacy,
+        to_regclass('public.bank_transactions') as bank_transactions
       `
     );
-    const row = result.rows[0] as { canonical?: string | null; legacy?: string | null } | undefined;
-    if (row?.canonical) return 'cash_flow_actuals';
-    if (row?.legacy) return 'cash_flows_actual';
-    return 'cash_flow_actuals';
+    const row = result.rows[0] as {
+      canonical?: string | null;
+      legacy?: string | null;
+      bank_transactions?: string | null;
+    } | undefined;
+    const actualsTable = row?.canonical ? 'cash_flow_actuals' : row?.legacy ? 'cash_flows_actual' : 'cash_flow_actuals';
+    return {
+      actualsTable,
+      hasBankTransactions: !!row?.bank_transactions,
+    };
   });
 }
 
@@ -59,9 +77,9 @@ export async function listActualTransactions(filters: QueryFilters): Promise<Any
 
   if (usePostgresReads() || usePostgresActualsRoutes()) {
     try {
-      const actualsTable = await resolvePostgresActualsTable();
+      const { actualsTable, hasBankTransactions } = await resolvePostgresActualsMetadata();
       return await withPostgresClient(async (client) => {
-        let sql = baseSql(actualsTable);
+        let sql = baseSql(actualsTable, hasBankTransactions);
         const params: any[] = [];
         const bind = (v: any) => {
           params.push(v);
@@ -71,7 +89,8 @@ export async function listActualTransactions(filters: QueryFilters): Promise<Any
         if (filters.entity_id) sql += ` AND cfa.entity_id = ${bind(filters.entity_id)}`;
         if (filters.category) sql += ` AND cfa.category = ${bind(filters.category)}`;
         if (filters.reconciled !== undefined) sql += ` AND cfa.reconciled = ${bind(filters.reconciled ? 1 : 0)}`;
-        if (filters.upload_id) sql += ` AND bt.bank_upload_id = ${bind(filters.upload_id)}`;
+        if (filters.upload_id && hasBankTransactions) sql += ` AND bt.bank_upload_id = ${bind(filters.upload_id)}`;
+        if (filters.upload_id && !hasBankTransactions) return [] as AnyObj[];
         sql += ` ORDER BY cfa.date DESC LIMIT ${bind(limit)} OFFSET ${bind(offset)}`;
         const r = await client.query(sql, params);
         return r.rows as AnyObj[];

@@ -71,12 +71,60 @@ router.get('/', async (req: Request, res: Response) => {
     )
     ORDER BY bu.floor, bu.unit_letter
   `;
-  const units = usePostgresContracts()
-    ? await withPostgresClient(async (client) => {
-      const result = await client.query(sql);
-      return result.rows;
-    })
-    : getDb().prepare(sql).all();
+  if (usePostgresContracts()) {
+    try {
+      const units = await withPostgresClient(async (client) => {
+        const result = await client.query(sql);
+        return result.rows;
+      });
+      res.json(units);
+      return;
+    } catch (error) {
+      // Fallback for partial/legacy schemas where optional join columns/tables may be missing.
+      const units = await withPostgresClient(async (client) => {
+        const fallbackSql = `
+          WITH normalized_units AS (
+            SELECT
+              bu.*,
+              CASE
+                WHEN LOWER(TRIM(COALESCE(CAST(bu.is_fund_owned AS TEXT), '0'))) IN ('1', 'true', 't', 'yes', 'y') THEN 1
+                ELSE 0
+              END AS is_owned
+            FROM building_units bu
+          )
+          SELECT
+            bu.id,
+            bu.floor,
+            bu.unit_letter,
+            bu.unit_number,
+            bu.unit_type_id,
+            bu.is_owned as is_fund_owned,
+            CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END as consensus_status,
+            CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END as listing_agreement,
+            bu.resident_name,
+            bu.resident_type,
+            bu.owner_name,
+            bu.owner_email,
+            bu.owner_phone,
+            bu.owner_company,
+            bu.notes,
+            COALESCE(ut.ownership_pct, 0) as ownership_pct,
+            COALESCE(ut.sqft, 0) as sqft,
+            COALESCE(ut.beds, 0) as beds,
+            CASE WHEN bu.is_owned = 1 THEN 'Fund Owned' ELSE NULL END as fund_status
+          FROM normalized_units bu
+          LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
+          ORDER BY bu.floor, bu.unit_letter
+        `;
+        const result = await client.query(fallbackSql);
+        return result.rows;
+      });
+      res.json(units);
+      return;
+    }
+  }
+
+  const units = getDb().prepare(sql).all();
   res.json(units);
 });
 
