@@ -1058,6 +1058,16 @@ async function importTransactionsPg(params: {
 }) {
   const { filename, rows, fileType, status = 'parsed', bankAccountId, filePath, fileSha256, uploadedBy } = params;
   return withPostgresClient(async (client) => {
+    // Self-heal legacy Postgres schemas before writing manual/imported rows.
+    await client.query(`
+      ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+      ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS bank_transaction_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS entity_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS unit_renovation_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS lp_account_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS receipt_document_id BIGINT;
+    `);
     await client.query('BEGIN');
     try {
       const upload = await client.query(

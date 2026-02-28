@@ -54,6 +54,9 @@ export async function ensureCriticalPostgresTables(): Promise<void> {
       );
       ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
       ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+      ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS file_path TEXT;
+      ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS file_sha256 TEXT;
+      ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS uploaded_by TEXT;
       CREATE INDEX IF NOT EXISTS idx_bank_transactions_upload ON bank_transactions(bank_upload_id);
       CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(date);
 
