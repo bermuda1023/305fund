@@ -2244,8 +2244,10 @@ router.get('/bank-lines', async (req: Request, res: Response) => {
       }
       if (month) {
         const m = String(month);
+        const [my, mm] = m.split('-').map(Number);
+        const lastDay = String(new Date(my, mm, 0).getDate()).padStart(2, '0');
         where += ` AND bt.date >= $${params.length + 1} AND bt.date <= $${params.length + 2}`;
-        params.push(`${m}-01`, `${m}-31`);
+        params.push(`${m}-01`, `${m}-${lastDay}`);
       }
       const bankRowsResult = await client.query(`
         SELECT
@@ -2300,8 +2302,10 @@ router.get('/bank-lines', async (req: Request, res: Response) => {
       }
       if (month) {
         const m = String(month);
+        const [my2, mm2] = m.split('-').map(Number);
+        const lastDay2 = String(new Date(my2, mm2, 0).getDate()).padStart(2, '0');
         where += ` AND bt.date >= ? AND bt.date <= ?`;
-        params.push(`${m}-01`, `${m}-31`);
+        params.push(`${m}-01`, `${m}-${lastDay2}`);
       }
 
       const bankRows = db.prepare(`
@@ -2538,7 +2542,8 @@ router.post('/periods/:month/close', async (req: Request, res: Response) => {
   const m = String(req.params.month || '').trim();
   if (!/^\d{4}-\d{2}$/.test(m)) return res.status(400).json({ error: 'Month must be YYYY-MM' });
   const from = `${m}-01`;
-  const to = `${m}-31`;
+  const [cy, cm] = m.split('-').map(Number);
+  const to = `${m}-${String(new Date(cy, cm, 0).getDate()).padStart(2, '0')}`;
   if (usePostgresActuals()) {
     const check = await withPostgresClient(async (client) => {
       const result = await client.query(

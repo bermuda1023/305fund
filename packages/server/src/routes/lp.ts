@@ -202,7 +202,8 @@ function quarterBounds(quarter: string): { from: string; to: string } | null {
   const startMonth = (q - 1) * 3 + 1;
   const from = `${year}-${String(startMonth).padStart(2, '0')}-01`;
   const endMonth = startMonth + 2;
-  const to = `${year}-${String(endMonth).padStart(2, '0')}-31`;
+  const lastDay = new Date(year, endMonth, 0).getDate();
+  const to = `${year}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
   return { from, to };
 }
 

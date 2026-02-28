@@ -1263,7 +1263,8 @@ router.get('/rent-roll/variance', async (req: Request, res: Response) => {
     return;
   }
   const from = `${month}-01`;
-  const to = `${month}-31`;
+  const [ry, rm] = month.split('-').map(Number);
+  const to = `${month}-${String(new Date(ry, rm, 0).getDate()).padStart(2, '0')}`;
   const sql = `
     SELECT
       t.id as tenant_id,

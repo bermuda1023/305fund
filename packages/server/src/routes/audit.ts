@@ -98,7 +98,8 @@ router.get('/close-pack/:month', async (req: Request, res: Response) => {
     return;
   }
   const from = `${month}-01`;
-  const to = `${month}-31`;
+  const [y, m] = month.split('-').map(Number);
+  const to = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
 
   const trialBalanceSql = `
     SELECT
@@ -347,7 +348,8 @@ router.get('/exports/:month', async (req: Request, res: Response) => {
     return;
   }
   const from = `${month}-01`;
-  const to = `${month}-31`;
+  const [y2, m2] = month.split('-').map(Number);
+  const to = `${month}-${String(new Date(y2, m2, 0).getDate()).padStart(2, '0')}`;
 
   const sql = `
     SELECT
