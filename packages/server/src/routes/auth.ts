@@ -101,7 +101,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
     res.json({
       token,
       user: {
-        id: user.id,
+        id: Number(user.id),
         email: user.email,
         role: user.role,
         name: user.name,
@@ -150,7 +150,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
   res.json({
     token,
     user: {
-      id: user.id,
+      id: Number(user.id),
       email: user.email,
       role: user.role,
       name: user.name,
@@ -352,7 +352,7 @@ router.post('/change-password', requireAuth, async (req: Request, res: Response)
     success: true,
     token,
     user: {
-      id: user.id,
+      id: Number(user.id),
       email: user.email,
       role: user.role,
       name: user.name,

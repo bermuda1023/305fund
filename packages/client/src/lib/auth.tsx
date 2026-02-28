@@ -29,13 +29,16 @@ function readStoredUser(): User | null {
   if (!stored || stored === 'undefined' || stored === 'null') return null;
   try {
     const parsed = JSON.parse(stored) as Partial<User>;
+    const idVal = parsed?.id;
+    const hasValidId = typeof idVal === 'number' || (typeof idVal === 'string' && /^\d+$/.test(idVal));
     if (
-      typeof parsed?.id === 'number' &&
+      hasValidId &&
       typeof parsed?.email === 'string' &&
       (parsed?.role === 'gp' || parsed?.role === 'lp') &&
       typeof parsed?.name === 'string' &&
       (parsed?.mustChangePassword === undefined || typeof parsed?.mustChangePassword === 'boolean')
     ) {
+      if (typeof idVal === 'string') parsed.id = Number(idVal);
       return parsed as User;
     }
   } catch {
