@@ -11,8 +11,11 @@ export function getPostgresPool(): Pool {
   pool = new Pool({
     connectionString,
     max: Math.max(2, Number(process.env.PG_POOL_MAX || 10)),
-    idleTimeoutMillis: Math.max(1_000, Number(process.env.PG_POOL_IDLE_MS || 30_000)),
-    connectionTimeoutMillis: Math.max(1_000, Number(process.env.PG_POOL_CONNECT_MS || 10_000)),
+    idleTimeoutMillis: Math.max(1_000, Number(process.env.PG_POOL_IDLE_MS || 60_000)),
+    connectionTimeoutMillis: Math.max(1_000, Number(process.env.PG_POOL_CONNECT_MS || 30_000)),
+  });
+  pool.on('error', (err) => {
+    console.error('[pg-pool] Unexpected pool error:', err.message);
   });
   return pool;
 }
