@@ -17,6 +17,13 @@ const router = Router();
 router.use(requireAuth, requireGP);
 const usePostgresActuals = () => usePostgresReads() || usePostgresActualsRoutes() || isPostgresPrimaryMode();
 
+function isMissingPostgresRelation(error: any, relation: string): boolean {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '');
+  if (code !== '42P01') return false;
+  return message.toLowerCase().includes(`relation "${relation.toLowerCase()}" does not exist`);
+}
+
 /* ── Multer config for statement file uploads ─────────────────── */
 
 const fileUpload = multer({
@@ -2764,10 +2771,40 @@ router.get('/uploads', async (req: Request, res: Response) => {
     FROM bank_uploads u
     ORDER BY u.upload_date DESC
   `;
-  const uploads = usePostgresActuals()
-    ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
-    : getDb().prepare(sql).all();
-  res.json(uploads);
+  try {
+    if (usePostgresActuals()) {
+      const uploads = await withPostgresClient(async (client) => {
+        try {
+          return (await client.query(sql)).rows;
+        } catch (error: any) {
+          if (!isMissingPostgresRelation(error, 'bank_transactions')) throw error;
+          const fallback = await client.query(`
+            SELECT
+              u.*,
+              0::bigint as bank_row_count,
+              0::double precision as bank_total_amount,
+              0::bigint as alloc_row_count,
+              0::double precision as alloc_total_amount,
+              0::bigint as reconciled_alloc_count,
+              0::double precision as reconciled_alloc_total_amount,
+              0::bigint as unallocated_bank_lines,
+              0::bigint as out_of_balance_bank_lines
+            FROM bank_uploads u
+            ORDER BY u.upload_date DESC
+          `);
+          return fallback.rows;
+        }
+      });
+      res.json(uploads);
+      return;
+    }
+
+    const uploads = getDb().prepare(sql).all();
+    res.json(uploads);
+  } catch (error: any) {
+    console.error('[actuals/uploads] query failed:', error);
+    res.status(500).json({ error: 'Failed to load upload history' });
+  }
 });
 
 // Bank accounts (operating/reserve/escrow)
