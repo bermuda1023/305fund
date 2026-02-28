@@ -2681,7 +2681,7 @@ router.get('/variance', async (req: Request, res: Response) => {
     ? await withPostgresClient(async (client) => {
       const [actualsResult, portfolioResult] = await Promise.all([
         client.query(actualsSql.replace('date >= ? AND date <= ?', 'date >= $1 AND date <= $2'), [from, to]),
-        client.query(portfolioSql.replace(/\?/g, (_m, i) => (i === 0 ? '$1' : '$2')), [month, month]),
+        client.query(portfolioSql.replace('?', '$1').replace('?', '$2'), [month, month]),
       ]);
       return { actuals: actualsResult.rows as any[], portfolio: (portfolioResult.rows[0] || {}) as any };
     })
