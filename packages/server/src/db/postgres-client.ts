@@ -62,6 +62,12 @@ export async function ensureCriticalPostgresTables(): Promise<void> {
         closed_by TEXT
       );
 
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS bank_transaction_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS entity_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS unit_renovation_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS lp_account_id BIGINT;
+      ALTER TABLE cash_flow_actuals ADD COLUMN IF NOT EXISTS receipt_document_id BIGINT;
+
       CREATE INDEX IF NOT EXISTS idx_portfolio_units_entity ON portfolio_units(entity_id);
       CREATE INDEX IF NOT EXISTS idx_capital_call_items_lp ON capital_call_items(lp_account_id);
       CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_entity ON cash_flow_actuals(entity_id);
