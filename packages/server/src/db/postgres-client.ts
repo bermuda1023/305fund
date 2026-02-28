@@ -13,6 +13,8 @@ export function getPostgresPool(): Pool {
     max: Math.max(2, Number(process.env.PG_POOL_MAX || 10)),
     idleTimeoutMillis: Math.max(1_000, Number(process.env.PG_POOL_IDLE_MS || 60_000)),
     connectionTimeoutMillis: Math.max(1_000, Number(process.env.PG_POOL_CONNECT_MS || 30_000)),
+    statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT || 20_000),
+    query_timeout: Number(process.env.PG_QUERY_TIMEOUT || 20_000),
   });
   pool.on('error', (err) => {
     console.error('[pg-pool] Unexpected pool error:', err.message);
