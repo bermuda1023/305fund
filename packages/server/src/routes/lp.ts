@@ -473,26 +473,31 @@ router.get('/capital-calls', requireAuth, requireAnyRole, async (req: Request, r
     return;
   }
 
-  const calls = (usePostgresLpReadPath())
-    ? await withPostgresClient(async (client) => {
-      const result = await client.query(
-        `SELECT cci.*, cc.call_number, cc.call_date, cc.due_date, cc.purpose, cc.status as call_status
-         FROM capital_call_items cci
-         JOIN capital_calls cc ON cci.capital_call_id = cc.id
-         WHERE cci.lp_account_id = $1
-         ORDER BY cc.call_date DESC`,
-        [account.id]
-      );
-      return result.rows;
-    })
-    : getDb().prepare(`
-      SELECT cci.*, cc.call_number, cc.call_date, cc.due_date, cc.purpose, cc.status as call_status
-      FROM capital_call_items cci
-      JOIN capital_calls cc ON cci.capital_call_id = cc.id
-      WHERE cci.lp_account_id = ?
-      ORDER BY cc.call_date DESC
-    `).all(account.id);
-  res.json(calls);
+  try {
+    const calls = (usePostgresLpReadPath())
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(
+          `SELECT cci.*, cc.call_number, cc.call_date, cc.due_date, cc.purpose, cc.status as call_status
+           FROM capital_call_items cci
+           JOIN capital_calls cc ON cci.capital_call_id = cc.id
+           WHERE cci.lp_account_id = $1
+           ORDER BY cc.call_date DESC`,
+          [account.id]
+        );
+        return result.rows;
+      })
+      : getDb().prepare(`
+        SELECT cci.*, cc.call_number, cc.call_date, cc.due_date, cc.purpose, cc.status as call_status
+        FROM capital_call_items cci
+        JOIN capital_calls cc ON cci.capital_call_id = cc.id
+        WHERE cci.lp_account_id = ?
+        ORDER BY cc.call_date DESC
+      `).all(account.id);
+    res.json(calls);
+  } catch (error: any) {
+    console.error('[lp] GET /capital-calls failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load capital calls' });
+  }
 });
 
 // GET /api/lp/documents - My documents
@@ -503,22 +508,27 @@ router.get('/documents', requireAuth, requireAnyRole, async (req: Request, res: 
     return;
   }
 
-  const docs = (usePostgresLpReadPath())
-    ? await withPostgresClient(async (client) => {
-      const result = await client.query(
-        `SELECT * FROM documents
-         WHERE (parent_type = 'lp' AND parent_id = $1) OR parent_type = 'fund'
-         ORDER BY uploaded_at DESC`,
-        [account.id]
-      );
-      return result.rows;
-    })
-    : getDb().prepare(`
-      SELECT * FROM documents
-      WHERE (parent_type = 'lp' AND parent_id = ?) OR parent_type = 'fund'
-      ORDER BY uploaded_at DESC
-    `).all(account.id);
-  res.json(docs);
+  try {
+    const docs = (usePostgresLpReadPath())
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(
+          `SELECT * FROM documents
+           WHERE (parent_type = 'lp' AND parent_id = $1) OR parent_type = 'fund'
+           ORDER BY uploaded_at DESC`,
+          [account.id]
+        );
+        return result.rows;
+      })
+      : getDb().prepare(`
+        SELECT * FROM documents
+        WHERE (parent_type = 'lp' AND parent_id = ?) OR parent_type = 'fund'
+        ORDER BY uploaded_at DESC
+      `).all(account.id);
+    res.json(docs);
+  } catch (error: any) {
+    console.error('[lp] GET /documents failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load documents' });
+  }
 });
 
 function toMonthKey(dateIso: string): string {
@@ -1639,14 +1649,15 @@ router.get('/investors', requireAuth, requireGP, async (req: Request, res: Respo
   const sql = `
     SELECT
       lpa.*,
-      COALESCE((
-        SELECT SUM(cci.amount)
-        FROM capital_call_items cci
-        JOIN capital_calls cc ON cc.id = cci.capital_call_id
-        WHERE cci.lp_account_id = lpa.id
-          AND cc.status IN ('sent', 'partially_received', 'completed')
-      ), 0) as called_capital
+      COALESCE(cc_totals.called_capital, 0) as called_capital
     FROM lp_accounts lpa
+    LEFT JOIN (
+      SELECT cci.lp_account_id, SUM(cci.amount) as called_capital
+      FROM capital_call_items cci
+      JOIN capital_calls cc ON cc.id = cci.capital_call_id
+      WHERE cc.status IN ('sent', 'partially_received', 'completed')
+      GROUP BY cci.lp_account_id
+    ) cc_totals ON cc_totals.lp_account_id = lpa.id
     ORDER BY
       CASE
         WHEN lpa.status = 'active' THEN 0
@@ -1655,11 +1666,15 @@ router.get('/investors', requireAuth, requireGP, async (req: Request, res: Respo
       END,
       lpa.name
   `;
-
-  const investors = (usePostgresLpReadPath())
-    ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
-    : getDb().prepare(sql).all();
-  res.json(investors);
+  try {
+    const investors = (usePostgresLpReadPath())
+      ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
+      : getDb().prepare(sql).all();
+    res.json(investors);
+  } catch (error: any) {
+    console.error('[lp] GET /investors failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load investors' });
+  }
 });
 
 // PATCH /api/lp/investors/:id/status - Toggle LP status between pending/active
@@ -1851,30 +1866,35 @@ router.get('/capital-call-items/open', requireAuth, requireGP, async (req: Reque
     JOIN lp_accounts lpa ON lpa.id = cci.lp_account_id
     WHERE cc.status IN ('draft', 'sent', 'partially_received', 'completed')
   `;
-  const rows = (usePostgresLpReadPath())
-    ? await withPostgresClient(async (client) => {
-      let sql = baseSql;
-      const params: any[] = [];
-      if (lpAccountId) {
-        sql += ` AND cci.lp_account_id = $${params.length + 1}`;
-        params.push(lpAccountId);
-      }
-      sql += ' ORDER BY cc.call_date DESC, cc.call_number DESC, lpa.name ASC';
-      const result = await client.query(sql, params);
-      return result.rows;
-    })
-    : (() => {
-      const db = getDb();
-      let sql = baseSql;
-      const params: any[] = [];
-      if (lpAccountId) {
-        sql += ' AND cci.lp_account_id = ?';
-        params.push(lpAccountId);
-      }
-      sql += ' ORDER BY cc.call_date DESC, cc.call_number DESC, lpa.name ASC';
-      return db.prepare(sql).all(...params);
-    })();
-  res.json(rows);
+  try {
+    const rows = (usePostgresLpReadPath())
+      ? await withPostgresClient(async (client) => {
+        let sql = baseSql;
+        const params: any[] = [];
+        if (lpAccountId) {
+          sql += ` AND cci.lp_account_id = $${params.length + 1}`;
+          params.push(lpAccountId);
+        }
+        sql += ' ORDER BY cc.call_date DESC, cc.call_number DESC, lpa.name ASC';
+        const result = await client.query(sql, params);
+        return result.rows;
+      })
+      : (() => {
+        const db = getDb();
+        let sql = baseSql;
+        const params: any[] = [];
+        if (lpAccountId) {
+          sql += ' AND cci.lp_account_id = ?';
+          params.push(lpAccountId);
+        }
+        sql += ' ORDER BY cc.call_date DESC, cc.call_number DESC, lpa.name ASC';
+        return db.prepare(sql).all(...params);
+      })();
+    res.json(rows);
+  } catch (error: any) {
+    console.error('[lp] GET /capital-call-items/open failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load capital call items' });
+  }
 });
 
 // POST /api/lp/distributions/create - Create distribution event with LP allocations

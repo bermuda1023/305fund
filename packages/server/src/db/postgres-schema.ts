@@ -257,6 +257,7 @@ ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS uploaded_by TEXT;
 CREATE TABLE IF NOT EXISTS bank_transactions (
   id BIGSERIAL PRIMARY KEY,
   bank_upload_id BIGINT REFERENCES bank_uploads(id),
+  bank_account_id BIGINT,
   date DATE NOT NULL,
   amount DOUBLE PRECISION NOT NULL,
   description TEXT,
@@ -264,6 +265,9 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
   statement_ref TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
 
 CREATE TABLE IF NOT EXISTS accounting_periods (
   month TEXT PRIMARY KEY,
@@ -412,14 +416,21 @@ CREATE TABLE IF NOT EXISTS rent_reminder_runs (
 CREATE INDEX IF NOT EXISTS idx_building_units_floor ON building_units(floor);
 CREATE INDEX IF NOT EXISTS idx_building_units_fund_owned ON building_units(is_fund_owned);
 CREATE INDEX IF NOT EXISTS idx_portfolio_units_building ON portfolio_units(building_unit_id);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_upload ON bank_transactions(bank_upload_id);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(date);
+CREATE INDEX IF NOT EXISTS idx_portfolio_units_entity ON portfolio_units(entity_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_unit ON cash_flow_actuals(portfolio_unit_id);
+CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_entity ON cash_flow_actuals(entity_id);
+CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_bank_txn ON cash_flow_actuals(bank_transaction_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_lp ON cash_flow_actuals(lp_account_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_call_item ON cash_flow_actuals(capital_call_item_id);
 CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_date ON cash_flow_actuals(date);
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
 CREATE INDEX IF NOT EXISTS idx_fred_data_series ON fred_data(series_id, date);
 CREATE INDEX IF NOT EXISTS idx_capital_call_items_call ON capital_call_items(capital_call_id);
+CREATE INDEX IF NOT EXISTS idx_capital_call_items_lp ON capital_call_items(lp_account_id);
 CREATE INDEX IF NOT EXISTS idx_capital_transactions_lp ON capital_transactions(lp_account_id);
+CREATE INDEX IF NOT EXISTS idx_capital_transactions_date ON capital_transactions(date);
 CREATE INDEX IF NOT EXISTS idx_documents_parent ON documents(parent_type, parent_id);
 CREATE INDEX IF NOT EXISTS idx_document_signing_links_document ON document_signing_links(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_signatures_document ON document_signatures(document_id);

@@ -33,3 +33,38 @@ export async function checkPostgresConnectivity(): Promise<void> {
   });
 }
 
+export async function ensureCriticalPostgresTables(): Promise<void> {
+  await withPostgresClient(async (client) => {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS bank_transactions (
+        id BIGSERIAL PRIMARY KEY,
+        bank_upload_id BIGINT REFERENCES bank_uploads(id),
+        bank_account_id BIGINT,
+        date DATE NOT NULL,
+        amount DOUBLE PRECISION NOT NULL,
+        description TEXT,
+        source_file TEXT,
+        statement_ref TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE bank_transactions ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+      ALTER TABLE bank_uploads ADD COLUMN IF NOT EXISTS bank_account_id BIGINT;
+      CREATE INDEX IF NOT EXISTS idx_bank_transactions_upload ON bank_transactions(bank_upload_id);
+      CREATE INDEX IF NOT EXISTS idx_bank_transactions_date ON bank_transactions(date);
+
+      CREATE TABLE IF NOT EXISTS accounting_periods (
+        month TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+        closed_at TIMESTAMPTZ,
+        closed_by TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_portfolio_units_entity ON portfolio_units(entity_id);
+      CREATE INDEX IF NOT EXISTS idx_capital_call_items_lp ON capital_call_items(lp_account_id);
+      CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_entity ON cash_flow_actuals(entity_id);
+      CREATE INDEX IF NOT EXISTS idx_cash_flow_actuals_bank_txn ON cash_flow_actuals(bank_transaction_id);
+      CREATE INDEX IF NOT EXISTS idx_capital_transactions_date ON capital_transactions(date);
+    `);
+  });
+}
+

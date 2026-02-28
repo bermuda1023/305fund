@@ -49,83 +49,31 @@ router.get('/', async (req: Request, res: Response) => {
       bu.is_owned as is_fund_owned,
       CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END as consensus_status,
       CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END as listing_agreement,
-      CASE WHEN bu.is_owned = 1 THEN COALESCE(t.name, bu.resident_name) ELSE bu.resident_name END as resident_name,
+      bu.resident_name,
       CASE WHEN bu.is_owned = 1 THEN 'investment' ELSE bu.resident_type END as resident_type,
-      CASE WHEN bu.is_owned = 1 THEN COALESCE(e.name, bu.owner_name) ELSE bu.owner_name END as owner_name,
+      bu.owner_name,
       bu.owner_email,
       bu.owner_phone,
-      CASE WHEN bu.is_owned = 1 THEN COALESCE(e.name, bu.owner_company) ELSE bu.owner_company END as owner_company,
+      bu.owner_company,
       bu.notes,
       COALESCE(ut.ownership_pct, 0) as ownership_pct, COALESCE(ut.sqft, 0) as sqft, COALESCE(ut.beds, 0) as beds,
       CASE WHEN bu.is_owned = 1 THEN 'Fund Owned' ELSE NULL END as fund_status
     FROM normalized_units bu
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
-    LEFT JOIN portfolio_units pu ON pu.building_unit_id = bu.id
-    LEFT JOIN entities e ON pu.entity_id = e.id
-    LEFT JOIN tenants t ON t.id = (
-      SELECT t2.id
-      FROM tenants t2
-      WHERE t2.portfolio_unit_id = pu.id AND t2.status IN ('active', 'month_to_month')
-      ORDER BY t2.id DESC
-      LIMIT 1
-    )
     ORDER BY bu.floor, bu.unit_letter
   `;
-  if (usePostgresContracts()) {
-    try {
-      const units = await withPostgresClient(async (client) => {
+  try {
+    const units = usePostgresContracts()
+      ? await withPostgresClient(async (client) => {
         const result = await client.query(sql);
         return result.rows;
-      });
-      res.json(units);
-      return;
-    } catch (error) {
-      // Fallback for partial/legacy schemas where optional join columns/tables may be missing.
-      const units = await withPostgresClient(async (client) => {
-        const fallbackSql = `
-          WITH normalized_units AS (
-            SELECT
-              bu.*,
-              CASE
-                WHEN LOWER(TRIM(COALESCE(CAST(bu.is_fund_owned AS TEXT), '0'))) IN ('1', 'true', 't', 'yes', 'y') THEN 1
-                ELSE 0
-              END AS is_owned
-            FROM building_units bu
-          )
-          SELECT
-            bu.id,
-            bu.floor,
-            bu.unit_letter,
-            bu.unit_number,
-            bu.unit_type_id,
-            bu.is_owned as is_fund_owned,
-            CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.consensus_status END as consensus_status,
-            CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END as listing_agreement,
-            bu.resident_name,
-            bu.resident_type,
-            bu.owner_name,
-            bu.owner_email,
-            bu.owner_phone,
-            bu.owner_company,
-            bu.notes,
-            COALESCE(ut.ownership_pct, 0) as ownership_pct,
-            COALESCE(ut.sqft, 0) as sqft,
-            COALESCE(ut.beds, 0) as beds,
-            CASE WHEN bu.is_owned = 1 THEN 'Fund Owned' ELSE NULL END as fund_status
-          FROM normalized_units bu
-          LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
-          ORDER BY bu.floor, bu.unit_letter
-        `;
-        const result = await client.query(fallbackSql);
-        return result.rows;
-      });
-      res.json(units);
-      return;
-    }
+      })
+      : getDb().prepare(sql).all();
+    res.json(units);
+  } catch (error: any) {
+    console.error('[contracts] GET / failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load units' });
   }
-
-  const units = getDb().prepare(sql).all();
-  res.json(units);
 });
 
 // PUT /api/contracts/:id - Update unit status
@@ -282,70 +230,71 @@ router.get('/progress', async (req: Request, res: Response) => {
     FROM normalized_units bu
     LEFT JOIN unit_types ut ON bu.unit_type_id = ut.id
   `;
-  const { stats, weighted } = usePostgresContracts()
-    ? await withPostgresClient(async (client) => {
-      const [statsResult, weightedResult] = await Promise.all([
-        client.query(statsSql),
-        client.query(weightedSql),
-      ]);
-      return {
-        stats: (statsResult.rows[0] || {}) as any,
-        weighted: (weightedResult.rows[0] || {}) as any,
-      };
-    })
-    : (() => {
-      const db = getDb();
-      return {
-        stats: db.prepare(statsSql).get() as any,
-        weighted: db.prepare(weightedSql).get() as any,
-      };
-    })();
+  try {
+    const { stats, weighted } = usePostgresContracts()
+      ? await withPostgresClient(async (client) => {
+        const [statsResult, weightedResult] = await Promise.all([
+          client.query(statsSql),
+          client.query(weightedSql),
+        ]);
+        return {
+          stats: (statsResult.rows[0] || {}) as any,
+          weighted: (weightedResult.rows[0] || {}) as any,
+        };
+      })
+      : (() => {
+        const db = getDb();
+        return {
+          stats: db.prepare(statsSql).get() as any,
+          weighted: db.prepare(weightedSql).get() as any,
+        };
+      })();
 
-  const total = stats.total || BUILDING.totalUnits;
-  const neededFor80 = Math.ceil(total * 0.80);
-  const signedConsensus = stats.signed_consensus || 0;
-  const signedListing = stats.signed_listing || 0;
-  const noVotes = stats.no_votes || 0;
-  const pending = stats.pending || 0;
-  const abstain = stats.abstain || 0;
+    const total = stats.total || BUILDING.totalUnits;
+    const neededFor80 = Math.ceil(total * 0.80);
+    const signedConsensus = stats.signed_consensus || 0;
+    const signedListing = stats.signed_listing || 0;
+    const noVotes = stats.no_votes || 0;
+    const pending = stats.pending || 0;
+    const abstain = stats.abstain || 0;
 
-  const consensusPct = total > 0 ? signedConsensus / total * 100 : 0;
-  const listingPct = total > 0 ? signedListing / total * 100 : 0;
-  const noVotePct = total > 0 ? noVotes / total * 100 : 0;
-  const pendingPct = total > 0 ? pending / total * 100 : 0;
-  const abstainPct = total > 0 ? abstain / total * 100 : 0;
+    const consensusPct = total > 0 ? signedConsensus / total * 100 : 0;
+    const listingPct = total > 0 ? signedListing / total * 100 : 0;
+    const noVotePct = total > 0 ? noVotes / total * 100 : 0;
+    const pendingPct = total > 0 ? pending / total * 100 : 0;
+    const abstainPct = total > 0 ? abstain / total * 100 : 0;
 
-  // 5% no votes blocks the deal even if 80% yes
-  const isBlocked = noVotePct >= 5;
-  // Can pass: 80% yes AND not blocked by 5% no threshold
-  const canPass = consensusPct >= 80 && !isBlocked;
+    const isBlocked = noVotePct >= 5;
+    const canPass = consensusPct >= 80 && !isBlocked;
 
-  res.json({
-    totalUnits: total,
-    signedConsensus,
-    signedListing,
-    unsigned: stats.unsigned || 0,
-    unknown: stats.unknown || 0,
-    consensusPct,
-    listingPct,
-    neededFor80Pct: neededFor80,
-    remainingToReach80: Math.max(0, neededFor80 - signedListing),
-    // New voting logic fields
-    noVotes,
-    noVotePct,
-    pending,
-    pendingPct,
-    isBlocked,
-    abstain,
-    abstainPct,
-    canPass,
-    // Ownership-weighted percentages
-    noVoteOwnershipPct: weighted.no_ownership || 0,
-    pendingOwnershipPct: weighted.pending_ownership || 0,
-    yesVoteOwnershipPct: weighted.yes_ownership || 0,
-    fundOwnedUnits: stats.fund_owned || 0,
-    fundOwnershipPct: weighted.fund_ownership || 0,
-  });
+    res.json({
+      totalUnits: total,
+      signedConsensus,
+      signedListing,
+      unsigned: stats.unsigned || 0,
+      unknown: stats.unknown || 0,
+      consensusPct,
+      listingPct,
+      neededFor80Pct: neededFor80,
+      remainingToReach80: Math.max(0, neededFor80 - signedListing),
+      noVotes,
+      noVotePct,
+      pending,
+      pendingPct,
+      isBlocked,
+      abstain,
+      abstainPct,
+      canPass,
+      noVoteOwnershipPct: weighted.no_ownership || 0,
+      pendingOwnershipPct: weighted.pending_ownership || 0,
+      yesVoteOwnershipPct: weighted.yes_ownership || 0,
+      fundOwnedUnits: stats.fund_owned || 0,
+      fundOwnershipPct: weighted.fund_ownership || 0,
+    });
+  } catch (error: any) {
+    console.error('[contracts] GET /progress failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load vote progress' });
+  }
 });
 
 // GET /api/contracts/flagged - Unsigned holdouts
@@ -368,13 +317,18 @@ router.get('/flagged', async (req: Request, res: Response) => {
       AND (CASE WHEN bu.is_owned = 1 THEN 'signed' ELSE bu.listing_agreement END) = 'unsigned'
     ORDER BY bu.floor, bu.unit_letter
   `;
-  const flagged = usePostgresContracts()
-    ? await withPostgresClient(async (client) => {
-      const result = await client.query(sql);
-      return result.rows;
-    })
-    : getDb().prepare(sql).all();
-  res.json(flagged);
+  try {
+    const flagged = usePostgresContracts()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(sql);
+        return result.rows;
+      })
+      : getDb().prepare(sql).all();
+    res.json(flagged);
+  } catch (error: any) {
+    console.error('[contracts] GET /flagged failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load flagged units' });
+  }
 });
 
 // POST /api/contracts/import-master-list - Import BTH master list Excel

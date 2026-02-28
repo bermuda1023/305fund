@@ -16,7 +16,7 @@ import { requireAuth, requireGP } from './middleware/auth';
 import { Client } from 'pg';
 import { getStorageBackend, readStoredFile } from './lib/storage';
 import { validateRuntimeEnv } from './lib/env';
-import { checkPostgresConnectivity, withPostgresClient } from './db/postgres-client';
+import { checkPostgresConnectivity, ensureCriticalPostgresTables, withPostgresClient } from './db/postgres-client';
 import { getDbRuntimeMode, isPostgresPrimaryMode, sqliteFallbackEnabled, usePostgresReads } from './db/runtime-mode';
 import { reconcileCriticalTables } from './db/reconciliation';
 import { getLpAccountByUserId } from './db/repositories/lp-repository';
@@ -365,6 +365,14 @@ async function start() {
   }
   if (mustHavePersistentStoreReady()) {
     await verifyPostgresBridgeConnectivity();
+  }
+
+  if (isPostgresPrimaryMode()) {
+    try {
+      await ensureCriticalPostgresTables();
+    } catch (err) {
+      console.error('[startup] Failed to ensure critical Postgres tables:', err);
+    }
   }
 
   // Optional promotion blocker: fail startup if cutover safety gates are not satisfied.

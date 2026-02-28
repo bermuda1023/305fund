@@ -14,23 +14,26 @@ const usePostgresEntities = () => isPostgresPrimaryMode() || usePostgresReads();
 
 // GET /api/entities
 router.get('/', async (req: Request, res: Response) => {
-  const entities = usePostgresEntities()
-    ? await withPostgresClient(async (client) => {
-      const result = await client.query(`
-        SELECT e.*,
-          (SELECT COUNT(*) FROM portfolio_units pu WHERE pu.entity_id = e.id) as unit_count
-        FROM entities e
-        ORDER BY e.name
-      `);
-      return result.rows;
-    })
-    : getDb().prepare(`
-      SELECT e.*,
-        (SELECT COUNT(*) FROM portfolio_units pu WHERE pu.entity_id = e.id) as unit_count
-      FROM entities e
-      ORDER BY e.name
-    `).all();
-  res.json(entities);
+  const sql = `
+    SELECT e.*, COALESCE(pu_counts.unit_count, 0) as unit_count
+    FROM entities e
+    LEFT JOIN (
+      SELECT entity_id, COUNT(*) as unit_count
+      FROM portfolio_units
+      WHERE entity_id IS NOT NULL
+      GROUP BY entity_id
+    ) pu_counts ON pu_counts.entity_id = e.id
+    ORDER BY e.name
+  `;
+  try {
+    const entities = usePostgresEntities()
+      ? await withPostgresClient(async (client) => (await client.query(sql)).rows)
+      : getDb().prepare(sql).all();
+    res.json(entities);
+  } catch (error: any) {
+    console.error('[entities] GET / failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load entities' });
+  }
 });
 
 // POST /api/entities
@@ -99,18 +102,23 @@ router.put('/:id', async (req: Request, res: Response) => {
 
 // GET /api/entities/:id/documents
 router.get('/:id/documents', async (req: Request, res: Response) => {
-  const docs = usePostgresEntities()
-    ? await withPostgresClient(async (client) => {
-      const result = await client.query(
-        "SELECT * FROM documents WHERE parent_type = 'entity' AND parent_id = $1 ORDER BY uploaded_at DESC",
-        [req.params.id]
-      );
-      return result.rows;
-    })
-    : getDb().prepare(
-      "SELECT * FROM documents WHERE parent_type = 'entity' AND parent_id = ? ORDER BY uploaded_at DESC"
-    ).all(req.params.id);
-  res.json(docs);
+  try {
+    const docs = usePostgresEntities()
+      ? await withPostgresClient(async (client) => {
+        const result = await client.query(
+          "SELECT * FROM documents WHERE parent_type = 'entity' AND parent_id = $1 ORDER BY uploaded_at DESC",
+          [req.params.id]
+        );
+        return result.rows;
+      })
+      : getDb().prepare(
+        "SELECT * FROM documents WHERE parent_type = 'entity' AND parent_id = ? ORDER BY uploaded_at DESC"
+      ).all(req.params.id);
+    res.json(docs);
+  } catch (error: any) {
+    console.error('[entities] GET /:id/documents failed:', error?.message || error);
+    res.status(500).json({ error: error?.message || 'Failed to load documents' });
+  }
 });
 
 export default router;
