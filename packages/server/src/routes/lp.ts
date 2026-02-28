@@ -1850,9 +1850,9 @@ router.get('/capital-call-items/open', requireAuth, requireGP, async (req: Reque
 
   const baseSql = `
     SELECT
-      cci.id as item_id,
-      cci.capital_call_id,
-      cci.lp_account_id,
+      cci.id::int as item_id,
+      cci.capital_call_id::int as capital_call_id,
+      cci.lp_account_id::int as lp_account_id,
       cci.amount,
       cci.status,
       cci.received_amount,

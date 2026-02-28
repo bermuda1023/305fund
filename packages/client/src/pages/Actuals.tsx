@@ -202,6 +202,11 @@ function fmtDate(iso: string) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function toId(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 /* ── Component ───────────────────────────────────────────────── */
 
 export default function Actuals() {
@@ -413,12 +418,21 @@ export default function Actuals() {
 
   const { data: lpAccounts = [] } = useQuery<LPAccountOption[]>({
     queryKey: ['gp-investors'],
-    queryFn: () => api.get('/lp/investors').then((r) => r.data),
+    queryFn: () => api.get('/lp/investors').then((r) => (r.data as any[]).map((row) => ({
+      ...row,
+      id: toId(row.id),
+    }))),
   });
 
   const { data: openCapitalCallItems = [] } = useQuery<CapitalCallItemOption[]>({
     queryKey: ['capital-call-items-open'],
-    queryFn: () => api.get('/lp/capital-call-items/open').then((r) => r.data),
+    queryFn: () => api.get('/lp/capital-call-items/open').then((r) => (r.data as any[]).map((row) => ({
+      ...row,
+      item_id: toId(row.item_id),
+      capital_call_id: toId(row.capital_call_id),
+      lp_account_id: toId(row.lp_account_id),
+      call_number: toId(row.call_number),
+    }))),
   });
 
   /* ── Mutations ───────────────────────────────────────────── */
@@ -840,7 +854,7 @@ export default function Actuals() {
   const selectedCallItems = useMemo(() => {
     if (!selectedLpId) return [];
     return openCapitalCallItems
-      .filter((i) => i.lp_account_id === selectedLpId)
+      .filter((i) => Number(i.lp_account_id) === selectedLpId)
       .sort((a, b) => b.call_number - a.call_number);
   }, [openCapitalCallItems, selectedLpId]);
 
@@ -1504,7 +1518,7 @@ export default function Actuals() {
                           : '\u2014'}
                       </option>
                       {openCapitalCallItems
-                        .filter((item) => item.lp_account_id === t.lp_account_id)
+                        .filter((item) => Number(item.lp_account_id) === Number(t.lp_account_id))
                         .map((item) => (
                           <option key={item.item_id} value={item.item_id}>
                             #{item.call_number}
