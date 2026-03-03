@@ -84,6 +84,32 @@ interface CapitalCallLineItem {
   bank_txn_id?: string | null;
 }
 
+interface CapitalRaisingContact {
+  first_name: string;
+  last_name: string;
+  company: string;
+  location: string;
+  email: string;
+  conference: string;
+  title: string;
+}
+
+interface CapitalRaisingStats {
+  dailyCap: number;
+  sentToday: number;
+  dailyRemaining: number;
+  totalSent: number;
+}
+
+interface CapitalRaisingSendResult {
+  sentCount: number;
+  failedCount: number;
+  totalContacts: number;
+  skippedAlreadySentCount: number;
+  skippedDailyCapCount: number;
+  dailyRemaining: number;
+}
+
 function getDefaultCallSubject(callNumber: number) {
   return `Capital Call {{call_number}} — {{fund_name}}`.replace('{{call_number}}', String(callNumber));
 }
@@ -898,6 +924,277 @@ function GPCapitalCallSection() {
   );
 }
 
+function GPCapitalRaisingSection() {
+  const [contacts, setContacts] = useState<CapitalRaisingContact[]>([]);
+  const [contactFileName, setContactFileName] = useState('');
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const [subject, setSubject] = useState('Intro — {{fund_name}}');
+  const [body, setBody] = useState(
+    'Hi {{first_name}},\n\nGreat meeting you at {{conference}}.\n\nI wanted to share {{fund_name}} and see if this fits your current mandate.\n\nBest,\n305 Opportunities Fund'
+  );
+  const [cc, setCc] = useState('lance@305opportunityfund.com');
+  const [bcc, setBcc] = useState('');
+  const [fundName, setFundName] = useState('305 Opportunities Fund');
+  const [batchSize, setBatchSize] = useState(50);
+  const [delayMs, setDelayMs] = useState(0);
+  const [statusText, setStatusText] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const { data: raisingStats } = useQuery<CapitalRaisingStats>({
+    queryKey: ['capital-raising-stats'],
+    queryFn: () => api.get('/lp/capital-raising/stats').then((r) => r.data),
+    refetchInterval: LIVE_REFRESH_MS,
+  });
+
+  const parseContactsMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      const response = await api.post('/lp/capital-raising/contacts/parse', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data as {
+        filename: string;
+        totalContacts: number;
+        skippedRows: number;
+        contacts: CapitalRaisingContact[];
+      };
+    },
+    onSuccess: (result) => {
+      setContactFileName(result.filename);
+      setContacts(result.contacts || []);
+      setStatusText(`Loaded ${num(result.totalContacts)} contacts (${num(result.skippedRows)} skipped).`);
+    },
+    onError: (err: any) => {
+      window.alert(err?.response?.data?.error || 'Failed to parse contact file.');
+    },
+  });
+
+  const sendCampaignMutation = useMutation({
+    mutationFn: async () => {
+      const form = new FormData();
+      form.append('subject', subject);
+      form.append('body', body);
+      form.append('cc', cc);
+      form.append('bcc', bcc);
+      form.append('fundName', fundName);
+      form.append('batchSize', String(batchSize));
+      form.append('delayMs', String(delayMs));
+      form.append('contacts', JSON.stringify(contacts));
+      if (attachmentFile) form.append('attachment', attachmentFile);
+      const response = await api.post('/lp/capital-raising/send', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data as CapitalRaisingSendResult;
+    },
+    onSuccess: (result) => {
+      setStatusText(
+        `Campaign complete. Sent ${num(result.sentCount)}, failed ${num(result.failedCount)}, skipped already sent ${num(result.skippedAlreadySentCount ?? 0)}, skipped cap ${num(result.skippedDailyCapCount ?? 0)}.`
+      );
+      queryClient.invalidateQueries({ queryKey: ['capital-raising-stats'] });
+      window.alert(
+        `Capital raising send complete.\nSent: ${result.sentCount}\nFailed: ${result.failedCount}\nSkipped (already sent): ${result.skippedAlreadySentCount ?? 0}\nSkipped (daily cap): ${result.skippedDailyCapCount ?? 0}\nDaily remaining: ${result.dailyRemaining ?? 0}`
+      );
+    },
+    onError: (err: any) => {
+      window.alert(err?.response?.data?.error || 'Failed to send campaign.');
+    },
+  });
+
+  return (
+    <div className="card mb-4">
+      <div className="card-header flex-between">
+        <span className="card-title">Capital Raising Mail Merge</span>
+        <span className="badge" style={{ background: 'var(--teal)', color: '#fff' }}>
+          {num(contacts.length)} contacts
+        </span>
+      </div>
+
+      <div style={{ padding: '0 1.25rem 1rem' }}>
+        {raisingStats && (
+          <div
+            style={{
+              marginBottom: '0.85rem',
+              padding: '0.7rem 0.8rem',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: 'var(--bg-secondary)',
+              fontSize: '0.82rem',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            Daily cap: {num(raisingStats.dailyCap)} · Sent today: {num(raisingStats.sentToday)} · Remaining today: {num(raisingStats.dailyRemaining)} · Total sent historically: {num(raisingStats.totalSent)}
+          </div>
+        )}
+        <div className="form-row">
+          <div className="form-group" style={{ flex: 1 }}>
+            <label className="form-label">Upload Contact File (.xlsx, .xlsm, .csv)</label>
+            <input
+              className="form-input"
+              type="file"
+              accept=".xlsx,.xlsm,.csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                parseContactsMutation.mutate(file);
+              }}
+            />
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+              Columns expected: First Name, Last Name, Company, Location, Email, Conference, Title.
+            </div>
+            {contactFileName && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                Loaded file: {contactFileName}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group" style={{ flex: 1 }}>
+            <label className="form-label">Email Subject *</label>
+            <input
+              className="form-input"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder="Intro — {{fund_name}}"
+            />
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group" style={{ flex: 1 }}>
+            <label className="form-label">Email Body *</label>
+            <textarea
+              className="form-input"
+              rows={6}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder={'Hi {{first_name}},\n\n...'}
+            />
+          </div>
+        </div>
+
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '0.55rem' }}>
+          Mail merge tags: {'{{first_name}}'}, {'{{last_name}}'}, {'{{full_name}}'}, {'{{company}}'}, {'{{location}}'}, {'{{email}}'}, {'{{conference}}'}, {'{{title}}'}, {'{{fund_name}}'}
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label className="form-label">CC (comma separated)</label>
+            <input className="form-input" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="team@fund.com" />
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              lance@305opportunityfund.com is always CC'd by default.
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">BCC (comma separated)</label>
+            <input className="form-input" value={bcc} onChange={(e) => setBcc(e.target.value)} placeholder="audit@fund.com" />
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label className="form-label">Fund Name</label>
+            <input className="form-input" value={fundName} onChange={(e) => setFundName(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Batch Size</label>
+            <input
+              className="form-input"
+              type="number"
+              min={1}
+              max={200}
+              value={batchSize}
+              onChange={(e) => setBatchSize(Math.max(1, Math.min(200, Number(e.target.value) || 1)))}
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Delay Between Batches (ms)</label>
+            <input
+              className="form-input"
+              type="number"
+              min={0}
+              value={delayMs}
+              onChange={(e) => setDelayMs(Math.max(0, Number(e.target.value) || 0))}
+            />
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group" style={{ flex: 1 }}>
+            <label className="form-label">Attachment (optional)</label>
+            <input
+              className="form-input"
+              type="file"
+              onChange={(e) => setAttachmentFile(e.target.files?.[0] || null)}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className="btn btn-primary"
+            disabled={
+              parseContactsMutation.isPending
+              || sendCampaignMutation.isPending
+              || contacts.length === 0
+              || !subject.trim()
+              || !body.trim()
+            }
+            onClick={() => sendCampaignMutation.mutate()}
+          >
+            {sendCampaignMutation.isPending ? 'Sending Campaign...' : 'Send Campaign'}
+          </button>
+        </div>
+
+        {statusText && (
+          <div style={{ marginTop: '0.65rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            {statusText}
+          </div>
+        )}
+      </div>
+
+      {contacts.length > 0 && (
+        <div style={{ padding: '0 1.25rem 1rem' }}>
+          <h4 style={{ margin: '0 0 0.55rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            Contact Preview
+          </h4>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Company</th>
+                <th>Location</th>
+                <th>Email</th>
+                <th>Conference</th>
+                <th>Title</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.slice(0, 10).map((c, idx) => (
+                <tr key={`${c.email}-${idx}`}>
+                  <td>{`${c.first_name || ''} ${c.last_name || ''}`.trim() || '—'}</td>
+                  <td>{c.company || '—'}</td>
+                  <td>{c.location || '—'}</td>
+                  <td>{c.email}</td>
+                  <td>{c.conference || '—'}</td>
+                  <td>{c.title || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {contacts.length > 10 && (
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.45rem' }}>
+              Showing first 10 of {num(contacts.length)} contacts.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Main LP Portal Page ────────────────────────────────────────── */
 
 export default function LPPortal({ adminMode = false }: { adminMode?: boolean }) {
@@ -978,6 +1275,7 @@ export default function LPPortal({ adminMode = false }: { adminMode?: boolean })
         <>
           <GPInvestorSection />
           <GPCapitalCallSection />
+          <GPCapitalRaisingSection />
         </>
       ) : (
         <>

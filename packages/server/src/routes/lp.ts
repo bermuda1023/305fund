@@ -6,6 +6,10 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/database';
 import { requireAuth, requireGP, requireAnyRole } from '../middleware/auth';
+import multer from 'multer';
+import path from 'path';
+import ExcelJS from 'exceljs';
+import { parse as parseCsvSync } from 'csv-parse/sync';
 import {
   projectCashFlows,
   generateDefaultAcquisitionSchedule,
@@ -28,6 +32,10 @@ import { sqliteFallbackEnabled, usePostgresLpRoutes, usePostgresReads } from '..
 
 const router = Router();
 const usePostgresLpReadPath = () => usePostgresReads() || usePostgresLpRoutes();
+const capitalRaisingUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
 
 function rejectWhenSqliteFallbackDisabled(res: Response, error: any) {
   res.status(502).json({ error: error?.message || 'Postgres path failed and SQLite fallback is disabled' });
@@ -228,6 +236,217 @@ function renderMergeTemplate(tpl: string, vars: Record<string, string>) {
     out = out.replace(new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g'), v);
   }
   return out;
+}
+
+type CapitalRaisingContact = {
+  first_name: string;
+  last_name: string;
+  company: string;
+  location: string;
+  email: string;
+  conference: string;
+  title: string;
+};
+
+function normalizeHeader(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function readCellValue(value: any): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
+  if (typeof value === 'object') {
+    if ('result' in value && value.result != null) return String(value.result).trim();
+    if ('text' in value && value.text != null) return String(value.text).trim();
+    if ('richText' in value && Array.isArray(value.richText)) {
+      return value.richText.map((p: any) => String(p?.text || '')).join('').trim();
+    }
+  }
+  return String(value).trim();
+}
+
+function parseEmailList(raw: any): string[] {
+  return String(raw || '')
+    .split(/[,\n;]/g)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => /\S+@\S+\.\S+/.test(s));
+}
+
+function pickField(row: Record<string, string>, candidates: string[]): string {
+  for (const candidate of candidates) {
+    const normalized = normalizeHeader(candidate);
+    const value = row[normalized];
+    if (value != null && String(value).trim() !== '') return String(value).trim();
+  }
+  return '';
+}
+
+function normalizeContacts(rawRows: Array<Record<string, string>>): { contacts: CapitalRaisingContact[]; skippedRows: number } {
+  const contacts: CapitalRaisingContact[] = [];
+  let skippedRows = 0;
+  const seenEmails = new Set<string>();
+
+  for (const rawRow of rawRows) {
+    const firstName = pickField(rawRow, ['first name', 'firstname', 'first_name']);
+    const lastName = pickField(rawRow, ['last name', 'lastname', 'last_name']);
+    const company = pickField(rawRow, ['company', 'organization', 'firm']);
+    const location = pickField(rawRow, ['location', 'city', 'market']);
+    const email = pickField(rawRow, ['email', 'email address', 'emailaddress']).toLowerCase();
+    const conference = pickField(rawRow, ['conference', 'event']);
+    const title = pickField(rawRow, ['title', 'job title', 'position', 'role']);
+
+    if (!email || !/\S+@\S+\.\S+/.test(email)) {
+      skippedRows += 1;
+      continue;
+    }
+    if (seenEmails.has(email)) {
+      skippedRows += 1;
+      continue;
+    }
+    seenEmails.add(email);
+    contacts.push({
+      first_name: firstName,
+      last_name: lastName,
+      company,
+      location,
+      email,
+      conference,
+      title,
+    });
+  }
+
+  return { contacts, skippedRows };
+}
+
+async function parseCapitalRaisingContacts(fileName: string, fileBuffer: Buffer): Promise<{ contacts: CapitalRaisingContact[]; skippedRows: number }> {
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  const rows: Array<Record<string, string>> = [];
+
+  if (ext === '.csv') {
+    const parsed = parseCsvSync(fileBuffer.toString('utf8'), {
+      columns: true,
+      skip_empty_lines: true,
+      relax_column_count: true,
+    }) as Array<Record<string, any>>;
+    for (const row of parsed) {
+      const normalized: Record<string, string> = {};
+      for (const [k, v] of Object.entries(row || {})) {
+        normalized[normalizeHeader(k)] = readCellValue(v);
+      }
+      rows.push(normalized);
+    }
+    return normalizeContacts(rows);
+  }
+
+  if (ext !== '.xlsx' && ext !== '.xlsm') {
+    throw new Error('Only .xlsx, .xlsm, or .csv files are supported for capital raising contacts.');
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(fileBuffer);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) return { contacts: [], skippedRows: 0 };
+
+  const headerCells = (sheet.getRow(1).values as any[]).slice(1);
+  const normalizedHeaders = headerCells.map((h) => normalizeHeader(readCellValue(h)));
+  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
+    const rowValues = (sheet.getRow(rowNumber).values as any[]).slice(1);
+    if (rowValues.every((v) => readCellValue(v) === '')) continue;
+    const normalized: Record<string, string> = {};
+    normalizedHeaders.forEach((header, idx) => {
+      if (!header) return;
+      normalized[header] = readCellValue(rowValues[idx]);
+    });
+    rows.push(normalized);
+  }
+
+  return normalizeContacts(rows);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function currentEmailProvider(): string {
+  if (String(process.env.SENDGRID_API_KEY || '').trim()) return 'sendgrid';
+  if (String(process.env.RESEND_API_KEY || '').trim()) return 'resend';
+  return 'unknown';
+}
+
+function capitalRaisingDailyCap(): number {
+  return Math.max(1, Number(process.env.SENDGRID_DAILY_CAP || 100));
+}
+
+function ensureCapitalRaisingLogSqlite(db: ReturnType<typeof getDb>) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS capital_raising_email_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id TEXT NOT NULL,
+      recipient_email TEXT NOT NULL,
+      subject TEXT,
+      provider TEXT,
+      status TEXT NOT NULL
+        CHECK (status IN ('sent', 'failed', 'skipped_already_sent', 'skipped_daily_cap')),
+      error_text TEXT,
+      created_by TEXT,
+      sent_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_cap_raising_email_log_email ON capital_raising_email_log(recipient_email);
+    CREATE INDEX IF NOT EXISTS idx_cap_raising_email_log_sent_at ON capital_raising_email_log(sent_at);
+  `);
+}
+
+async function ensureCapitalRaisingLogPg(client: any) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS capital_raising_email_log (
+      id BIGSERIAL PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      recipient_email TEXT NOT NULL,
+      subject TEXT,
+      provider TEXT,
+      status TEXT NOT NULL
+        CHECK (status IN ('sent', 'failed', 'skipped_already_sent', 'skipped_daily_cap')),
+      error_text TEXT,
+      created_by TEXT,
+      sent_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cap_raising_email_log_email ON capital_raising_email_log(recipient_email);
+    CREATE INDEX IF NOT EXISTS idx_cap_raising_email_log_sent_at ON capital_raising_email_log(sent_at);
+  `);
+}
+
+async function getCapitalRaisingStatsPg(client: any): Promise<{ sentToday: number; totalSent: number }> {
+  const stats = await client.query(
+    `
+    SELECT
+      COALESCE(SUM(CASE WHEN status = 'sent' AND DATE(sent_at) = CURRENT_DATE THEN 1 ELSE 0 END), 0)::int AS sent_today,
+      COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0)::int AS total_sent
+    FROM capital_raising_email_log
+    `
+  );
+  return {
+    sentToday: Number(stats.rows[0]?.sent_today || 0),
+    totalSent: Number(stats.rows[0]?.total_sent || 0),
+  };
+}
+
+function getCapitalRaisingStatsSqlite(db: ReturnType<typeof getDb>): { sentToday: number; totalSent: number } {
+  const row = db.prepare(
+    `
+    SELECT
+      COALESCE(SUM(CASE WHEN status = 'sent' AND date(sent_at) = date('now') THEN 1 ELSE 0 END), 0) AS sent_today,
+      COALESCE(SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END), 0) AS total_sent
+    FROM capital_raising_email_log
+    `
+  ).get() as any;
+  return {
+    sentToday: Number(row?.sent_today || 0),
+    totalSent: Number(row?.total_sent || 0),
+  };
 }
 
 // ---- LP Read-Only Routes ----
@@ -2784,6 +3003,324 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
     ],
     message: 'Capital call notices processed with mail merge and per-LP delivery.',
   });
+});
+
+// POST /api/lp/capital-raising/contacts/parse - Parse uploaded Excel/CSV contact list
+router.post('/capital-raising/contacts/parse', requireAuth, requireGP, capitalRaisingUpload.single('file'), async (req: Request, res: Response) => {
+  try {
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file || !file.buffer) {
+      res.status(400).json({ error: 'Contact file is required.' });
+      return;
+    }
+    const parsed = await parseCapitalRaisingContacts(file.originalname || 'contacts.xlsx', file.buffer);
+    res.json({
+      filename: file.originalname,
+      totalContacts: parsed.contacts.length,
+      skippedRows: parsed.skippedRows,
+      contacts: parsed.contacts,
+      availableMergeTags: [
+        '{{first_name}}',
+        '{{last_name}}',
+        '{{full_name}}',
+        '{{company}}',
+        '{{location}}',
+        '{{email}}',
+        '{{conference}}',
+        '{{title}}',
+        '{{fund_name}}',
+      ],
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error?.message || 'Failed to parse contact file.' });
+  }
+});
+
+// GET /api/lp/capital-raising/stats - Daily cap and historical send stats
+router.get('/capital-raising/stats', requireAuth, requireGP, async (req: Request, res: Response) => {
+  try {
+    const dailyCap = capitalRaisingDailyCap();
+    if (usePostgresLpRoutes()) {
+      const result = await withPostgresClient(async (client) => {
+        await ensureCapitalRaisingLogPg(client);
+        return getCapitalRaisingStatsPg(client);
+      });
+      res.json({
+        dailyCap,
+        sentToday: result.sentToday,
+        dailyRemaining: Math.max(0, dailyCap - result.sentToday),
+        totalSent: result.totalSent,
+      });
+      return;
+    }
+
+    const db = getDb();
+    ensureCapitalRaisingLogSqlite(db);
+    const result = getCapitalRaisingStatsSqlite(db);
+    res.json({
+      dailyCap,
+      sentToday: result.sentToday,
+      dailyRemaining: Math.max(0, dailyCap - result.sentToday),
+      totalSent: result.totalSent,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Failed to load capital raising stats.' });
+  }
+});
+
+// POST /api/lp/capital-raising/send - Send mail merge campaign to uploaded contacts
+router.post('/capital-raising/send', requireAuth, requireGP, capitalRaisingUpload.single('attachment'), async (req: Request, res: Response) => {
+  try {
+    const contactsRaw = req.body?.contacts;
+    const subjectTemplate = String(req.body?.subject || '').trim();
+    const bodyTemplate = String(req.body?.body || '').trim();
+    const fundName = String(req.body?.fundName || process.env.FUND_NAME || '305 Opportunities Fund');
+    const batchSize = Math.min(200, Math.max(1, Number(req.body?.batchSize || 50)));
+    const delayMs = Math.max(0, Number(req.body?.delayMs || 0));
+    const ccInput = parseEmailList(req.body?.cc);
+    const bcc = parseEmailList(req.body?.bcc);
+    const fromEmail = 'james@305opportunityfund.com';
+    const alwaysCc = ['lance@305opportunityfund.com'];
+    const cc = Array.from(new Set([...alwaysCc, ...ccInput]));
+
+    if (!contactsRaw) {
+      res.status(400).json({ error: 'contacts payload is required.' });
+      return;
+    }
+    if (!subjectTemplate || !bodyTemplate) {
+      res.status(400).json({ error: 'subject and body are required.' });
+      return;
+    }
+
+    const parsedContacts = Array.isArray(contactsRaw)
+      ? contactsRaw
+      : JSON.parse(String(contactsRaw));
+    if (!Array.isArray(parsedContacts) || parsedContacts.length === 0) {
+      res.status(400).json({ error: 'No contacts provided.' });
+      return;
+    }
+
+    const normalizedRows = (parsedContacts as Array<Record<string, any>>).map((row) => {
+      const normalizedRow: Record<string, string> = {};
+      for (const [key, value] of Object.entries(row || {})) {
+        normalizedRow[normalizeHeader(key)] = readCellValue(value);
+      }
+      return normalizedRow;
+    });
+    const normalized = normalizeContacts(normalizedRows);
+    const contacts = normalized.contacts;
+    if (contacts.length === 0) {
+      res.status(400).json({ error: 'No valid contacts with email addresses were found.' });
+      return;
+    }
+
+    const attachmentFile = (req as any).file as Express.Multer.File | undefined;
+    const attachments = attachmentFile
+      ? [{
+          filename: attachmentFile.originalname || 'attachment',
+          contentType: attachmentFile.mimetype || 'application/octet-stream',
+          contentBase64: attachmentFile.buffer.toString('base64'),
+        }]
+      : undefined;
+
+    const campaignId = `cr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const provider = currentEmailProvider();
+    const createdBy = String((req as any).user?.email || '').trim() || null;
+    const dailyCap = capitalRaisingDailyCap();
+    let sentCount = 0;
+    let failedCount = 0;
+    let skippedAlreadySentCount = 0;
+    let skippedDailyCapCount = 0;
+    const failedEmails: string[] = [];
+    let sentToday = 0;
+
+    if (usePostgresLpRoutes()) {
+      sentToday = await withPostgresClient(async (client) => {
+        await ensureCapitalRaisingLogPg(client);
+        const stats = await getCapitalRaisingStatsPg(client);
+        return stats.sentToday;
+      });
+    } else {
+      const db = getDb();
+      ensureCapitalRaisingLogSqlite(db);
+      sentToday = getCapitalRaisingStatsSqlite(db).sentToday;
+    }
+
+    const alreadySeenInRun = new Set<string>();
+    let processedInBatch = 0;
+    for (const contact of contacts) {
+      const email = String(contact.email || '').trim().toLowerCase();
+      if (!email) continue;
+      if (alreadySeenInRun.has(email)) continue;
+      alreadySeenInRun.add(email);
+
+      const fullName = `${contact.first_name} ${contact.last_name}`.trim();
+      const vars: Record<string, string> = {
+        first_name: contact.first_name || '',
+        last_name: contact.last_name || '',
+        full_name: fullName || email,
+        company: contact.company || '',
+        location: contact.location || '',
+        email,
+        conference: contact.conference || '',
+        title: contact.title || '',
+        fund_name: fundName,
+      };
+      const subject = renderMergeTemplate(subjectTemplate, vars);
+      const body = renderMergeTemplate(bodyTemplate, vars);
+
+      let alreadySentBefore = false;
+      if (usePostgresLpRoutes()) {
+        alreadySentBefore = await withPostgresClient(async (client) => {
+          await ensureCapitalRaisingLogPg(client);
+          const exists = await client.query(
+            `SELECT 1 FROM capital_raising_email_log WHERE recipient_email = $1 AND status = 'sent' LIMIT 1`,
+            [email]
+          );
+          return !!exists.rows[0];
+        });
+      } else {
+        const db = getDb();
+        ensureCapitalRaisingLogSqlite(db);
+        const existing = db.prepare(
+          `SELECT 1 FROM capital_raising_email_log WHERE recipient_email = ? AND status = 'sent' LIMIT 1`
+        ).get(email) as any;
+        alreadySentBefore = !!existing;
+      }
+
+      if (alreadySentBefore) {
+        skippedAlreadySentCount += 1;
+        if (usePostgresLpRoutes()) {
+          await withPostgresClient(async (client) => {
+            await ensureCapitalRaisingLogPg(client);
+            await client.query(
+              `
+              INSERT INTO capital_raising_email_log
+                (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
+              VALUES ($1, $2, $3, $4, 'skipped_already_sent', $5, $6)
+              `,
+              [campaignId, email, subject, provider, 'Recipient already sent in a prior campaign', createdBy]
+            );
+          });
+        } else {
+          const db = getDb();
+          ensureCapitalRaisingLogSqlite(db);
+          db.prepare(
+            `
+            INSERT INTO capital_raising_email_log
+              (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
+            VALUES (?, ?, ?, ?, 'skipped_already_sent', ?, ?)
+            `
+          ).run(campaignId, email, subject, provider, 'Recipient already sent in a prior campaign', createdBy);
+        }
+        continue;
+      }
+
+      if (sentToday >= dailyCap) {
+        skippedDailyCapCount += 1;
+        if (usePostgresLpRoutes()) {
+          await withPostgresClient(async (client) => {
+            await ensureCapitalRaisingLogPg(client);
+            await client.query(
+              `
+              INSERT INTO capital_raising_email_log
+                (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
+              VALUES ($1, $2, $3, $4, 'skipped_daily_cap', $5, $6)
+              `,
+              [campaignId, email, subject, provider, `Daily cap ${dailyCap} reached`, createdBy]
+            );
+          });
+        } else {
+          const db = getDb();
+          ensureCapitalRaisingLogSqlite(db);
+          db.prepare(
+            `
+            INSERT INTO capital_raising_email_log
+              (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
+            VALUES (?, ?, ?, ?, 'skipped_daily_cap', ?, ?)
+            `
+          ).run(campaignId, email, subject, provider, `Daily cap ${dailyCap} reached`, createdBy);
+        }
+        continue;
+      }
+
+      const ok = await sendTransactionalEmail({
+        to: email,
+        from: fromEmail,
+        cc: cc.length > 0 ? cc : undefined,
+        bcc: bcc.length > 0 ? bcc : undefined,
+        subject,
+        text: body,
+        attachments,
+      });
+
+      if (ok) {
+        sentCount += 1;
+        sentToday += 1;
+      } else {
+        failedCount += 1;
+        failedEmails.push(email);
+      }
+
+      if (usePostgresLpRoutes()) {
+        await withPostgresClient(async (client) => {
+          await ensureCapitalRaisingLogPg(client);
+          await client.query(
+            `
+            INSERT INTO capital_raising_email_log
+              (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `,
+            [campaignId, email, subject, provider, ok ? 'sent' : 'failed', ok ? null : 'Provider send failed', createdBy]
+          );
+        });
+      } else {
+        const db = getDb();
+        ensureCapitalRaisingLogSqlite(db);
+        db.prepare(
+          `
+          INSERT INTO capital_raising_email_log
+            (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          `
+        ).run(campaignId, email, subject, provider, ok ? 'sent' : 'failed', ok ? null : 'Provider send failed', createdBy);
+      }
+
+      processedInBatch += 1;
+      if (delayMs > 0 && batchSize > 0 && processedInBatch >= batchSize) {
+        processedInBatch = 0;
+        await sleep(delayMs);
+      }
+    }
+
+    res.json({
+      success: true,
+      campaignId,
+      totalContacts: contacts.length,
+      sentCount,
+      failedCount,
+      skippedAlreadySentCount,
+      skippedDailyCapCount,
+      skippedContacts: normalized.skippedRows,
+      dailyCap,
+      sentToday,
+      dailyRemaining: Math.max(0, dailyCap - sentToday),
+      failedEmails: failedEmails.slice(0, 50),
+      availableMergeTags: [
+        '{{first_name}}',
+        '{{last_name}}',
+        '{{full_name}}',
+        '{{company}}',
+        '{{location}}',
+        '{{email}}',
+        '{{conference}}',
+        '{{title}}',
+        '{{fund_name}}',
+      ],
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Failed to send capital raising campaign.' });
+  }
 });
 
 // PUT /api/lp/capital-calls/:callId/items/:itemId/received - Mark as received

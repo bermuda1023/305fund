@@ -6,9 +6,11 @@ type EmailAttachment = {
 
 type SendEmailArgs = {
   to: string;
+  from?: string;
   subject: string;
   text: string;
   html?: string;
+  cc?: string | string[];
   bcc?: string | string[];
   attachments?: EmailAttachment[];
 };
@@ -22,9 +24,14 @@ function toHtml(text: string) {
 }
 
 export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boolean> {
-  const from = 'info@305opportunityfund.com';
+  const from = String(args.from || 'info@305opportunityfund.com').trim() || 'info@305opportunityfund.com';
   const { to, subject, text } = args;
   const html = args.html || toHtml(text);
+  const ccList = Array.isArray(args.cc)
+    ? args.cc.filter(Boolean)
+    : args.cc
+      ? [args.cc]
+      : [];
   const bccList = Array.isArray(args.bcc)
     ? args.bcc.filter(Boolean)
     : args.bcc
@@ -49,6 +56,7 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
         body: JSON.stringify({
           personalizations: [{
             to: [{ email: to }],
+            ...(ccList.length > 0 ? { cc: ccList.map((email) => ({ email })) } : {}),
             ...(bccList.length > 0 ? { bcc: bccList.map((email) => ({ email })) } : {}),
           }],
           from: { email: from },
@@ -93,6 +101,7 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
         body: JSON.stringify({
           from,
           to: [to],
+          ...(ccList.length > 0 ? { cc: ccList } : {}),
           ...(bccList.length > 0 ? { bcc: bccList } : {}),
           subject,
           text,
