@@ -34,7 +34,7 @@ const router = Router();
 const usePostgresLpReadPath = () => usePostgresReads() || usePostgresLpRoutes();
 const capitalRaisingUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
 });
 
 function rejectWhenSqliteFallbackDisabled(res: Response, error: any) {
@@ -369,6 +369,18 @@ async function parseCapitalRaisingContacts(fileName: string, fileBuffer: Buffer)
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runCapitalRaisingUploadSingle(req: Request, res: Response, fieldName: string): Promise<Express.Multer.File | undefined> {
+  return new Promise((resolve, reject) => {
+    capitalRaisingUpload.single(fieldName)(req, res, (err: any) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve((req as any).file as Express.Multer.File | undefined);
+    });
+  });
 }
 
 function currentEmailProvider(): string {
@@ -3006,9 +3018,9 @@ router.post('/capital-calls/:callId/send', requireAuth, requireGP, async (req: R
 });
 
 // POST /api/lp/capital-raising/contacts/parse - Parse uploaded Excel/CSV contact list
-router.post('/capital-raising/contacts/parse', requireAuth, requireGP, capitalRaisingUpload.single('file'), async (req: Request, res: Response) => {
+router.post('/capital-raising/contacts/parse', requireAuth, requireGP, async (req: Request, res: Response) => {
   try {
-    const file = (req as any).file as Express.Multer.File | undefined;
+    const file = await runCapitalRaisingUploadSingle(req, res, 'file');
     if (!file || !file.buffer) {
       res.status(400).json({ error: 'Contact file is required.' });
       return;
@@ -3032,6 +3044,13 @@ router.post('/capital-raising/contacts/parse', requireAuth, requireGP, capitalRa
       ],
     });
   } catch (error: any) {
+    if (error instanceof multer.MulterError) {
+      const msg = error.code === 'LIMIT_FILE_SIZE'
+        ? 'Contact file too large. Maximum upload size is 100MB.'
+        : `Upload failed: ${error.message || error.code}`;
+      res.status(400).json({ error: msg });
+      return;
+    }
     res.status(400).json({ error: error?.message || 'Failed to parse contact file.' });
   }
 });
@@ -3069,8 +3088,9 @@ router.get('/capital-raising/stats', requireAuth, requireGP, async (req: Request
 });
 
 // POST /api/lp/capital-raising/send - Send mail merge campaign to uploaded contacts
-router.post('/capital-raising/send', requireAuth, requireGP, capitalRaisingUpload.single('attachment'), async (req: Request, res: Response) => {
+router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request, res: Response) => {
   try {
+    const attachmentFile = await runCapitalRaisingUploadSingle(req, res, 'attachment');
     const contactsRaw = req.body?.contacts;
     const subjectTemplate = String(req.body?.subject || '').trim();
     const bodyTemplate = String(req.body?.body || '').trim();
@@ -3114,7 +3134,6 @@ router.post('/capital-raising/send', requireAuth, requireGP, capitalRaisingUploa
       return;
     }
 
-    const attachmentFile = (req as any).file as Express.Multer.File | undefined;
     const attachments = attachmentFile
       ? [{
           filename: attachmentFile.originalname || 'attachment',
@@ -3319,6 +3338,13 @@ router.post('/capital-raising/send', requireAuth, requireGP, capitalRaisingUploa
       ],
     });
   } catch (error: any) {
+    if (error instanceof multer.MulterError) {
+      const msg = error.code === 'LIMIT_FILE_SIZE'
+        ? 'Attachment too large. Maximum upload size is 100MB.'
+        : `Upload failed: ${error.message || error.code}`;
+      res.status(400).json({ error: msg });
+      return;
+    }
     res.status(500).json({ error: error?.message || 'Failed to send capital raising campaign.' });
   }
 });
