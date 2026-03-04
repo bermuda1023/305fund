@@ -347,7 +347,9 @@ async function parseCapitalRaisingContacts(fileName: string, fileBuffer: Buffer)
   }
 
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(fileBuffer);
+  // Multer in newer Node typings can surface Buffer generics that don't match
+  // exceljs' older Buffer declaration even though runtime bytes are valid.
+  await workbook.xlsx.load(fileBuffer as any);
   const sheet = workbook.worksheets[0];
   if (!sheet) return { contacts: [], skippedRows: 0 };
 
