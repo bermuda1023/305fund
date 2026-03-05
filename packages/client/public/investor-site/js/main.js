@@ -1,5 +1,5 @@
 /**
- * 2451 Brickell Insights - Main JavaScript
+ * Brickell Waterfront Insights - Main JavaScript
  * Handles language toggle and interactive elements
  */
 

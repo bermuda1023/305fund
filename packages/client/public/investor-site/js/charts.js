@@ -1,6 +1,6 @@
 /**
- * 2451 Brickell Insights - Chart.js Visualizations
- * Using REAL sales data from 2451 Brickell Ave (251 recorded sales, 2001-2025)
+ * Brickell Waterfront Insights - Chart.js Visualizations
+ * Using real sales data from the subject Brickell site (251 recorded sales, 2001-2025)
  */
 
 const ChartColors = {
