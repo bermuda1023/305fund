@@ -108,6 +108,10 @@ interface CapitalRaisingSendResult {
   skippedAlreadySentCount: number;
   skippedDailyCapCount: number;
   dailyRemaining: number;
+  fromEmail?: string;
+  provider?: string;
+  firstFailureReason?: string | null;
+  failedReasons?: string[];
 }
 
 function getDefaultCallSubject(callNumber: number) {
@@ -932,8 +936,9 @@ function GPCapitalRaisingSection() {
   const [body, setBody] = useState(
     'Hi {{first_name}},\n\nGreat meeting you at {{conference}}.\n\nI wanted to share {{fund_name}} and see if this fits your current mandate.\n\nBest,\n305 Opportunities Fund'
   );
-  const [cc, setCc] = useState('lance@305opportunityfund.com');
+  const [cc, setCc] = useState('');
   const [bcc, setBcc] = useState('');
+  const [fromOverride, setFromOverride] = useState('');
   const [fundName, setFundName] = useState('305 Opportunities Fund');
   const [batchSize, setBatchSize] = useState(50);
   const [delayMs, setDelayMs] = useState(0);
@@ -977,6 +982,7 @@ function GPCapitalRaisingSection() {
       form.append('body', body);
       form.append('cc', cc);
       form.append('bcc', bcc);
+      if (fromOverride.trim()) form.append('from', fromOverride.trim());
       form.append('fundName', fundName);
       form.append('batchSize', String(batchSize));
       form.append('delayMs', String(delayMs));
@@ -988,12 +994,20 @@ function GPCapitalRaisingSection() {
       return response.data as CapitalRaisingSendResult;
     },
     onSuccess: (result) => {
+      const reasonHint = result.firstFailureReason
+        ? `\n\nFirst failure reason:\n${result.firstFailureReason}`
+        : '';
+      const senderInfo = result.fromEmail
+        ? `\nSender: ${result.fromEmail}${result.provider ? ` via ${result.provider}` : ''}`
+        : '';
       setStatusText(
-        `Campaign complete. Sent ${num(result.sentCount)}, failed ${num(result.failedCount)}, skipped already sent ${num(result.skippedAlreadySentCount ?? 0)}, skipped cap ${num(result.skippedDailyCapCount ?? 0)}.`
+        `Campaign complete. Sent ${num(result.sentCount)}, failed ${num(result.failedCount)}, skipped already sent ${num(result.skippedAlreadySentCount ?? 0)}, skipped cap ${num(result.skippedDailyCapCount ?? 0)}.${
+          result.firstFailureReason ? ` First failure: ${result.firstFailureReason}` : ''
+        }`
       );
       queryClient.invalidateQueries({ queryKey: ['capital-raising-stats'] });
       window.alert(
-        `Capital raising send complete.\nSent: ${result.sentCount}\nFailed: ${result.failedCount}\nSkipped (already sent): ${result.skippedAlreadySentCount ?? 0}\nSkipped (daily cap): ${result.skippedDailyCapCount ?? 0}\nDaily remaining: ${result.dailyRemaining ?? 0}`
+        `Capital raising send complete.\nSent: ${result.sentCount}\nFailed: ${result.failedCount}\nSkipped (already sent): ${result.skippedAlreadySentCount ?? 0}\nSkipped (daily cap): ${result.skippedDailyCapCount ?? 0}\nDaily remaining: ${result.dailyRemaining ?? 0}${senderInfo}${reasonHint}`
       );
     },
     onError: (err: any) => {
@@ -1080,12 +1094,24 @@ function GPCapitalRaisingSection() {
         </div>
 
         <div className="form-row">
+          <div className="form-group" style={{ flex: 1 }}>
+            <label className="form-label">From (sender email)</label>
+            <input
+              className="form-input"
+              value={fromOverride}
+              onChange={(e) => setFromOverride(e.target.value)}
+              placeholder="info@305opportunityfund.com"
+            />
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              Must be a verified Single Sender (or part of an authenticated domain) in SendGrid/Resend. Leave blank to use the server FROM_EMAIL default.
+            </div>
+          </div>
+        </div>
+
+        <div className="form-row">
           <div className="form-group">
             <label className="form-label">CC (comma separated)</label>
-            <input className="form-input" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="team@fund.com" />
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-              lance@305opportunityfund.com is always CC'd by default.
-            </div>
+            <input className="form-input" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="lance@305opportunityfund.com, team@fund.com" />
           </div>
           <div className="form-group">
             <label className="form-label">BCC (comma separated)</label>

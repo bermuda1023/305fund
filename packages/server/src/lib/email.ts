@@ -15,6 +15,13 @@ type SendEmailArgs = {
   attachments?: EmailAttachment[];
 };
 
+export type SendEmailResult = {
+  ok: boolean;
+  provider?: 'sendgrid' | 'resend';
+  statusCode?: number;
+  error?: string;
+};
+
 function toHtml(text: string) {
   return text
     .replace(/&/g, '&amp;')
@@ -23,8 +30,14 @@ function toHtml(text: string) {
     .replace(/\n/g, '<br/>');
 }
 
-export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boolean> {
-  const from = String(args.from || 'info@305opportunityfund.com').trim() || 'info@305opportunityfund.com';
+function truncate(s: string, max = 500): string {
+  if (!s) return '';
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+export async function sendTransactionalEmailDetailed(args: SendEmailArgs): Promise<SendEmailResult> {
+  const from = String(args.from || process.env.FROM_EMAIL || 'info@305opportunityfund.com').trim()
+    || 'info@305opportunityfund.com';
   const { to, subject, text } = args;
   const html = args.html || toHtml(text);
   const ccList = Array.isArray(args.cc)
@@ -44,6 +57,8 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
   const sendGridApiKey = process.env.SENDGRID_API_KEY;
   const resendApiKey = process.env.RESEND_API_KEY;
   let attempted = false;
+  let lastError: SendEmailResult | null = null;
+
   if (sendGridApiKey) {
     attempted = true;
     try {
@@ -77,15 +92,18 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
             : {}),
         }),
       });
-      if (!resp.ok) {
-        let body = '';
-        try { body = await resp.text(); } catch {}
-        console.error(`SendGrid email failed (${resp.status}): ${body.slice(0, 500)}`);
-      } else {
-        return true;
+      if (resp.ok) {
+        return { ok: true, provider: 'sendgrid', statusCode: resp.status };
       }
+      let body = '';
+      try { body = await resp.text(); } catch {}
+      const errText = `SendGrid ${resp.status}: ${truncate(body)}`;
+      console.error(`SendGrid email failed (${resp.status}): ${truncate(body)}`);
+      lastError = { ok: false, provider: 'sendgrid', statusCode: resp.status, error: errText };
     } catch (err: any) {
-      console.error(`SendGrid email exception: ${err?.message || err}`);
+      const msg = err?.message || String(err);
+      console.error(`SendGrid email exception: ${msg}`);
+      lastError = { ok: false, provider: 'sendgrid', error: `SendGrid exception: ${truncate(msg)}` };
     }
   }
 
@@ -117,22 +135,31 @@ export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boole
             : {}),
         }),
       });
-      if (!resp.ok) {
-        let body = '';
-        try { body = await resp.text(); } catch {}
-        console.error(`Resend email failed (${resp.status}): ${body.slice(0, 500)}`);
-      } else {
-        return true;
+      if (resp.ok) {
+        return { ok: true, provider: 'resend', statusCode: resp.status };
       }
+      let body = '';
+      try { body = await resp.text(); } catch {}
+      const errText = `Resend ${resp.status}: ${truncate(body)}`;
+      console.error(`Resend email failed (${resp.status}): ${truncate(body)}`);
+      lastError = { ok: false, provider: 'resend', statusCode: resp.status, error: errText };
     } catch (err: any) {
-      console.error(`Resend email exception: ${err?.message || err}`);
+      const msg = err?.message || String(err);
+      console.error(`Resend email exception: ${msg}`);
+      lastError = { ok: false, provider: 'resend', error: `Resend exception: ${truncate(msg)}` };
     }
   }
 
   if (!attempted) {
-    console.error('No email provider configured: set SENDGRID_API_KEY or RESEND_API_KEY');
-  } else {
-    console.error('All configured email providers failed to send this message.');
+    const msg = 'No email provider configured: set SENDGRID_API_KEY or RESEND_API_KEY';
+    console.error(msg);
+    return { ok: false, error: msg };
   }
-  return false;
+  console.error('All configured email providers failed to send this message.');
+  return lastError || { ok: false, error: 'Unknown email provider failure' };
+}
+
+export async function sendTransactionalEmail(args: SendEmailArgs): Promise<boolean> {
+  const result = await sendTransactionalEmailDetailed(args);
+  return result.ok;
 }

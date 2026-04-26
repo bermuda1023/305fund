@@ -18,7 +18,7 @@ import {
 } from '@brickell/engine';
 import type { FundAssumptions } from '@brickell/shared';
 import type { AcquisitionSchedule } from '@brickell/engine';
-import { sendTransactionalEmail } from '../lib/email';
+import { sendTransactionalEmail, sendTransactionalEmailDetailed } from '../lib/email';
 import { readStoredFile } from '../lib/storage';
 import { withPostgresClient } from '../db/postgres-client';
 import {
@@ -3099,11 +3099,16 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
     const fundName = String(req.body?.fundName || process.env.FUND_NAME || '305 Opportunities Fund');
     const batchSize = Math.min(200, Math.max(1, Number(req.body?.batchSize || 50)));
     const delayMs = Math.max(0, Number(req.body?.delayMs || 0));
-    const ccInput = parseEmailList(req.body?.cc);
+    const cc = parseEmailList(req.body?.cc);
     const bcc = parseEmailList(req.body?.bcc);
-    const fromEmail = 'james@305opportunityfund.com';
-    const alwaysCc = ['lance@305opportunityfund.com'];
-    const cc = Array.from(new Set([...alwaysCc, ...ccInput]));
+    // The sender must be a verified Single Sender (or part of an authenticated
+    // domain) in SendGrid/Resend. Default to FROM_EMAIL env (matches all other
+    // outbound paths in this app); allow per-campaign override via req.body.from.
+    const requestedFrom = String(req.body?.from || '').trim().toLowerCase();
+    const isValidEmail = (s: string) => /\S+@\S+\.\S+/.test(s);
+    const fromEmail = isValidEmail(requestedFrom)
+      ? requestedFrom
+      : (process.env.FROM_EMAIL || 'info@305opportunityfund.com');
 
     if (!contactsRaw) {
       res.status(400).json({ error: 'contacts payload is required.' });
@@ -3153,6 +3158,8 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
     let skippedAlreadySentCount = 0;
     let skippedDailyCapCount = 0;
     const failedEmails: string[] = [];
+    const failedReasons: string[] = [];
+    let firstFailureReason: string | null = null;
     let sentToday = 0;
 
     if (usePostgresLpRoutes()) {
@@ -3265,7 +3272,7 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
         continue;
       }
 
-      const ok = await sendTransactionalEmail({
+      const sendResult = await sendTransactionalEmailDetailed({
         to: email,
         from: fromEmail,
         cc: cc.length > 0 ? cc : undefined,
@@ -3274,6 +3281,8 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
         text: body,
         attachments,
       });
+      const ok = sendResult.ok;
+      const errorText = ok ? null : (sendResult.error || 'Provider send failed');
 
       if (ok) {
         sentCount += 1;
@@ -3281,6 +3290,10 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
       } else {
         failedCount += 1;
         failedEmails.push(email);
+        if (errorText) {
+          failedReasons.push(`${email}: ${errorText}`);
+          if (!firstFailureReason) firstFailureReason = errorText;
+        }
       }
 
       if (usePostgresLpRoutes()) {
@@ -3292,7 +3305,7 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
               (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             `,
-            [campaignId, email, subject, provider, ok ? 'sent' : 'failed', ok ? null : 'Provider send failed', createdBy]
+            [campaignId, email, subject, provider, ok ? 'sent' : 'failed', errorText, createdBy]
           );
         });
       } else {
@@ -3304,7 +3317,7 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
             (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
           VALUES (?, ?, ?, ?, ?, ?, ?)
           `
-        ).run(campaignId, email, subject, provider, ok ? 'sent' : 'failed', ok ? null : 'Provider send failed', createdBy);
+        ).run(campaignId, email, subject, provider, ok ? 'sent' : 'failed', errorText, createdBy);
       }
 
       processedInBatch += 1;
@@ -3326,7 +3339,11 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
       dailyCap,
       sentToday,
       dailyRemaining: Math.max(0, dailyCap - sentToday),
+      fromEmail,
+      provider,
       failedEmails: failedEmails.slice(0, 50),
+      firstFailureReason,
+      failedReasons: failedReasons.slice(0, 10),
       availableMergeTags: [
         '{{first_name}}',
         '{{last_name}}',
