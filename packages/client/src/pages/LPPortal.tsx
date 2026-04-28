@@ -95,9 +95,7 @@ interface CapitalRaisingContact {
 }
 
 interface CapitalRaisingStats {
-  dailyCap: number;
   sentToday: number;
-  dailyRemaining: number;
   totalSent: number;
 }
 
@@ -106,8 +104,6 @@ interface CapitalRaisingSendResult {
   failedCount: number;
   totalContacts: number;
   skippedAlreadySentCount: number;
-  skippedDailyCapCount: number;
-  dailyRemaining: number;
   fromEmail?: string;
   provider?: string;
   firstFailureReason?: string | null;
@@ -1001,13 +997,13 @@ function GPCapitalRaisingSection() {
         ? `\nSender: ${result.fromEmail}${result.provider ? ` via ${result.provider}` : ''}`
         : '';
       setStatusText(
-        `Campaign complete. Sent ${num(result.sentCount)}, failed ${num(result.failedCount)}, skipped already sent ${num(result.skippedAlreadySentCount ?? 0)}, skipped cap ${num(result.skippedDailyCapCount ?? 0)}.${
+        `Campaign complete. Sent ${num(result.sentCount)}, failed ${num(result.failedCount)}, skipped already sent ${num(result.skippedAlreadySentCount ?? 0)}.${
           result.firstFailureReason ? ` First failure: ${result.firstFailureReason}` : ''
         }`
       );
       queryClient.invalidateQueries({ queryKey: ['capital-raising-stats'] });
       window.alert(
-        `Capital raising send complete.\nSent: ${result.sentCount}\nFailed: ${result.failedCount}\nSkipped (already sent): ${result.skippedAlreadySentCount ?? 0}\nSkipped (daily cap): ${result.skippedDailyCapCount ?? 0}\nDaily remaining: ${result.dailyRemaining ?? 0}${senderInfo}${reasonHint}`
+        `Capital raising send complete.\nSent: ${result.sentCount}\nFailed: ${result.failedCount}\nSkipped (already sent): ${result.skippedAlreadySentCount ?? 0}${senderInfo}${reasonHint}`
       );
     },
     onError: (err: any) => {
@@ -1037,7 +1033,7 @@ function GPCapitalRaisingSection() {
               color: 'var(--text-secondary)',
             }}
           >
-            Daily cap: {num(raisingStats.dailyCap)} · Sent today: {num(raisingStats.sentToday)} · Remaining today: {num(raisingStats.dailyRemaining)} · Total sent historically: {num(raisingStats.totalSent)}
+            Sent today: {num(raisingStats.sentToday)} · Total sent historically: {num(raisingStats.totalSent)}
           </div>
         )}
         <div className="form-row">

@@ -391,10 +391,6 @@ function currentEmailProvider(): string {
   return 'unknown';
 }
 
-function capitalRaisingDailyCap(): number {
-  return Math.max(1, Number(process.env.SENDGRID_DAILY_CAP || 100));
-}
-
 function ensureCapitalRaisingLogSqlite(db: ReturnType<typeof getDb>) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS capital_raising_email_log (
@@ -3057,19 +3053,16 @@ router.post('/capital-raising/contacts/parse', requireAuth, requireGP, async (re
   }
 });
 
-// GET /api/lp/capital-raising/stats - Daily cap and historical send stats
+// GET /api/lp/capital-raising/stats - Historical send stats (no daily cap enforced)
 router.get('/capital-raising/stats', requireAuth, requireGP, async (req: Request, res: Response) => {
   try {
-    const dailyCap = capitalRaisingDailyCap();
     if (usePostgresLpRoutes()) {
       const result = await withPostgresClient(async (client) => {
         await ensureCapitalRaisingLogPg(client);
         return getCapitalRaisingStatsPg(client);
       });
       res.json({
-        dailyCap,
         sentToday: result.sentToday,
-        dailyRemaining: Math.max(0, dailyCap - result.sentToday),
         totalSent: result.totalSent,
       });
       return;
@@ -3079,9 +3072,7 @@ router.get('/capital-raising/stats', requireAuth, requireGP, async (req: Request
     ensureCapitalRaisingLogSqlite(db);
     const result = getCapitalRaisingStatsSqlite(db);
     res.json({
-      dailyCap,
       sentToday: result.sentToday,
-      dailyRemaining: Math.max(0, dailyCap - result.sentToday),
       totalSent: result.totalSent,
     });
   } catch (error: any) {
@@ -3152,26 +3143,20 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
     const campaignId = `cr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const provider = currentEmailProvider();
     const createdBy = String((req as any).user?.email || '').trim() || null;
-    const dailyCap = capitalRaisingDailyCap();
     let sentCount = 0;
     let failedCount = 0;
     let skippedAlreadySentCount = 0;
-    let skippedDailyCapCount = 0;
     const failedEmails: string[] = [];
     const failedReasons: string[] = [];
     let firstFailureReason: string | null = null;
-    let sentToday = 0;
 
     if (usePostgresLpRoutes()) {
-      sentToday = await withPostgresClient(async (client) => {
+      await withPostgresClient(async (client) => {
         await ensureCapitalRaisingLogPg(client);
-        const stats = await getCapitalRaisingStatsPg(client);
-        return stats.sentToday;
       });
     } else {
       const db = getDb();
       ensureCapitalRaisingLogSqlite(db);
-      sentToday = getCapitalRaisingStatsSqlite(db).sentToday;
     }
 
     const alreadySeenInRun = new Set<string>();
@@ -3244,34 +3229,6 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
         continue;
       }
 
-      if (sentToday >= dailyCap) {
-        skippedDailyCapCount += 1;
-        if (usePostgresLpRoutes()) {
-          await withPostgresClient(async (client) => {
-            await ensureCapitalRaisingLogPg(client);
-            await client.query(
-              `
-              INSERT INTO capital_raising_email_log
-                (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
-              VALUES ($1, $2, $3, $4, 'skipped_daily_cap', $5, $6)
-              `,
-              [campaignId, email, subject, provider, `Daily cap ${dailyCap} reached`, createdBy]
-            );
-          });
-        } else {
-          const db = getDb();
-          ensureCapitalRaisingLogSqlite(db);
-          db.prepare(
-            `
-            INSERT INTO capital_raising_email_log
-              (campaign_id, recipient_email, subject, provider, status, error_text, created_by)
-            VALUES (?, ?, ?, ?, 'skipped_daily_cap', ?, ?)
-            `
-          ).run(campaignId, email, subject, provider, `Daily cap ${dailyCap} reached`, createdBy);
-        }
-        continue;
-      }
-
       const sendResult = await sendTransactionalEmailDetailed({
         to: email,
         from: fromEmail,
@@ -3286,7 +3243,6 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
 
       if (ok) {
         sentCount += 1;
-        sentToday += 1;
       } else {
         failedCount += 1;
         failedEmails.push(email);
@@ -3334,11 +3290,7 @@ router.post('/capital-raising/send', requireAuth, requireGP, async (req: Request
       sentCount,
       failedCount,
       skippedAlreadySentCount,
-      skippedDailyCapCount,
       skippedContacts: normalized.skippedRows,
-      dailyCap,
-      sentToday,
-      dailyRemaining: Math.max(0, dailyCap - sentToday),
       fromEmail,
       provider,
       failedEmails: failedEmails.slice(0, 50),
